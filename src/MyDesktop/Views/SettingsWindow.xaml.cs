@@ -1,0 +1,378 @@
+using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using Microsoft.Win32;
+using MyDesktop.Core;
+using MyDesktop.Models;
+using MyDesktop.Services;
+
+namespace MyDesktop.Views;
+
+internal partial class SettingsWindow : Window
+{
+	static readonly string[] Tips =
+	[
+		"· 把桌面上的文件拖进分区即可收纳，从分区拖回桌面即可还原",
+		"· 拖入时按住 Ctrl 为复制，按住 Alt 为创建快捷方式",
+		"· 拖动标题栏移动分区、拖动边缘调整大小，双击标题栏卷起/展开",
+		"· 右键分区空白处或点击标题栏的「⋯」打开分区菜单，可修改颜色、排序、视图等",
+		"· 右键文件弹出系统右键菜单；F2 重命名，Delete 删除到回收站",
+		"· 双击桌面空白处可以一键隐藏/显示所有图标和分区",
+	];
+
+	readonly FenceManager _manager;
+	readonly ObservableCollection<OrganizeRule> _rules;
+	bool _loading = true;
+
+	public SettingsWindow(FenceManager manager)
+	{
+		_manager = manager;
+		InitializeComponent();
+		_rules = new ObservableCollection<OrganizeRule>(manager.Settings.Rules);
+		RulesList.ItemsSource = _rules;
+		LoadValues();
+	}
+
+	AppSettings Settings => _manager.Settings;
+
+	void LoadValues()
+	{
+		_loading = true;
+		AutoStartBox.IsChecked = AutoStart.IsEnabled();
+		DoubleClickBox.IsChecked = Settings.DoubleClickToHide;
+		ExpandOnHoverBox.IsChecked = Settings.ExpandOnHover;
+		SnapBox.IsChecked = Settings.SnapToEdges;
+		ShowHiddenBox.IsChecked = Settings.ShowHiddenFiles;
+		AutoOrganizeBox.IsChecked = Settings.AutoOrganize;
+		TextShadowBox.IsChecked = Settings.TextShadow;
+		StorageBox.Text = _manager.StorageRoot;
+		OpacitySlider.Value = Math.Round(Settings.DefaultOpacity * 100);
+		RadiusSlider.Value = Settings.CornerRadius;
+		SnapGapSlider.Value = Settings.SnapGap;
+		IconSizeBox.ItemsSource = Enum.GetValues<IconSizeMode>().Select(s => s.DisplayName()).ToList();
+		IconSizeBox.SelectedIndex = (int)Settings.DefaultIconSize;
+		BuildColorSwatches();
+		UpdateColorPreview();
+		var version = typeof(App).Assembly.GetName().Version;
+		VersionText.Text = $"版本 {version?.ToString(3)}";
+		DataDirText.Text = AppPaths.DataDir;
+		TipsText.Text = string.Join("\n", Tips);
+		UpdateSliderTexts();
+		_loading = false;
+	}
+
+	protected override void OnClosed(EventArgs e)
+	{
+		SaveRules();
+		base.OnClosed(e);
+	}
+
+	void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+	{
+		// InitializeComponent 期间导航先于页面创建，此时页面还是 null
+		if (GeneralPage == null)
+		{
+			return;
+		}
+		var pages = new[] { GeneralPage, AppearancePage, RulesPage, AboutPage };
+		for (int i = 0; i < pages.Length; i++)
+		{
+			pages[i].Visibility = i == NavList.SelectedIndex ? Visibility.Visible : Visibility.Collapsed;
+		}
+	}
+
+	#region 常规
+
+	void AutoStartBox_Click(object sender, RoutedEventArgs e)
+	{
+		try
+		{
+			AutoStart.SetEnabled(AutoStartBox.IsChecked == true);
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("设置开机自启失败", ex);
+			MessageDialog.Show("开机自动启动", $"设置失败：{ex.Message}", "确定");
+			AutoStartBox.IsChecked = AutoStart.IsEnabled();
+		}
+	}
+
+	void Setting_Changed(object sender, RoutedEventArgs e)
+	{
+		if (_loading)
+		{
+			return;
+		}
+		bool showHidden = ShowHiddenBox.IsChecked == true;
+		bool textShadow = TextShadowBox.IsChecked == true;
+		bool hiddenChanged = Settings.ShowHiddenFiles != showHidden;
+		bool shadowChanged = Settings.TextShadow != textShadow;
+		Settings.DoubleClickToHide = DoubleClickBox.IsChecked == true;
+		Settings.ExpandOnHover = ExpandOnHoverBox.IsChecked == true;
+		Settings.SnapToEdges = SnapBox.IsChecked == true;
+		Settings.AutoOrganize = AutoOrganizeBox.IsChecked == true;
+		Settings.ShowHiddenFiles = showHidden;
+		Settings.TextShadow = textShadow;
+		_manager.ApplyDoubleClickSetting();
+		_manager.Organizer.ApplyWatchSetting();
+		if (hiddenChanged)
+		{
+			_manager.RefreshAllItems();
+		}
+		if (shadowChanged)
+		{
+			_manager.RefreshAllAppearance();
+		}
+		_manager.SaveSoon();
+	}
+
+	void ChangeStorage_Click(object sender, RoutedEventArgs e)
+	{
+		var dialog = new OpenFolderDialog { Title = "选择分区文件的存放位置" };
+		if (Directory.Exists(_manager.StorageRoot))
+		{
+			dialog.InitialDirectory = _manager.StorageRoot;
+		}
+		if (dialog.ShowDialog(this) != true)
+		{
+			return;
+		}
+		if (PathUtil.AreEqual(dialog.FolderName, AppPaths.Desktop))
+		{
+			MessageDialog.Show("存放位置", "不能直接使用桌面文件夹，否则分区文件夹会出现在桌面上。", "确定");
+			return;
+		}
+		Settings.StorageRoot = dialog.FolderName;
+		StorageBox.Text = _manager.StorageRoot;
+		_manager.SaveSoon();
+	}
+
+	void OpenStorage_Click(object sender, RoutedEventArgs e)
+	{
+		try
+		{
+			Directory.CreateDirectory(_manager.StorageRoot);
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("创建存放目录失败", ex);
+		}
+		OpenInExplorer(_manager.StorageRoot);
+	}
+
+	void NewFence_Click(object sender, RoutedEventArgs e) => _manager.CreateFence(editTitle: true);
+
+	void NewPortal_Click(object sender, RoutedEventArgs e) => _manager.CreatePortalFence();
+
+	void Organize_Click(object sender, RoutedEventArgs e)
+	{
+		SaveRules();
+		_manager.Organizer.OrganizeInteractive();
+	}
+
+	void RestoreAll_Click(object sender, RoutedEventArgs e) => _manager.RestoreAllFilesToDesktop();
+
+	#endregion
+
+	#region 外观
+
+	void BuildColorSwatches()
+	{
+		ColorPanel.Children.Clear();
+		foreach (var (name, hex) in Appearance.ColorPresets)
+		{
+			var swatch = new Border
+			{
+				Width = 26,
+				Height = 26,
+				CornerRadius = new CornerRadius(4),
+				BorderThickness = new Thickness(1),
+				BorderBrush = new SolidColorBrush(Color.FromArgb(0x40, 0x80, 0x80, 0x80)),
+				Background = new SolidColorBrush(Appearance.ParseColor(hex, Colors.Black)),
+			};
+			var button = new Button
+			{
+				Content = swatch,
+				Padding = new Thickness(4),
+				Margin = new Thickness(0, 0, 8, 8),
+				ToolTip = name,
+			};
+			button.Click += (_, _) => SetDefaultColor(hex);
+			ColorPanel.Children.Add(button);
+		}
+	}
+
+	void SetDefaultColor(string hex)
+	{
+		Settings.DefaultColor = hex;
+		UpdateColorPreview();
+		_manager.RefreshAllAppearance();
+		_manager.SaveSoon();
+	}
+
+	void UpdateColorPreview()
+	{
+		var color = Appearance.ParseColor(Settings.DefaultColor, Colors.Black);
+		ColorPreview.Background = new SolidColorBrush(color);
+		ColorBox.Text = Appearance.ToHex(color);
+	}
+
+	void ColorBox_KeyDown(object sender, KeyEventArgs e)
+	{
+		if (e.Key == Key.Enter)
+		{
+			ApplyColorText();
+		}
+	}
+
+	void ColorBox_LostFocus(object sender, RoutedEventArgs e) => ApplyColorText();
+
+	void ApplyColorText()
+	{
+		var text = ColorBox.Text.Trim();
+		if (!text.StartsWith('#'))
+		{
+			text = "#" + text;
+		}
+		if (Appearance.TryParseColor(text, out var color))
+		{
+			SetDefaultColor(Appearance.ToHex(color));
+		}
+		else
+		{
+			UpdateColorPreview();
+		}
+	}
+
+	void OpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+	{
+		// 构造过程中控件可能尚未全部创建
+		if (_loading || OpacityText == null)
+		{
+			return;
+		}
+		UpdateSliderTexts();
+		Settings.DefaultOpacity = OpacitySlider.Value / 100.0;
+		_manager.RefreshAllAppearance();
+		_manager.SaveSoon();
+	}
+
+	void RadiusSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+	{
+		if (_loading || RadiusText == null)
+		{
+			return;
+		}
+		UpdateSliderTexts();
+		Settings.CornerRadius = RadiusSlider.Value;
+		_manager.RefreshAllAppearance();
+		_manager.SaveSoon();
+	}
+
+	void SnapGapSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+	{
+		if (_loading || SnapGapText == null)
+		{
+			return;
+		}
+		UpdateSliderTexts();
+		Settings.SnapGap = SnapGapSlider.Value;
+		_manager.SaveSoon();
+	}
+
+	void UpdateSliderTexts()
+	{
+		OpacityText.Text = $"{OpacitySlider.Value:0}%";
+		RadiusText.Text = $"{RadiusSlider.Value:0}";
+		SnapGapText.Text = SnapGapSlider.Value == 0 ? "紧贴" : $"{SnapGapSlider.Value:0}";
+	}
+
+	void IconSizeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+	{
+		if (_loading || IconSizeBox.SelectedIndex < 0)
+		{
+			return;
+		}
+		Settings.DefaultIconSize = (IconSizeMode)IconSizeBox.SelectedIndex;
+		_manager.RefreshAllViewMode();
+		_manager.SaveSoon();
+	}
+
+	void ResetAppearance_Click(object sender, RoutedEventArgs e)
+	{
+		if (MessageDialog.Show("重置外观", "所有分区单独设置的颜色、不透明度和图标大小都将清除，改用默认外观。", "全部重置", "取消") == 0)
+		{
+			_manager.ResetAllAppearance();
+		}
+	}
+
+	#endregion
+
+	#region 整理规则
+
+	void Rule_LostFocus(object sender, RoutedEventArgs e) => SaveRules();
+
+	void SaveRules()
+	{
+		Settings.Rules = _rules.ToList();
+		_manager.SaveSoon();
+	}
+
+	void AddRule_Click(object sender, RoutedEventArgs e)
+	{
+		var rule = new OrganizeRule { Name = "新规则", Extensions = ".ext" };
+		// 新规则放在兜底规则之前，否则永远匹配不到
+		int fallbackIndex = _rules.ToList().FindIndex(r => r.IsFallback);
+		if (fallbackIndex >= 0)
+		{
+			_rules.Insert(fallbackIndex, rule);
+		}
+		else
+		{
+			_rules.Add(rule);
+		}
+		SaveRules();
+	}
+
+	void DeleteRule_Click(object sender, RoutedEventArgs e)
+	{
+		if ((sender as FrameworkElement)?.DataContext is OrganizeRule rule)
+		{
+			_rules.Remove(rule);
+			SaveRules();
+		}
+	}
+
+	void ResetRules_Click(object sender, RoutedEventArgs e)
+	{
+		if (MessageDialog.Show("恢复默认规则", "当前规则将被替换为默认规则，确定吗？", "恢复默认", "取消") != 0)
+		{
+			return;
+		}
+		_rules.Clear();
+		foreach (var rule in OrganizeRule.CreateDefaults())
+		{
+			_rules.Add(rule);
+		}
+		SaveRules();
+	}
+
+	#endregion
+
+	void OpenDataDir_Click(object sender, RoutedEventArgs e) => OpenInExplorer(AppPaths.DataDir);
+
+	static void OpenInExplorer(string folder)
+	{
+		try
+		{
+			Process.Start(new ProcessStartInfo("explorer.exe", $"\"{folder}\"") { UseShellExecute = true })?.Dispose();
+		}
+		catch (Exception ex)
+		{
+			Log.Warn($"打开文件夹失败：{folder}", ex);
+		}
+	}
+}

@@ -1,0 +1,192 @@
+<Window x:Class="MyDesktop.Views.FenceWindow"
+		x:ClassModifier="internal"
+		xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+		xmlns:sys="clr-namespace:System;assembly=System.Runtime"
+		xmlns:local="clr-namespace:MyDesktop.Views"
+		Title="MyDesktop 分区"
+		WindowStyle="None"
+		AllowsTransparency="True"
+		Background="Transparent"
+		ResizeMode="CanResize"
+		ShowInTaskbar="False"
+		ShowActivated="False"
+		MinWidth="120"
+		MinHeight="32"
+		AllowDrop="True"
+		UseLayoutRounding="True"
+		SnapsToDevicePixels="True"
+		TextOptions.TextFormattingMode="Display"
+		FontSize="12">
+
+	<Window.Resources>
+		<sys:Double x:Key="IconSize">48</sys:Double>
+		<sys:Double x:Key="CellWidth">92</sys:Double>
+		<SolidColorBrush x:Key="FenceForeground" Color="White" />
+		<SolidColorBrush x:Key="FenceHover" Color="#22FFFFFF" />
+		<SolidColorBrush x:Key="FenceSelected" Color="#3DFFFFFF" />
+		<SolidColorBrush x:Key="FenceSelectedBorder" Color="#59FFFFFF" />
+		<DropShadowEffect x:Key="TextShadow" ShadowDepth="1" BlurRadius="3" Opacity="0.75" Color="Black" />
+
+		<Style TargetType="ScrollBar" BasedOn="{StaticResource FenceScrollBar}" />
+
+		<ItemsPanelTemplate x:Key="IconsPanel">
+			<WrapPanel Orientation="Horizontal" />
+		</ItemsPanelTemplate>
+
+		<ItemsPanelTemplate x:Key="ListPanel">
+			<StackPanel Orientation="Vertical" />
+		</ItemsPanelTemplate>
+
+		<DataTemplate x:Key="IconTemplate" DataType="{x:Type local:FenceItem}">
+			<StackPanel Width="{DynamicResource CellWidth}" ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="700">
+				<Image Source="{Binding Icon}"
+						Width="{DynamicResource IconSize}"
+						Height="{DynamicResource IconSize}"
+						Margin="0,0,0,4"
+						Stretch="Uniform"
+						RenderOptions.BitmapScalingMode="HighQuality" />
+				<Grid>
+					<TextBlock x:Name="NameText"
+							Text="{Binding DisplayName}"
+							TextAlignment="Center"
+							TextWrapping="Wrap"
+							TextTrimming="CharacterEllipsis"
+							MaxHeight="34"
+							Foreground="{DynamicResource FenceForeground}"
+							Effect="{DynamicResource TextShadow}" />
+					<TextBox x:Name="RenameBox"
+							Visibility="Collapsed"
+							Style="{StaticResource RenameBoxStyle}"
+							TextAlignment="Center"
+							TextWrapping="Wrap"
+							Text="{Binding RenameText, UpdateSourceTrigger=PropertyChanged}"
+							KeyDown="RenameBox_KeyDown"
+							LostKeyboardFocus="RenameBox_LostKeyboardFocus" />
+				</Grid>
+			</StackPanel>
+			<DataTemplate.Triggers>
+				<DataTrigger Binding="{Binding IsRenaming}" Value="True">
+					<Setter TargetName="RenameBox" Property="Visibility" Value="Visible" />
+					<Setter TargetName="NameText" Property="Visibility" Value="Hidden" />
+				</DataTrigger>
+			</DataTemplate.Triggers>
+		</DataTemplate>
+
+		<DataTemplate x:Key="ListTemplate" DataType="{x:Type local:FenceItem}">
+			<Grid ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="700">
+				<Grid.ColumnDefinitions>
+					<ColumnDefinition Width="Auto" />
+					<ColumnDefinition Width="*" />
+				</Grid.ColumnDefinitions>
+				<Image Source="{Binding Icon}"
+						Width="20"
+						Height="20"
+						Margin="2,0,8,0"
+						Stretch="Uniform"
+						RenderOptions.BitmapScalingMode="HighQuality" />
+				<TextBlock x:Name="NameText"
+						Grid.Column="1"
+						VerticalAlignment="Center"
+						Text="{Binding DisplayName}"
+						TextTrimming="CharacterEllipsis"
+						Foreground="{DynamicResource FenceForeground}"
+						Effect="{DynamicResource TextShadow}" />
+				<TextBox x:Name="RenameBox"
+						Grid.Column="1"
+						VerticalAlignment="Center"
+						Visibility="Collapsed"
+						Style="{StaticResource RenameBoxStyle}"
+						Text="{Binding RenameText, UpdateSourceTrigger=PropertyChanged}"
+						KeyDown="RenameBox_KeyDown"
+						LostKeyboardFocus="RenameBox_LostKeyboardFocus" />
+			</Grid>
+			<DataTemplate.Triggers>
+				<DataTrigger Binding="{Binding IsRenaming}" Value="True">
+					<Setter TargetName="RenameBox" Property="Visibility" Value="Visible" />
+					<Setter TargetName="NameText" Property="Visibility" Value="Hidden" />
+				</DataTrigger>
+			</DataTemplate.Triggers>
+		</DataTemplate>
+	</Window.Resources>
+
+	<Border x:Name="Frame" BorderThickness="1" CornerRadius="8" Background="#73000000" BorderBrush="#38FFFFFF">
+		<Grid>
+			<Grid.RowDefinitions>
+				<RowDefinition Height="30" />
+				<RowDefinition Height="*" />
+			</Grid.RowDefinitions>
+
+			<Border x:Name="TitleBar"
+					Background="#30000000"
+					CornerRadius="7,7,0,0"
+					MouseLeftButtonDown="TitleBar_MouseLeftButtonDown"
+					MouseRightButtonUp="TitleBar_MouseRightButtonUp">
+				<Grid Margin="10,0,4,0">
+					<Grid.ColumnDefinitions>
+						<ColumnDefinition Width="Auto" />
+						<ColumnDefinition Width="*" />
+						<ColumnDefinition Width="Auto" />
+					</Grid.ColumnDefinitions>
+					<TextBlock x:Name="BadgeText"
+							Margin="0,0,6,0"
+							VerticalAlignment="Center"
+							FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+							FontSize="11"
+							Opacity="0.8"
+							Foreground="{DynamicResource FenceForeground}" />
+					<TextBlock x:Name="TitleText"
+							Grid.Column="1"
+							VerticalAlignment="Center"
+							FontSize="13"
+							FontWeight="SemiBold"
+							TextTrimming="CharacterEllipsis"
+							Foreground="{DynamicResource FenceForeground}"
+							Effect="{DynamicResource TextShadow}" />
+					<TextBox x:Name="TitleEditor"
+							Grid.Column="1"
+							Margin="0,0,4,0"
+							VerticalAlignment="Center"
+							Visibility="Collapsed"
+							FontSize="13"
+							Style="{StaticResource RenameBoxStyle}"
+							KeyDown="TitleEditor_KeyDown"
+							LostKeyboardFocus="TitleEditor_LostKeyboardFocus" />
+					<StackPanel x:Name="TitleButtons" Grid.Column="2" Orientation="Horizontal" Opacity="0">
+						<Button x:Name="RollButton" Style="{StaticResource FenceTitleButton}" Content="&#xE70E;" ToolTip="卷起" Click="RollButton_Click" />
+						<Button x:Name="MenuButton" Style="{StaticResource FenceTitleButton}" Content="&#xE712;" ToolTip="分区菜单" Click="MenuButton_Click" />
+					</StackPanel>
+				</Grid>
+			</Border>
+
+			<Grid x:Name="ContentHost" Grid.Row="1" ClipToBounds="True">
+				<ListBox x:Name="ItemsList"
+						Style="{StaticResource FenceListBox}"
+						ItemContainerStyle="{StaticResource FenceItemContainer}"
+						PreviewMouseLeftButtonDown="ItemsList_PreviewMouseLeftButtonDown"
+						PreviewMouseMove="ItemsList_PreviewMouseMove"
+						PreviewMouseLeftButtonUp="ItemsList_PreviewMouseLeftButtonUp"
+						MouseRightButtonUp="ItemsList_MouseRightButtonUp" />
+				<TextBlock x:Name="EmptyHint"
+						Margin="12"
+						HorizontalAlignment="Center"
+						VerticalAlignment="Center"
+						TextAlignment="Center"
+						TextWrapping="Wrap"
+						Opacity="0.55"
+						IsHitTestVisible="False"
+						Text="拖放文件到这里"
+						Foreground="{DynamicResource FenceForeground}" />
+				<Canvas IsHitTestVisible="False">
+					<Rectangle x:Name="SelectionRect"
+							Visibility="Collapsed"
+							RadiusX="2"
+							RadiusY="2"
+							Fill="#333B82F6"
+							Stroke="#CC60A5FA"
+							StrokeThickness="1" />
+				</Canvas>
+			</Grid>
+		</Grid>
+	</Border>
+</Window>

@@ -1,0 +1,292 @@
+<Window x:Class="MyDesktop.Views.SettingsWindow"
+		x:ClassModifier="internal"
+		xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+		ThemeMode="System"
+		Title="MyDesktop 设置"
+		Width="840"
+		Height="620"
+		MinWidth="700"
+		MinHeight="480"
+		WindowStartupLocation="CenterScreen"
+		Icon="/Assets/app.ico">
+
+	<Window.Resources>
+		<Style x:Key="PageTitle" TargetType="TextBlock">
+			<Setter Property="FontSize" Value="26" />
+			<Setter Property="FontWeight" Value="SemiBold" />
+			<Setter Property="Margin" Value="0,4,0,6" />
+		</Style>
+		<Style x:Key="SectionTitle" TargetType="TextBlock">
+			<Setter Property="FontSize" Value="14" />
+			<Setter Property="FontWeight" Value="SemiBold" />
+			<Setter Property="Margin" Value="0,20,0,8" />
+		</Style>
+		<Style x:Key="Hint" TargetType="TextBlock">
+			<Setter Property="FontSize" Value="12" />
+			<Setter Property="Opacity" Value="0.7" />
+			<Setter Property="TextWrapping" Value="Wrap" />
+			<Setter Property="Margin" Value="0,2,0,0" />
+		</Style>
+		<Style x:Key="Card" TargetType="Border">
+			<Setter Property="Background" Value="{DynamicResource CardBackgroundFillColorDefaultBrush}" />
+			<Setter Property="BorderBrush" Value="{DynamicResource CardStrokeColorDefaultBrush}" />
+			<Setter Property="BorderThickness" Value="1" />
+			<Setter Property="CornerRadius" Value="6" />
+			<Setter Property="Padding" Value="16,12" />
+			<Setter Property="Margin" Value="0,0,0,4" />
+		</Style>
+	</Window.Resources>
+
+	<Grid>
+		<Grid.ColumnDefinitions>
+			<ColumnDefinition Width="210" />
+			<ColumnDefinition Width="*" />
+		</Grid.ColumnDefinitions>
+
+		<DockPanel Margin="12,18,6,16">
+			<StackPanel Margin="8,0,0,18" DockPanel.Dock="Top" Orientation="Horizontal">
+				<Image Width="30" Height="30" Source="/Assets/app.png" RenderOptions.BitmapScalingMode="HighQuality" />
+				<TextBlock Margin="10,0,0,0" VerticalAlignment="Center" FontSize="18" FontWeight="SemiBold" Text="MyDesktop" />
+			</StackPanel>
+			<ListBox x:Name="NavList" Background="Transparent" BorderThickness="0" SelectionChanged="NavList_SelectionChanged">
+				<ListBoxItem Content="常规" IsSelected="True" />
+				<ListBoxItem Content="外观" />
+				<ListBoxItem Content="整理规则" />
+				<ListBoxItem Content="关于" />
+			</ListBox>
+		</DockPanel>
+
+		<ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+			<Grid Margin="18,14,28,28">
+
+				<!-- 常规 -->
+				<StackPanel x:Name="GeneralPage">
+					<TextBlock Style="{StaticResource PageTitle}" Text="常规" />
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="启动与交互" />
+					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="AutoStartBox" Click="AutoStartBox_Click">
+							<StackPanel>
+								<TextBlock Text="开机自动启动" />
+								<TextBlock Style="{StaticResource Hint}" Text="登录 Windows 后自动显示分区" />
+							</StackPanel>
+						</CheckBox>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="DoubleClickBox" Click="Setting_Changed">
+							<StackPanel>
+								<TextBlock Text="双击桌面空白处隐藏/显示图标和分区" />
+								<TextBlock Style="{StaticResource Hint}" Text="再次双击即可恢复" />
+							</StackPanel>
+						</CheckBox>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="ExpandOnHoverBox" Click="Setting_Changed">
+							<StackPanel>
+								<TextBlock Text="卷起的分区在鼠标悬停时自动展开" />
+								<TextBlock Style="{StaticResource Hint}" Text="双击分区标题栏可以卷起或展开分区" />
+							</StackPanel>
+						</CheckBox>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="SnapBox" Click="Setting_Changed">
+							<StackPanel>
+								<TextBlock Text="移动或调整分区时自动吸附对齐" />
+								<TextBlock Style="{StaticResource Hint}" Text="吸附到屏幕边缘和相邻的分区" />
+							</StackPanel>
+						</CheckBox>
+					</Border>
+					<Border Style="{StaticResource Card}" IsEnabled="{Binding IsChecked, ElementName=SnapBox}">
+						<StackPanel>
+							<TextBlock Text="吸附时分区之间的间距" />
+							<TextBlock Style="{StaticResource Hint}" Text="设为 0 时相邻分区紧贴在一起" />
+							<DockPanel Margin="0,8,0,0">
+								<TextBlock x:Name="SnapGapText" Width="52" VerticalAlignment="Center" DockPanel.Dock="Right" TextAlignment="Right" />
+								<Slider x:Name="SnapGapSlider" IsSnapToTickEnabled="True" Maximum="24" Minimum="0" TickFrequency="2" ValueChanged="SnapGapSlider_ValueChanged" />
+							</DockPanel>
+						</StackPanel>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="ShowHiddenBox" Click="Setting_Changed">
+							<TextBlock Text="在分区中显示隐藏文件" />
+						</CheckBox>
+					</Border>
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="分区文件存放位置" />
+					<Border Style="{StaticResource Card}">
+						<StackPanel>
+							<TextBlock Margin="0,0,0,10" Style="{StaticResource Hint}" Text="拖入分区的文件会移动到此目录下与分区同名的文件夹中。修改后只影响之后新建的分区。" />
+							<DockPanel>
+								<Button Margin="8,0,0,0" Content="打开" DockPanel.Dock="Right" Click="OpenStorage_Click" />
+								<Button Margin="8,0,0,0" Content="更改…" DockPanel.Dock="Right" Click="ChangeStorage_Click" />
+								<TextBox x:Name="StorageBox" VerticalContentAlignment="Center" IsReadOnly="True" />
+							</DockPanel>
+						</StackPanel>
+					</Border>
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="分区管理" />
+					<Border Style="{StaticResource Card}">
+						<WrapPanel>
+							<Button Margin="0,0,8,0" Content="新建分区" Click="NewFence_Click" />
+							<Button Margin="0,0,8,0" Content="新建文件夹映射分区…" Click="NewPortal_Click" />
+							<Button Content="一键整理桌面…" Click="Organize_Click" />
+						</WrapPanel>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<DockPanel>
+							<Button VerticalAlignment="Center" Content="全部移回桌面…" DockPanel.Dock="Right" Click="RestoreAll_Click" />
+							<StackPanel Margin="0,0,12,0">
+								<TextBlock Text="把所有分区中的文件移回桌面" />
+								<TextBlock Style="{StaticResource Hint}" Text="不再使用本软件之前，可以用它把文件全部还原到桌面" />
+							</StackPanel>
+						</DockPanel>
+					</Border>
+				</StackPanel>
+
+				<!-- 外观 -->
+				<StackPanel x:Name="AppearancePage" Visibility="Collapsed">
+					<TextBlock Style="{StaticResource PageTitle}" Text="外观" />
+					<TextBlock Style="{StaticResource Hint}" Text="以下是所有分区的默认外观。单个分区可以在它的右键菜单里单独设置颜色、不透明度和图标大小。" />
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="背景颜色" />
+					<Border Style="{StaticResource Card}">
+						<StackPanel>
+							<WrapPanel x:Name="ColorPanel" />
+							<StackPanel Margin="0,6,0,0" Orientation="Horizontal">
+								<TextBlock VerticalAlignment="Center" Text="自定义" />
+								<Border x:Name="ColorPreview" Width="28" Height="28" Margin="12,0,8,0" BorderBrush="#40808080" BorderThickness="1" CornerRadius="4" />
+								<TextBox x:Name="ColorBox" Width="120" VerticalContentAlignment="Center" KeyDown="ColorBox_KeyDown" LostFocus="ColorBox_LostFocus" />
+							</StackPanel>
+						</StackPanel>
+					</Border>
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="背景不透明度" />
+					<Border Style="{StaticResource Card}">
+						<DockPanel>
+							<TextBlock x:Name="OpacityText" Width="52" VerticalAlignment="Center" DockPanel.Dock="Right" TextAlignment="Right" />
+							<Slider x:Name="OpacitySlider" IsSnapToTickEnabled="True" Maximum="100" Minimum="5" TickFrequency="5" ValueChanged="OpacitySlider_ValueChanged" />
+						</DockPanel>
+					</Border>
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="圆角大小" />
+					<Border Style="{StaticResource Card}">
+						<DockPanel>
+							<TextBlock x:Name="RadiusText" Width="52" VerticalAlignment="Center" DockPanel.Dock="Right" TextAlignment="Right" />
+							<Slider x:Name="RadiusSlider" IsSnapToTickEnabled="True" Maximum="16" Minimum="0" TickFrequency="1" ValueChanged="RadiusSlider_ValueChanged" />
+						</DockPanel>
+					</Border>
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="图标与文字" />
+					<Border Style="{StaticResource Card}">
+						<DockPanel>
+							<ComboBox x:Name="IconSizeBox" Width="150" DockPanel.Dock="Right" SelectionChanged="IconSizeBox_SelectionChanged" />
+							<TextBlock VerticalAlignment="Center" Text="默认图标大小" />
+						</DockPanel>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="TextShadowBox" Click="Setting_Changed">
+							<StackPanel>
+								<TextBlock Text="文字阴影" />
+								<TextBlock Style="{StaticResource Hint}" Text="在浅色壁纸上让文件名更清晰" />
+							</StackPanel>
+						</CheckBox>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<DockPanel>
+							<Button VerticalAlignment="Center" Content="全部重置" DockPanel.Dock="Right" Click="ResetAppearance_Click" />
+							<StackPanel Margin="0,0,12,0">
+								<TextBlock Text="所有分区改用默认外观" />
+								<TextBlock Style="{StaticResource Hint}" Text="清除各分区单独设置的颜色、不透明度和图标大小" />
+							</StackPanel>
+						</DockPanel>
+					</Border>
+				</StackPanel>
+
+				<!-- 整理规则 -->
+				<StackPanel x:Name="RulesPage" Visibility="Collapsed">
+					<TextBlock Style="{StaticResource PageTitle}" Text="整理规则" />
+					<TextBlock Style="{StaticResource Hint}" Text="一键整理时，桌面上的项目按下列规则从上到下匹配，归入同名分区（不存在时自动创建）。扩展名之间用分号分隔。" />
+
+					<Border Margin="0,16,0,4" Style="{StaticResource Card}">
+						<CheckBox x:Name="AutoOrganizeBox" Click="Setting_Changed">
+							<StackPanel>
+								<TextBlock Text="自动整理新文件" />
+								<TextBlock Style="{StaticResource Hint}" Text="桌面上新出现的文件（如刚下载、刚保存的文件）几秒后自动按规则归入分区" />
+							</StackPanel>
+						</CheckBox>
+					</Border>
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="规则列表" />
+					<ItemsControl x:Name="RulesList">
+						<ItemsControl.ItemTemplate>
+							<DataTemplate>
+								<Border Style="{StaticResource Card}">
+									<Grid>
+										<Grid.ColumnDefinitions>
+											<ColumnDefinition Width="140" />
+											<ColumnDefinition Width="*" />
+											<ColumnDefinition Width="Auto" />
+										</Grid.ColumnDefinitions>
+										<TextBox Margin="0,0,8,0" VerticalContentAlignment="Center" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" LostFocus="Rule_LostFocus" />
+										<TextBox x:Name="ExtensionsBox" Grid.Column="1" VerticalContentAlignment="Center" Text="{Binding Extensions, UpdateSourceTrigger=PropertyChanged}" LostFocus="Rule_LostFocus" />
+										<TextBlock x:Name="ExtensionsHint" Grid.Column="1" Margin="4,0" VerticalAlignment="Center" Opacity="0.7" Visibility="Collapsed" />
+										<Button Grid.Column="2" Margin="8,0,0,0" Content="&#xE74D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" ToolTip="删除规则" Click="DeleteRule_Click" />
+									</Grid>
+								</Border>
+								<DataTemplate.Triggers>
+									<DataTrigger Binding="{Binding MatchFolders}" Value="True">
+										<Setter TargetName="ExtensionsBox" Property="Visibility" Value="Collapsed" />
+										<Setter TargetName="ExtensionsHint" Property="Visibility" Value="Visible" />
+										<Setter TargetName="ExtensionsHint" Property="Text" Value="桌面上的所有文件夹" />
+									</DataTrigger>
+									<DataTrigger Binding="{Binding IsFallback}" Value="True">
+										<Setter TargetName="ExtensionsBox" Property="Visibility" Value="Collapsed" />
+										<Setter TargetName="ExtensionsHint" Property="Visibility" Value="Visible" />
+										<Setter TargetName="ExtensionsHint" Property="Text" Value="其他规则都没有匹配到的项目" />
+									</DataTrigger>
+								</DataTemplate.Triggers>
+							</DataTemplate>
+						</ItemsControl.ItemTemplate>
+					</ItemsControl>
+					<WrapPanel Margin="0,8,0,0">
+						<Button Margin="0,0,8,0" Content="添加规则" Click="AddRule_Click" />
+						<Button Margin="0,0,8,0" Content="恢复默认规则" Click="ResetRules_Click" />
+						<Button Content="立即整理桌面…" Click="Organize_Click" />
+					</WrapPanel>
+				</StackPanel>
+
+				<!-- 关于 -->
+				<StackPanel x:Name="AboutPage" Visibility="Collapsed">
+					<TextBlock Style="{StaticResource PageTitle}" Text="关于" />
+					<Border Margin="0,12,0,4" Style="{StaticResource Card}">
+						<StackPanel Orientation="Horizontal">
+							<Image Width="56" Height="56" Source="/Assets/app.png" RenderOptions.BitmapScalingMode="HighQuality" />
+							<StackPanel Margin="16,0,0,0" VerticalAlignment="Center">
+								<TextBlock FontSize="18" FontWeight="SemiBold" Text="MyDesktop 桌面分区" />
+								<TextBlock x:Name="VersionText" Style="{StaticResource Hint}" />
+							</StackPanel>
+						</StackPanel>
+					</Border>
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="使用提示" />
+					<Border Style="{StaticResource Card}">
+						<TextBlock x:Name="TipsText" LineHeight="24" TextWrapping="Wrap" />
+					</Border>
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="数据" />
+					<Border Style="{StaticResource Card}">
+						<DockPanel>
+							<Button VerticalAlignment="Center" Content="打开" DockPanel.Dock="Right" Click="OpenDataDir_Click" />
+							<StackPanel Margin="0,0,12,0">
+								<TextBlock Text="配置与日志目录" />
+								<TextBlock x:Name="DataDirText" Style="{StaticResource Hint}" />
+							</StackPanel>
+						</DockPanel>
+					</Border>
+				</StackPanel>
+
+			</Grid>
+		</ScrollViewer>
+	</Grid>
+</Window>

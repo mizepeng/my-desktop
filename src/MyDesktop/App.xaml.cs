@@ -1,0 +1,135 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Windows;
+using System.Windows.Threading;
+using MyDesktop.Core;
+using MyDesktop.Services;
+using static MyDesktop.Native.NativeMethods;
+
+namespace MyDesktop;
+
+public partial class App : Application
+{
+	/// <summary>
+	/// 重复启动时，新进程广播此消息让已运行的实例打开设置窗口。
+	/// </summary>
+	public const string ActivateMessageName = "MyDesktop.ShowSettings";
+
+	Mutex? _mutex;
+	bool _ownsMutex;
+
+	public static new App Current => (App)Application.Current;
+
+	internal FenceManager? Manager { get; private set; }
+
+	protected override void OnStartup(StartupEventArgs e)
+	{
+		base.OnStartup(e);
+		ParseArguments(e.Args);
+		Log.Init(AppPaths.DataDir);
+		if (!AcquireSingleInstance())
+		{
+			PostMessage(HWND_BROADCAST, RegisterWindowMessage(ActivateMessageName), IntPtr.Zero, IntPtr.Zero);
+			Shutdown();
+			return;
+		}
+		RegisterExceptionHandlers();
+		SystemTheme.ApplyToMenus();
+		Log.Info($"启动 {typeof(App).Assembly.GetName().Version}，数据目录：{AppPaths.DataDir}");
+		var settings = SettingsStore.Load(out bool firstRun);
+		Manager = new FenceManager(settings);
+		StartWhenDesktopReady(Manager, firstRun);
+	}
+
+	public void ExitApp()
+	{
+		Manager?.Shutdown();
+		Shutdown();
+	}
+
+	protected override void OnExit(ExitEventArgs e)
+	{
+		Manager?.Shutdown();
+		if (_ownsMutex)
+		{
+			_mutex?.ReleaseMutex();
+		}
+		_mutex?.Dispose();
+		base.OnExit(e);
+	}
+
+	protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
+	{
+		// 注销/关机时 WPF 会逐个关闭窗口，先有序关闭，避免分区窗口被当作意外关闭而重建
+		Manager?.Shutdown();
+		base.OnSessionEnding(e);
+	}
+
+	/// <summary>
+	/// 开机自启时 Explorer 可能还没创建好桌面窗口，轮询等待（最多约一分钟）。
+	/// </summary>
+	static void StartWhenDesktopReady(FenceManager manager, bool firstRun)
+	{
+		if (DesktopHost.FindFolderView() != IntPtr.Zero)
+		{
+			manager.Start(firstRun);
+			return;
+		}
+		int attempts = 0;
+		var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+		timer.Tick += (_, _) =>
+		{
+			if (DesktopHost.FindFolderView() == IntPtr.Zero && ++attempts < 60)
+			{
+				return;
+			}
+			timer.Stop();
+			manager.Start(firstRun);
+		};
+		timer.Start();
+	}
+
+	static void ParseArguments(string[] args)
+	{
+		for (int i = 0; i < args.Length - 1; i++)
+		{
+			if (string.Equals(args[i], "--data", StringComparison.OrdinalIgnoreCase))
+			{
+				AppPaths.UseDataDir(args[i + 1]);
+			}
+		}
+	}
+
+	/// <summary>
+	/// 按数据目录区分实例，便于用 --data 另起一个互不干扰的测试实例。
+	/// </summary>
+	bool AcquireSingleInstance()
+	{
+		var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(AppPaths.DataDir.ToUpperInvariant())))[..16];
+		_mutex = new Mutex(true, $"Local\\MyDesktop-{hash}", out _ownsMutex);
+		return _ownsMutex;
+	}
+
+	void RegisterExceptionHandlers()
+	{
+		DispatcherUnhandledException += (_, e) =>
+		{
+			Log.Error("界面线程未处理的异常", e.Exception);
+			e.Handled = true;
+		};
+		AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+		{
+			Log.Error("未处理的异常，程序即将退出", e.ExceptionObject as Exception);
+			// 进程即将崩溃，尽量把被隐藏的桌面图标恢复出来
+			if (!DesktopHost.IconsHiddenBySystem())
+			{
+				DesktopHost.SetIconsVisible(true);
+			}
+		};
+		TaskScheduler.UnobservedTaskException += (_, e) =>
+		{
+			Log.Warn("后台任务未处理的异常", e.Exception);
+			e.SetObserved();
+		};
+	}
+}
