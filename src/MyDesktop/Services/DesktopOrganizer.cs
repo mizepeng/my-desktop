@@ -68,6 +68,12 @@ internal sealed class DesktopOrganizer : IDisposable
 
 	public void ApplyWatchSetting()
 	{
+		// 桌面文件夹被迁移（如 OneDrive 备份桌面）后改为监视新位置
+		if (_watcher != null && !PathUtil.AreEqual(_watcher.Path, AppPaths.Desktop))
+		{
+			_watcher.Dispose();
+			_watcher = null;
+		}
 		bool enabled = _manager.Settings.AutoOrganize;
 		if (enabled && _watcher == null)
 		{

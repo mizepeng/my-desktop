@@ -31,9 +31,23 @@ internal static class ShellIconLoader
 
 	sealed record LoadRequest(string Path, int Size, string Key, Action<BitmapSource?> Callback, Dispatcher Dispatcher, int Attempt = 0);
 
+	/// <summary>
+	/// 系统图像列表（IImageList）的两个方法，按虚表位置直接调用：
+	/// 本进程里该对象不应答 IImageList 的 QueryInterface（实测 E_NOINTERFACE），无法经 COM 接口转换使用。
+	/// </summary>
+	[UnmanagedFunctionPointer(CallingConvention.StdCall)]
+	delegate int GetOverlayImageMethod(IntPtr self, int overlay, out int index);
+
+	[UnmanagedFunctionPointer(CallingConvention.StdCall)]
+	delegate int GetIconMethod(IntPtr self, int index, uint flags, out IntPtr icon);
+
+	const int GetIconSlot = 10;
+	const int GetOverlayImageSlot = 31;
+
 	static readonly BlockingCollection<LoadRequest> Queue = new();
 	static readonly ConcurrentDictionary<string, BitmapSource> Cache = new(StringComparer.OrdinalIgnoreCase);
 	static readonly ConcurrentDictionary<int, BitmapSource?> Shields = new();
+	static readonly ConcurrentDictionary<int, BitmapSource?> Overlays = new();
 
 	static ShellIconLoader()
 	{
@@ -49,9 +63,10 @@ internal static class ShellIconLoader
 	/// 请求图标，回调在调用线程的 Dispatcher 上执行；命中缓存时同步回调。
 	/// </summary>
 	/// <param name="stamp">文件修改时间，文件变化后缓存自动失效。</param>
-	public static void Request(string path, int pixelSize, DateTime stamp, Action<BitmapSource?> callback)
+	/// <param name="variant">系统图标的图标位置（回收站空、满时不同），变化后缓存自动失效。</param>
+	public static void Request(string path, int pixelSize, DateTime stamp, Action<BitmapSource?> callback, string? variant = null)
 	{
-		var key = $"{pixelSize}|{stamp.Ticks}|{path}";
+		var key = $"{pixelSize}|{stamp.Ticks}|{variant}|{path}";
 		if (Cache.TryGetValue(key, out var cached))
 		{
 			callback(cached);
@@ -128,6 +143,7 @@ internal static class ShellIconLoader
 			{
 				DeleteObject(bitmap);
 			}
+			image = StampOverlay(path, image);
 			return NeedsShield(path) ? StampShield(image) : image;
 		}
 		finally
@@ -169,6 +185,80 @@ internal static class ShellIconLoader
 			Log.Warn($"检查管理员盾牌失败：{path}", ex);
 			return false;
 		}
+	}
+
+	/// <summary>
+	/// 叠加资源管理器在这个图标上显示的角标（快捷方式箭头、共享、同步状态等），角标图像与图标同样大小、整张盖在图标上。
+	/// </summary>
+	static BitmapSource StampOverlay(string path, BitmapSource image)
+	{
+		int overlay;
+		try
+		{
+			using var items = ShellItemSet.Create([path]);
+			overlay = items?.GetOverlayIndex() ?? 0;
+		}
+		catch (Exception ex)
+		{
+			Log.Warn($"读取图标角标失败：{path}", ex);
+			return image;
+		}
+		if (overlay <= 0 || LoadOverlay(overlay) is not BitmapSource badge)
+		{
+			return image;
+		}
+		var visual = new DrawingVisual();
+		using (var context = visual.RenderOpen())
+		{
+			var rect = new Rect(0, 0, image.PixelWidth, image.PixelHeight);
+			context.DrawImage(image, rect);
+			context.DrawImage(badge, rect);
+		}
+		var result = new RenderTargetBitmap(image.PixelWidth, image.PixelHeight, 96, 96, PixelFormats.Pbgra32);
+		result.Render(visual);
+		result.Freeze();
+		return result;
+	}
+
+	/// <summary>
+	/// 从系统超大图像列表取角标图像（缩小绘制不发糊），每种角标只取一次。
+	/// </summary>
+	static BitmapSource? LoadOverlay(int overlay)
+	{
+		return Overlays.GetOrAdd(overlay, o =>
+		{
+			const int SHIL_JUMBO = 4;
+			const uint ILD_TRANSPARENT = 0x1;
+			var iid = new Guid("46EB5926-582E-4017-9FDF-E8998DAA0950");
+			if (SHGetImageList(SHIL_JUMBO, ref iid, out var ptr) != 0 || ptr == IntPtr.Zero)
+			{
+				return null;
+			}
+			try
+			{
+				var vtable = Marshal.ReadIntPtr(ptr);
+				var getOverlay = Marshal.GetDelegateForFunctionPointer<GetOverlayImageMethod>(Marshal.ReadIntPtr(vtable, GetOverlayImageSlot * IntPtr.Size));
+				var getIcon = Marshal.GetDelegateForFunctionPointer<GetIconMethod>(Marshal.ReadIntPtr(vtable, GetIconSlot * IntPtr.Size));
+				if (getOverlay(ptr, o, out int index) != 0 || index < 0 || getIcon(ptr, index, ILD_TRANSPARENT, out var icon) != 0 || icon == IntPtr.Zero)
+				{
+					return null;
+				}
+				try
+				{
+					var source = Imaging.CreateBitmapSourceFromHIcon(icon, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+					source.Freeze();
+					return source;
+				}
+				finally
+				{
+					DestroyIcon(icon);
+				}
+			}
+			finally
+			{
+				Marshal.Release(ptr);
+			}
+		});
 	}
 
 	/// <summary>

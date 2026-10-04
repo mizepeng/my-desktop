@@ -28,6 +28,11 @@ internal sealed class TrayIcon : IDisposable
 	public event Action? DisplayChanged;
 	public event Action? ThemeChanged;
 
+	/// <summary>
+	/// 剪贴板内容变化（用来把被剪切的图标显示成半透明）。
+	/// </summary>
+	public event Action? ClipboardChanged;
+
 	public IntPtr Handle => _window.Handle;
 
 	/// <summary>
@@ -57,6 +62,7 @@ internal sealed class TrayIcon : IDisposable
 		ChangeWindowMessageFilterEx(Handle, _stateMessage, MSGFLT_ALLOW, IntPtr.Zero);
 		_icon = LoadAppIcon();
 		Add();
+		AddClipboardFormatListener(Handle);
 	}
 
 	public void ShowBalloon(string title, string text)
@@ -70,6 +76,7 @@ internal sealed class TrayIcon : IDisposable
 
 	public void Dispose()
 	{
+		RemoveClipboardFormatListener(Handle);
 		var data = CreateData(0);
 		Shell_NotifyIcon(NIM_DELETE, ref data);
 		if (_icon != IntPtr.Zero)
@@ -136,6 +143,10 @@ internal sealed class TrayIcon : IDisposable
 		else if (msg == WM_DISPLAYCHANGE)
 		{
 			DisplayChanged?.Invoke();
+		}
+		else if (msg == WM_CLIPBOARDUPDATE)
+		{
+			ClipboardChanged?.Invoke();
 		}
 		else if (msg == WM_SETTINGCHANGE)
 		{

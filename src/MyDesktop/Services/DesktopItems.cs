@@ -11,12 +11,15 @@ namespace MyDesktop.Services;
 internal sealed class DesktopItems : IDisposable
 {
 	readonly ExplorerDesktopView _view;
+	readonly Dispatcher _dispatcher;
 	readonly List<FileSystemWatcher> _watchers = [];
+	string[] _folders = [];
 	readonly DispatcherTimer _quickTimer;
 	readonly DispatcherTimer _settleTimer;
 
 	public DesktopItems(Dispatcher dispatcher)
 	{
+		_dispatcher = dispatcher;
 		_view = new ExplorerDesktopView(dispatcher);
 		_view.Changed += snapshot =>
 		{
@@ -41,11 +44,36 @@ internal sealed class DesktopItems : IDisposable
 				Changed?.Invoke();
 			}
 		};
-		foreach (var folder in new[] { AppPaths.Desktop, AppPaths.CommonDesktop }.Distinct(StringComparer.OrdinalIgnoreCase))
-		{
-			Watch(folder, dispatcher);
-		}
+		CheckFolders();
 		_view.Refresh();
+	}
+
+	/// <summary>
+	/// 监视用户桌面和公共桌面；桌面文件夹被迁移（如 OneDrive 备份桌面）后改为监视新位置。由看门狗定时调用。
+	/// </summary>
+	public void CheckFolders()
+	{
+		var folders = new[] { AppPaths.Desktop, AppPaths.CommonDesktop }.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+		if (folders.SequenceEqual(_folders, StringComparer.OrdinalIgnoreCase))
+		{
+			return;
+		}
+		bool moved = _folders.Length > 0;
+		_folders = folders;
+		foreach (var watcher in _watchers)
+		{
+			watcher.Dispose();
+		}
+		_watchers.Clear();
+		foreach (var folder in folders)
+		{
+			Watch(folder, _dispatcher);
+		}
+		if (moved)
+		{
+			Log.Info($"桌面文件夹位置变化，改为监视：{string.Join("、", folders)}");
+			RefreshSoon();
+		}
 	}
 
 	/// <summary>

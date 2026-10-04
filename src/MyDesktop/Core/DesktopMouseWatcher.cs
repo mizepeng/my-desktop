@@ -20,6 +20,12 @@ internal enum DesktopKey
 	Cut,
 	ContextMenu,
 	Properties,
+	Left,
+	Up,
+	Right,
+	Down,
+	Home,
+	End,
 }
 
 /// <summary>
@@ -91,9 +97,14 @@ internal sealed class DesktopMouseWatcher : IDisposable
 	public event Action? BandFinished;
 
 	/// <summary>
-	/// 桌面在前台时被拦下的按键命令，在界面线程上触发。
+	/// 桌面在前台时被拦下的按键命令（参数二表示是否按着 Shift），在界面线程上触发。
 	/// </summary>
-	public event Action<DesktopKey>? KeyIntercepted;
+	public event Action<DesktopKey, bool>? KeyIntercepted;
+
+	/// <summary>
+	/// 桌面在前台时输入的字母或数字，用于按首字母定位图标，在界面线程上触发。
+	/// </summary>
+	public event Action<char>? CharIntercepted;
 
 	public bool DoubleClickEnabled
 	{
@@ -207,7 +218,13 @@ internal sealed class DesktopMouseWatcher : IDisposable
 				var info = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
 				if (MapKey(info.vkCode) is DesktopKey key && IsDesktopFocused())
 				{
-					_uiDispatcher.BeginInvoke(() => KeyIntercepted?.Invoke(key));
+					bool shift = IsPressed(VK_SHIFT);
+					_uiDispatcher.BeginInvoke(() => KeyIntercepted?.Invoke(key, shift));
+					return new IntPtr(1);
+				}
+				if (MapChar(info.vkCode) is char character && IsDesktopFocused())
+				{
+					_uiDispatcher.BeginInvoke(() => CharIntercepted?.Invoke(character));
 					return new IntPtr(1);
 				}
 			}
@@ -237,6 +254,29 @@ internal sealed class DesktopMouseWatcher : IDisposable
 			'D' when ctrl && !alt => DesktopKey.Delete,
 			VK_APPS => DesktopKey.ContextMenu,
 			VK_F10 when shift => DesktopKey.ContextMenu,
+			VK_LEFT when !ctrl && !alt => DesktopKey.Left,
+			VK_UP when !ctrl && !alt => DesktopKey.Up,
+			VK_RIGHT when !ctrl && !alt => DesktopKey.Right,
+			VK_DOWN when !ctrl && !alt => DesktopKey.Down,
+			VK_HOME when !ctrl && !alt => DesktopKey.Home,
+			VK_END when !ctrl && !alt => DesktopKey.End,
+			_ => null,
+		};
+	}
+
+	/// <summary>
+	/// 不带 Ctrl、Alt 的字母和数字（含小键盘）。
+	/// </summary>
+	static char? MapChar(uint vk)
+	{
+		if (IsPressed(VK_CONTROL) || IsPressed(VK_MENU))
+		{
+			return null;
+		}
+		return (int)vk switch
+		{
+			>= 'A' and <= 'Z' or >= '0' and <= '9' => (char)vk,
+			>= VK_NUMPAD0 and <= VK_NUMPAD9 => (char)('0' + vk - VK_NUMPAD0),
 			_ => null,
 		};
 	}

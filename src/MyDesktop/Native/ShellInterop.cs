@@ -309,6 +309,42 @@ internal interface IExtractIconW
 }
 
 /// <summary>
+/// 文件夹给出其中项目的角标（快捷方式箭头、共享、同步状态等），与资源管理器图标上叠加的一致。
+/// </summary>
+[ComImport]
+[Guid("7D688A70-C613-11D0-999B-00C04FD655E1")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IShellIconOverlay
+{
+	[PreserveSig]
+	int GetOverlayIndex(IntPtr pidl, ref int index);
+
+	[PreserveSig]
+	int GetOverlayIconIndex(IntPtr pidl, ref int iconIndex);
+}
+
+/// <summary>
+/// OLE 放置目标。把拖到图标上的内容转给该项目自己的放置目标：拖到文件夹里、拖给程序打开、拖进回收站删除，与资源管理器一致。
+/// </summary>
+[ComImport]
+[Guid("00000122-0000-0000-C000-000000000046")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IOleDropTarget
+{
+	[PreserveSig]
+	int DragEnter(ComIDataObject dataObject, uint keyState, POINT point, ref uint effect);
+
+	[PreserveSig]
+	int DragOver(uint keyState, POINT point, ref uint effect);
+
+	[PreserveSig]
+	int DragLeave();
+
+	[PreserveSig]
+	int Drop(ComIDataObject dataObject, uint keyState, POINT point, ref uint effect);
+}
+
+/// <summary>
 /// CLSID_DragDropHelper：提供与资源管理器一致的拖放预览图。
 /// </summary>
 [ComImport]
@@ -488,6 +524,41 @@ internal sealed class ShellItemSet : IDisposable
 			absolute.ForEach(NativeMethods.ILFree);
 			throw;
 		}
+	}
+
+	/// <summary>
+	/// 第一项的 Shell 属性（SFGAO_*），只取 mask 中的位。
+	/// </summary>
+	public uint GetAttributes(uint mask)
+	{
+		uint attributes = mask;
+		return _parent.GetAttributesOf(1, [_childPidls[0]], ref attributes) == 0 ? attributes & mask : 0;
+	}
+
+	/// <summary>
+	/// 资源管理器在第一项图标上叠加的角标序号（快捷方式箭头等），没有时为 0。
+	/// </summary>
+	public int GetOverlayIndex()
+	{
+		if (_parent is not IShellIconOverlay overlay)
+		{
+			return 0;
+		}
+		int index = 0;
+		return overlay.GetOverlayIndex(_childPidls[0], ref index) == 0 ? index : 0;
+	}
+
+	/// <summary>
+	/// 按显示名为第一项改名，用于此电脑、回收站这类不对应文件的系统图标（文件仍走 SHFileOperation）。
+	/// </summary>
+	public bool SetName(IntPtr hwnd, string name)
+	{
+		int hr = _parent.SetNameOf(hwnd, _childPidls[0], name, NativeMethods.SHGDN_NORMAL, out var newPidl);
+		if (newPidl != IntPtr.Zero)
+		{
+			Marshal.FreeCoTaskMem(newPidl);
+		}
+		return hr == 0;
 	}
 
 	/// <summary>

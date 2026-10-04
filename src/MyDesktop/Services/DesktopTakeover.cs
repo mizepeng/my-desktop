@@ -27,6 +27,16 @@ internal sealed class DesktopTakeover : IDisposable
 
 	static readonly TimeSpan RenameWait = TimeSpan.FromSeconds(5);
 
+	/// <summary>
+	/// 按首字母定位时，两次按键间隔超过它就重新开始匹配。
+	/// </summary>
+	static readonly TimeSpan TypeAheadTimeout = TimeSpan.FromSeconds(1);
+
+	/// <summary>
+	/// 拖到桌面的文件要等复制完、出现在桌面视图里才能摆到松手的位置，最多等这么久。
+	/// </summary>
+	static readonly TimeSpan PlacementWait = TimeSpan.FromSeconds(15);
+
 	readonly FenceManager _manager;
 	readonly Dispatcher _dispatcher;
 	readonly List<DesktopLayerWindow> _layers = [];
@@ -43,9 +53,16 @@ internal sealed class DesktopTakeover : IDisposable
 	bool _active;
 	bool _layersHidden;
 	bool _disposed;
-	// 散放图标格子左上角的屏幕位置（物理像素），拖动后据此算出新位置
+	// 散放图标格子左上角的屏幕位置（物理像素），拖动后据此算出新位置；_order 是它们的排列顺序（逐列从上到下）
 	Dictionary<string, POINT> _placement = new(StringComparer.OrdinalIgnoreCase);
+	List<string> _order = [];
 	POINT? _dragStart;
+	// 键盘定位的起点（最近点选或键盘选中的图标）与按首字母定位已输入的字符
+	FenceItem? _anchor;
+	string _typed = string.Empty;
+	DateTime _typedAt;
+	// 拖到桌面的文件出现后要摆到的位置
+	(List<string> Keys, POINT Cursor, DateTime Until)? _pendingPlacement;
 	int _hitRectCount = -1;
 	string? _pendingRename;
 	DateTime _pendingRenameUntil;
@@ -126,6 +143,7 @@ internal sealed class DesktopTakeover : IDisposable
 		_manager.OnDesktopItemsChanged();
 		Relayout();
 		TryPendingRename();
+		PlacePending();
 	}
 
 	void Activate()
@@ -159,6 +177,7 @@ internal sealed class DesktopTakeover : IDisposable
 		{
 			return;
 		}
+		Items.CheckFolders();
 		var desktop = DesktopHost.FindDesktopWindow();
 		if (desktop != IntPtr.Zero)
 		{
@@ -503,10 +522,12 @@ internal sealed class DesktopTakeover : IDisposable
 			groups[LayerAt(probe)].Add(item);
 		}
 		_placement = placement;
+		_order = placed.Select(p => p.Entry.Key).ToList();
 		foreach (var (layer, items) in groups)
 		{
 			layer.SetItems(items, snapshot.Spacing, snapshot.IconSize);
 		}
+		ApplyCutState();
 		_dispatcher.InvokeAsync(UpdateHitRects, DispatcherPriority.Loaded);
 	}
 
@@ -614,15 +635,31 @@ internal sealed class DesktopTakeover : IDisposable
 		}
 	}
 
+	/// <summary>
+	/// 剪贴板里被剪切的图标半透明显示。
+	/// </summary>
+	public void ApplyCutState()
+	{
+		foreach (var item in _layers.SelectMany(l => l.Items))
+		{
+			item.IsCut = _manager.IsCut(item.FullPath);
+		}
+	}
+
 	#endregion
 
 	#region 选择、按键与文件操作
 
 	/// <summary>
 	/// 与系统桌面一样，多个显示器上的图标共用一个选择：在某一层上点击（不带 Ctrl/Shift）时取消其他层的选择。
+	/// 点中的图标同时成为键盘定位的起点。
 	/// </summary>
-	public void OnLayerPressed(DesktopLayerWindow layer, bool additive)
+	public void OnLayerPressed(DesktopLayerWindow layer, bool additive, FenceItem? item = null)
 	{
+		if (item != null)
+		{
+			_anchor = item;
+		}
 		if (additive)
 		{
 			return;
@@ -664,7 +701,8 @@ internal sealed class DesktopTakeover : IDisposable
 	/// <summary>
 	/// 按键命令：来自获得焦点的图标层，或桌面在前台时被键盘钩子拦下的按键。
 	/// </summary>
-	public void HandleKey(DesktopKey key)
+	/// <param name="shift">是否按着 Shift（方向键追加选择）。</param>
+	public void HandleKey(DesktopKey key, bool shift = false)
 	{
 		var selected = _layers.SelectMany(l => l.SelectedItems).ToList();
 		var owner = _layers.FirstOrDefault(l => l.SelectedItems.Count > 0) ?? _layers.FirstOrDefault();
@@ -677,15 +715,169 @@ internal sealed class DesktopTakeover : IDisposable
 			DesktopKey.Open => () => Open(selected, owner.Handle),
 			DesktopKey.Delete => () => ItemOps.Delete(owner.Handle, selected, false),
 			DesktopKey.DeletePermanently => () => ItemOps.Delete(owner.Handle, selected, true),
-			DesktopKey.Rename => () => BeginRename(selected.FirstOrDefault(i => !i.IsVirtual)),
+			DesktopKey.Rename => () => BeginRename(selected.FirstOrDefault(i => i.CanRename)),
 			DesktopKey.SelectAll => () => _layers.ForEach(l => l.SelectAll()),
 			DesktopKey.Copy => () => ItemOps.CopyToClipboard(selected, false),
 			DesktopKey.Cut => () => ItemOps.CopyToClipboard(selected, true),
 			DesktopKey.ContextMenu => () => ShowMenuForSelection(owner, selected),
 			DesktopKey.Properties => () => ItemOps.ShowProperties(owner.Handle, selected, true),
+			DesktopKey.Left or DesktopKey.Up or DesktopKey.Right or DesktopKey.Down or DesktopKey.Home or DesktopKey.End => () => Navigate(key, shift),
 		};
 		action();
-		Items.RefreshSoon();
+		if (key is not (DesktopKey.Left or DesktopKey.Up or DesktopKey.Right or DesktopKey.Down or DesktopKey.Home or DesktopKey.End))
+		{
+			Items.RefreshSoon();
+		}
+	}
+
+	/// <summary>
+	/// 方向键、Home、End 在桌面图标之间移动选择（跨显示器），按住 Shift 时追加选择。
+	/// </summary>
+	void Navigate(DesktopKey key, bool extend)
+	{
+		var all = OrderedItems();
+		if (all.Count == 0)
+		{
+			return;
+		}
+		var spacing = Items.Snapshot?.Spacing ?? new POINT(1, 1);
+		var current = CurrentItem(all);
+		var target = key switch
+		{
+			DesktopKey.Home => all[0],
+			DesktopKey.End => all[^1],
+			_ => current is { } from ? Neighbor(all, from, key, spacing) : all[0],
+		};
+		if (target is { } found)
+		{
+			SelectItem(found, extend);
+		}
+	}
+
+	/// <summary>
+	/// 输入字母或数字时选中名称以它开头的图标：快速连续输入按整个前缀匹配，连按同一个字母依次跳到下一个。
+	/// </summary>
+	public void TypeAhead(string text)
+	{
+		if (string.IsNullOrWhiteSpace(text))
+		{
+			return;
+		}
+		var now = DateTime.Now;
+		if (now - _typedAt > TypeAheadTimeout)
+		{
+			_typed = string.Empty;
+		}
+		_typedAt = now;
+		_typed += text;
+		var all = OrderedItems();
+		if (all.Count == 0)
+		{
+			return;
+		}
+		bool repeated = _typed.All(c => char.ToUpperInvariant(c) == char.ToUpperInvariant(_typed[0]));
+		var prefix = repeated ? _typed[..1] : _typed;
+		int start = CurrentItem(all) is { } current ? all.FindIndex(i => i.Item == current.Item) : -1;
+		// 新开始的输入或连按同一个字母从下一个图标找起，继续输入的前缀从当前图标找起
+		int offset = repeated ? 1 : 0;
+		for (int i = 0; i < all.Count; i++)
+		{
+			var candidate = all[((start < 0 ? 0 : start + offset) + i) % all.Count];
+			if (candidate.Item.DisplayName.StartsWith(prefix, StringComparison.CurrentCultureIgnoreCase))
+			{
+				SelectItem(candidate, false);
+				return;
+			}
+		}
+	}
+
+	/// <summary>
+	/// 散放图标按排列顺序（逐列从上到下）及其所在的图标层、格子位置。
+	/// </summary>
+	List<(DesktopLayerWindow Layer, FenceItem Item, POINT Cell)> OrderedItems()
+	{
+		var result = new List<(DesktopLayerWindow Layer, FenceItem Item, POINT Cell)>(_order.Count);
+		foreach (var key in _order)
+		{
+			foreach (var layer in _layers)
+			{
+				if (layer.Find(key) is FenceItem item)
+				{
+					result.Add((layer, item, layer.CellOrigin(item)));
+					break;
+				}
+			}
+		}
+		return result;
+	}
+
+	/// <summary>
+	/// 键盘定位的当前图标：最近点选或键盘选中的那个（仍被选中时），否则是排在最前的选中图标。
+	/// </summary>
+	(DesktopLayerWindow Layer, FenceItem Item, POINT Cell)? CurrentItem(List<(DesktopLayerWindow Layer, FenceItem Item, POINT Cell)> all)
+	{
+		var selected = all.Where(i => i.Layer.SelectedItems.Contains(i.Item)).ToList();
+		if (selected.FirstOrDefault(i => i.Item == _anchor) is { Item: not null } anchor)
+		{
+			return anchor;
+		}
+		return selected.Count > 0 ? selected[0] : null;
+	}
+
+	/// <summary>
+	/// 指定方向上最近的图标：上下要求在同一列；左右优先同一行，同一行没有时取该方向上最近的。
+	/// </summary>
+	static (DesktopLayerWindow Layer, FenceItem Item, POINT Cell)? Neighbor(List<(DesktopLayerWindow Layer, FenceItem Item, POINT Cell)> all,
+			(DesktopLayerWindow Layer, FenceItem Item, POINT Cell) from, DesktopKey key, POINT spacing)
+	{
+		(DesktopLayerWindow Layer, FenceItem Item, POINT Cell)? best = null;
+		long bestScore = long.MaxValue;
+		foreach (var candidate in all)
+		{
+			if (candidate.Item == from.Item)
+			{
+				continue;
+			}
+			long dx = candidate.Cell.X - from.Cell.X;
+			long dy = candidate.Cell.Y - from.Cell.Y;
+			long score;
+			if (key is DesktopKey.Up or DesktopKey.Down)
+			{
+				if (Math.Sign(dy) != (key == DesktopKey.Down ? 1 : -1) || Math.Abs(dx) >= spacing.X / 2)
+				{
+					continue;
+				}
+				score = Math.Abs(dy);
+			}
+			else
+			{
+				if (Math.Sign(dx) != (key == DesktopKey.Right ? 1 : -1))
+				{
+					continue;
+				}
+				bool sameRow = Math.Abs(dy) < spacing.Y / 2;
+				score = sameRow ? Math.Abs(dx) : 1_000_000 + dx * dx + dy * dy;
+			}
+			if (score < bestScore)
+			{
+				bestScore = score;
+				best = candidate;
+			}
+		}
+		return best;
+	}
+
+	void SelectItem((DesktopLayerWindow Layer, FenceItem Item, POINT Cell) target, bool extend)
+	{
+		if (!extend)
+		{
+			foreach (var layer in _layers.Where(l => l != target.Layer))
+			{
+				layer.ClearSelection();
+			}
+		}
+		target.Layer.SelectFromKeyboard(target.Item, extend);
+		_anchor = target.Item;
 	}
 
 	public void Open(List<FenceItem> items, IntPtr hwnd) => ItemOps.Open(hwnd, items, true);
@@ -775,10 +967,15 @@ internal sealed class DesktopTakeover : IDisposable
 		if (!drag.FromDesktop)
 		{
 			var paths = drag.Files.ToList();
-			// 异步执行，避免拖放源界面卡住
+			var cursor = NativeMethods.GetCursorPos();
+			// 异步执行，避免拖放源界面卡住；新文件出现在桌面上后摆到松手的位置
 			_dispatcher.InvokeAsync(() =>
 			{
-				ItemOps.Transfer(hwnd, paths, AppPaths.Desktop, effect);
+				var created = ItemOps.Transfer(hwnd, paths, AppPaths.Desktop, effect);
+				if (created.Count > 0)
+				{
+					_pendingPlacement = (created, cursor, DateTime.Now + PlacementWait);
+				}
 				Items.RefreshSoon();
 			});
 			return effect == DragDropEffects.Move ? DragDropEffects.None : effect;
@@ -798,7 +995,30 @@ internal sealed class DesktopTakeover : IDisposable
 	}
 
 	/// <summary>
-	/// 把图标移到松手的位置：从图标层拖来的保持相对位置整体平移，从分区拖来的从松手处往下依次排开。
+	/// 拖到桌面的文件全部出现在桌面视图里后，摆到松手的位置。
+	/// </summary>
+	void PlacePending()
+	{
+		if (_pendingPlacement is not { } pending)
+		{
+			return;
+		}
+		var (keys, cursor, until) = pending;
+		if (DateTime.Now > until)
+		{
+			_pendingPlacement = null;
+			return;
+		}
+		if (keys.Any(k => Items.Find(k) == null))
+		{
+			return;
+		}
+		_pendingPlacement = null;
+		MoveTo(keys, cursor, true);
+	}
+
+	/// <summary>
+	/// 把图标移到松手的位置：从图标层拖来的保持相对位置整体平移，从分区或别处拖来的从松手处往下依次排开。
 	/// 自动排列开着时由资源管理器按位置重新排序。
 	/// </summary>
 	void MoveTo(List<string> keys, POINT cursor, bool fromFence)

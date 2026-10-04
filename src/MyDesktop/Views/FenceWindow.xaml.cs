@@ -70,6 +70,7 @@ internal partial class FenceWindow : Window
 	int _dragVersion;
 	int _insertIndex = -1;
 	readonly DropPreview _dropPreview = new();
+	readonly ItemDropForwarder _forwarder = new();
 
 	public FenceWindow(FenceManager manager, FenceSettings model)
 	{
@@ -906,6 +907,7 @@ internal partial class FenceWindow : Window
 		{
 			RequestIcon(item);
 		}
+		ApplyCutState();
 		EmptyHint.Text = IsDesktopFence ? "把桌面图标拖到这里" : _folderExisted ? "拖放文件到这里" : $"文件夹不存在\n{Model.FolderPath}";
 		EmptyHint.Visibility = fresh.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 	}
@@ -989,6 +991,17 @@ internal partial class FenceWindow : Window
 			Log.Warn($"读取分区文件夹失败：{folder}", ex);
 		}
 		return fresh;
+	}
+
+	/// <summary>
+	/// 剪贴板里被剪切的图标半透明显示。
+	/// </summary>
+	public void ApplyCutState()
+	{
+		foreach (var item in _items)
+		{
+			item.IsCut = _manager.IsCut(item.FullPath);
+		}
 	}
 
 	/// <summary>
@@ -1104,7 +1117,7 @@ internal partial class FenceWindow : Window
 			{
 				item.Icon = image;
 			}
-		});
+		}, item.IconKey);
 	}
 
 	void StartWatcher()
@@ -1557,7 +1570,7 @@ internal partial class FenceWindow : Window
 				{
 					return false;
 				}
-				if (!items[0].IsVirtual)
+				if (items[0].CanRename)
 				{
 					BeginRename(items[0]);
 				}
@@ -1726,7 +1739,7 @@ internal partial class FenceWindow : Window
 
 	public void BeginRename(FenceItem item)
 	{
-		if (item.IsVirtual)
+		if (!item.CanRename)
 		{
 			return;
 		}
@@ -1922,8 +1935,7 @@ internal partial class FenceWindow : Window
 				ApplyBounds();
 			}
 		}
-		e.Effects = ComputeDropEffect(e);
-		TrackReorder(e);
+		e.Effects = ComputeEffect(e);
 		if (firstEnter)
 		{
 			_dropPreview.Enter(_hwnd, e);
@@ -1939,10 +1951,39 @@ internal partial class FenceWindow : Window
 	{
 		base.OnDragOver(e);
 		_dragVersion++;
-		e.Effects = ComputeDropEffect(e);
-		TrackReorder(e);
+		e.Effects = ComputeEffect(e);
 		_dropPreview.Over(e);
 		e.Handled = true;
+	}
+
+	/// <summary>
+	/// 拖到图标上时交给图标自己处理（文件夹、程序、回收站等），否则按分区的规则（调整顺序、归入分区、放进文件夹）。
+	/// </summary>
+	DragDropEffects ComputeEffect(DragEventArgs e)
+	{
+		if (_forwarder.Over(_hwnd, DropItemAt(e), IsDesktopFence, e) is DragDropEffects forwarded)
+		{
+			InsertMarker.Visibility = Visibility.Collapsed;
+			_insertIndex = -1;
+			return forwarded;
+		}
+		TrackReorder(e);
+		return ComputeDropEffect(e);
+	}
+
+	/// <summary>
+	/// 拖动经过的图标；正被拖动的图标自身不算。在本分区内调整顺序时只有拖到图标图像上才算，
+	/// 落在名称、空隙处仍是调整顺序，免得拖过快捷方式时误把文件交给程序打开。
+	/// </summary>
+	FenceItem? DropItemAt(DragEventArgs e)
+	{
+		if (ContentHost.InputHitTest(e.GetPosition(ContentHost)) is not DependencyObject element
+				|| ItemFromSource(element) is not FenceItem item
+				|| (_dropKeys?.Contains(item.FullPath, StringComparer.OrdinalIgnoreCase) ?? false))
+		{
+			return null;
+		}
+		return IsReorderDrag() && !IsInside<Image>(element) ? null : item;
 	}
 
 	protected override void OnDragLeave(DragEventArgs e)
@@ -1954,6 +1995,7 @@ internal partial class FenceWindow : Window
 		{
 			if (version == _dragVersion && _dragInside)
 			{
+				_forwarder.Leave();
 				EndDragInside(true);
 			}
 		}, DispatcherPriority.Input);
@@ -1964,6 +2006,16 @@ internal partial class FenceWindow : Window
 	{
 		base.OnDrop(e);
 		_dragVersion++;
+		if (_forwarder.Drop(e) is DragDropEffects done)
+		{
+			// 图标自己完成了放置（移进文件夹、用程序打开、删除到回收站）
+			_dropPreview.Drop(e, done);
+			EndDragInside(false);
+			e.Effects = done;
+			e.Handled = true;
+			ScheduleRefresh();
+			return;
+		}
 		var effect = ComputeDropEffect(e);
 		var keys = _dropKeys;
 		var paths = _dropFiles;

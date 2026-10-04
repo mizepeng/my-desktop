@@ -40,7 +40,8 @@
 
 		<DataTemplate x:Key="IconTemplate" DataType="{x:Type local:FenceItem}">
 			<StackPanel Width="{DynamicResource CellWidth}" ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="700">
-				<Image Source="{Binding Icon}"
+				<Image x:Name="IconImage"
+						Source="{Binding Icon}"
 						Width="{DynamicResource IconSize}"
 						Height="{DynamicResource IconSize}"
 						Margin="0,0,0,4"
@@ -70,6 +71,10 @@
 					<Setter TargetName="RenameBox" Property="Visibility" Value="Visible" />
 					<Setter TargetName="NameText" Property="Visibility" Value="Hidden" />
 				</DataTrigger>
+				<!-- 与资源管理器一样，剪切后的图标半透明 -->
+				<DataTrigger Binding="{Binding IsCut}" Value="True">
+					<Setter TargetName="IconImage" Property="Opacity" Value="0.5" />
+				</DataTrigger>
 			</DataTemplate.Triggers>
 		</DataTemplate>
 
@@ -79,7 +84,8 @@
 					<ColumnDefinition Width="Auto" />
 					<ColumnDefinition Width="*" />
 				</Grid.ColumnDefinitions>
-				<Image Source="{Binding Icon}"
+				<Image x:Name="IconImage"
+						Source="{Binding Icon}"
 						Width="20"
 						Height="20"
 						Margin="2,0,8,0"
@@ -105,6 +111,10 @@
 				<DataTrigger Binding="{Binding IsRenaming}" Value="True">
 					<Setter TargetName="RenameBox" Property="Visibility" Value="Visible" />
 					<Setter TargetName="NameText" Property="Visibility" Value="Hidden" />
+				</DataTrigger>
+				<!-- 与资源管理器一样，剪切后的图标半透明 -->
+				<DataTrigger Binding="{Binding IsCut}" Value="True">
+					<Setter TargetName="IconImage" Property="Opacity" Value="0.5" />
 				</DataTrigger>
 			</DataTemplate.Triggers>
 		</DataTemplate>
@@ -160,7 +170,9 @@
 			</Border>
 
 			<Grid x:Name="ContentHost" Grid.Row="1" ClipToBounds="True">
+				<!-- 输入首字母按显示名定位图标 -->
 				<ListBox x:Name="ItemsList"
+						TextSearch.TextPath="DisplayName"
 						Style="{StaticResource FenceListBox}"
 						ItemContainerStyle="{StaticResource FenceItemContainer}"
 						PreviewMouseLeftButtonDown="ItemsList_PreviewMouseLeftButtonDown"

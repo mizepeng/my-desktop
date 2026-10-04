@@ -52,6 +52,7 @@ internal static class NativeMethods
 	public const int WM_MOVING = 0x0216;
 	public const int WM_ENTERSIZEMOVE = 0x0231;
 	public const int WM_EXITSIZEMOVE = 0x0232;
+	public const int WM_CLIPBOARDUPDATE = 0x031D;
 	public const int WM_APP = 0x8000;
 
 	public const int SC_MINIMIZE = 0xF020;
@@ -85,7 +86,15 @@ internal static class NativeMethods
 	public const int VK_SHIFT = 0x10;
 	public const int VK_CONTROL = 0x11;
 	public const int VK_MENU = 0x12;
+	public const int VK_END = 0x23;
+	public const int VK_HOME = 0x24;
+	public const int VK_LEFT = 0x25;
+	public const int VK_UP = 0x26;
+	public const int VK_RIGHT = 0x27;
+	public const int VK_DOWN = 0x28;
 	public const int VK_DELETE = 0x2E;
+	public const int VK_NUMPAD0 = 0x60;
+	public const int VK_NUMPAD9 = 0x69;
 	public const int VK_APPS = 0x5D;
 	public const int VK_F2 = 0x71;
 	public const int VK_F10 = 0x79;
@@ -163,6 +172,9 @@ internal static class NativeMethods
 	public const uint SHCONTF_NONFOLDERS = 0x0040;
 	public const uint SHCONTF_INCLUDEHIDDEN = 0x0080;
 	public const uint SHCONTF_INCLUDESUPERHIDDEN = 0x10000;
+	public const uint SFGAO_CANRENAME = 0x00000010;
+	public const uint SFGAO_CANDELETE = 0x00000020;
+	public const uint SFGAO_DROPTARGET = 0x00000100;
 	public const uint SFGAO_STREAM = 0x00400000;
 	public const uint SFGAO_FOLDER = 0x20000000;
 	public const uint SFGAO_FILESYSTEM = 0x40000000;
@@ -267,6 +279,12 @@ internal static class NativeMethods
 
 	[DllImport("user32.dll")]
 	public static extern IntPtr GetForegroundWindow();
+
+	[DllImport("user32.dll", SetLastError = true)]
+	public static extern bool AddClipboardFormatListener(IntPtr hwnd);
+
+	[DllImport("user32.dll")]
+	public static extern bool RemoveClipboardFormatListener(IntPtr hwnd);
 
 	[DllImport("user32.dll")]
 	public static extern bool GetGUIThreadInfo(uint threadId, ref GUITHREADINFO info);
@@ -409,6 +427,9 @@ internal static class NativeMethods
 
 	[DllImport("shell32.dll")]
 	public static extern int SHGetDesktopFolder(out IntPtr folder);
+
+	[DllImport("shell32.dll")]
+	public static extern int SHGetImageList(int imageList, ref Guid riid, out IntPtr result);
 
 	[DllImport("shlwapi.dll", CharSet = CharSet.Unicode)]
 	public static extern int StrRetToBuf(IntPtr strret, IntPtr pidl, StringBuilder buffer, uint maxLength);

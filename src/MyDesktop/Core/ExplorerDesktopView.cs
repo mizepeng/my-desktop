@@ -9,8 +9,10 @@ namespace MyDesktop.Core;
 /// <summary>
 /// 资源管理器桌面上的一个项目。Key 为完整解析名：文件是完整路径，此电脑等系统图标是 ::{CLSID}。
 /// Position 是它在资源管理器图标列表里的位置（物理像素，相对列表左上角）。
+/// IconKey 是系统图标当前使用的图标位置（回收站空、满时不同），用来判断图标是否需要重新加载。
 /// </summary>
-internal sealed record DesktopEntry(string Key, string DisplayName, bool IsFileSystem, bool IsFolder, POINT Position);
+internal sealed record DesktopEntry(string Key, string DisplayName, bool IsFileSystem, bool IsFolder, POINT Position, string? IconKey = null,
+		bool CanRename = true, bool CanDelete = true);
 
 /// <summary>
 /// 一次读取到的资源管理器桌面视图：排列方式、间距、图标大小、列表在屏幕上的范围和全部项目。
@@ -35,7 +37,8 @@ internal sealed class DesktopSnapshot
 				.Append('|').Append(listBounds.Left).Append(',').Append(listBounds.Top).Append(',').Append(listBounds.Right).Append(',').Append(listBounds.Bottom);
 		foreach (var item in items)
 		{
-			sb.Append('\n').Append(item.Key).Append('|').Append(item.DisplayName).Append('|').Append(item.Position.X).Append(',').Append(item.Position.Y);
+			sb.Append('\n').Append(item.Key).Append('|').Append(item.DisplayName).Append('|').Append(item.Position.X).Append(',').Append(item.Position.Y)
+					.Append('|').Append(item.IconKey);
 		}
 		Signature = sb.ToString();
 	}
@@ -89,7 +92,7 @@ internal sealed class ExplorerDesktopView : IDisposable
 
 	readonly Dispatcher _ui;
 	readonly Dispatcher _worker;
-	readonly string[] _desktopFolders = [PathUtil.Normalize(AppPaths.Desktop), PathUtil.Normalize(AppPaths.CommonDesktop)];
+	string[] _desktopFolders = [];
 	IFolderView2? _view;
 	IShellFolder? _desktop;
 	string? _lastSignature;
@@ -230,6 +233,8 @@ internal sealed class ExplorerDesktopView : IDisposable
 		}
 		var view = _view!;
 		var desktop = _desktop!;
+		// 每次都重新取：桌面文件夹可能被 OneDrive 等迁移到别处
+		_desktopFolders = [PathUtil.Normalize(AppPaths.Desktop), PathUtil.Normalize(AppPaths.CommonDesktop)];
 		Marshal.ThrowExceptionForHR(view.ItemCount(SVGIO_ALLVIEW, out int count));
 		Marshal.ThrowExceptionForHR(view.GetSpacing(out var spacing));
 		bool autoArrange = view.GetAutoArrange() == 0;
@@ -250,12 +255,14 @@ internal sealed class ExplorerDesktopView : IDisposable
 					continue;
 				}
 				var name = ShellNames.Get(desktop, pidl, SHGDN_NORMAL) ?? key;
-				uint attributes = SFGAO_FILESYSTEM | SFGAO_FOLDER | SFGAO_STREAM;
+				uint attributes = SFGAO_FILESYSTEM | SFGAO_FOLDER | SFGAO_STREAM | SFGAO_CANRENAME | SFGAO_CANDELETE;
 				desktop.GetAttributesOf(1, [pidl], ref attributes);
 				// 压缩包这类同时带 FOLDER 和 STREAM 的按文件处理
 				bool folder = (attributes & SFGAO_FOLDER) != 0 && (attributes & SFGAO_STREAM) == 0;
 				bool fileSystem = (attributes & SFGAO_FILESYSTEM) != 0 && IsInDesktopFolder(key);
-				items.Add(new DesktopEntry(key, name, fileSystem, folder, position));
+				var iconKey = fileSystem ? null : ReadIconLocation(desktop, pidl);
+				items.Add(new DesktopEntry(key, name, fileSystem, folder, position, iconKey,
+						(attributes & SFGAO_CANRENAME) != 0, (attributes & SFGAO_CANDELETE) != 0));
 			}
 			finally
 			{
@@ -265,6 +272,36 @@ internal sealed class ExplorerDesktopView : IDisposable
 		var listView = DesktopHost.FindFolderView();
 		var bounds = listView == IntPtr.Zero ? default : NativeMethods.GetWindowRect(listView);
 		return new DesktopSnapshot(autoArrange, spacing, iconSize, bounds, items);
+	}
+
+	/// <summary>
+	/// 系统图标当前使用的图标位置，例如回收站空时与满时分别是 imageres.dll 里的不同图标。
+	/// </summary>
+	static string? ReadIconLocation(IShellFolder desktop, IntPtr pidl)
+	{
+		const uint GIL_FORSHELL = 0x2;
+		var iid = typeof(IExtractIconW).GUID;
+		if (desktop.GetUIObjectOf(IntPtr.Zero, 1, [pidl], ref iid, IntPtr.Zero, out var ptr) != 0 || ptr == IntPtr.Zero)
+		{
+			return null;
+		}
+		try
+		{
+			var extract = (IExtractIconW)Marshal.GetObjectForIUnknown(ptr);
+			try
+			{
+				var location = new StringBuilder(260);
+				return extract.GetIconLocation(GIL_FORSHELL, location, location.Capacity, out int index, out _) == 0 ? $"{location},{index}" : null;
+			}
+			finally
+			{
+				Marshal.ReleaseComObject(extract);
+			}
+		}
+		finally
+		{
+			Marshal.Release(ptr);
+		}
 	}
 
 	/// <summary>

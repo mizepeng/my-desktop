@@ -18,6 +18,8 @@ public sealed class FenceItem : INotifyPropertyChanged
 	string _displayName = string.Empty;
 	double _x;
 	double _y;
+	bool _isCut;
+	bool _isDropTarget;
 
 	FenceItem(string fullPath)
 	{
@@ -33,9 +35,39 @@ public sealed class FenceItem : INotifyPropertyChanged
 	public bool IsFolder { get; private set; }
 
 	/// <summary>
-	/// 此电脑、回收站这类不对应文件的系统图标，不能改名、删除或复制。
+	/// 此电脑、回收站这类不对应文件的系统图标：不能复制，改名、删除走它们自己的 Shell 命令。
 	/// </summary>
 	public bool IsVirtual { get; private set; }
+
+	/// <summary>
+	/// 系统图标能否改名、删除（删除即从桌面移除图标）；文件总是可以。
+	/// </summary>
+	public bool CanRename { get; private set; } = true;
+
+	public bool CanDelete { get; private set; } = true;
+
+	/// <summary>
+	/// 系统图标当前的图标位置（回收站空、满时不同），变化时重新加载图标。
+	/// </summary>
+	internal string? IconKey { get; private set; }
+
+	/// <summary>
+	/// 已被剪切到剪贴板，与资源管理器一样半透明显示。
+	/// </summary>
+	public bool IsCut
+	{
+		get => _isCut;
+		set => Set(ref _isCut, value);
+	}
+
+	/// <summary>
+	/// 拖动的内容正悬停在它上面、松手会交给它处理（放进文件夹、用程序打开、删除到回收站）。
+	/// </summary>
+	public bool IsDropTarget
+	{
+		get => _isDropTarget;
+		set => Set(ref _isDropTarget, value);
+	}
 
 	/// <summary>
 	/// Shell 显示名：快捷方式不带 .lnk，并遵循系统「隐藏已知文件扩展名」设置。
@@ -151,9 +183,13 @@ public sealed class FenceItem : INotifyPropertyChanged
 	internal bool Update(DesktopEntry entry)
 	{
 		DisplayName = entry.DisplayName;
+		CanRename = entry.CanRename;
+		CanDelete = entry.CanDelete;
 		if (IsVirtual)
 		{
-			return false;
+			bool iconChanged = IconKey != entry.IconKey;
+			IconKey = entry.IconKey;
+			return iconChanged;
 		}
 		FileSystemInfo info = IsFolder ? new DirectoryInfo(FullPath) : new FileInfo(FullPath);
 		return info.Exists && Refresh(info);

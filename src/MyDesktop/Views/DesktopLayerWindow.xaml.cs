@@ -28,6 +28,7 @@ internal partial class DesktopLayerWindow : Window
 	readonly DesktopTakeover _takeover;
 	readonly ObservableCollection<FenceItem> _items = [];
 	readonly DropPreview _dropPreview = new();
+	readonly ItemDropForwarder _forwarder = new();
 	IntPtr _hwnd;
 	RECT _workArea;
 	double _scale = 1;
@@ -290,7 +291,7 @@ internal partial class DesktopLayerWindow : Window
 			{
 				item.Icon = image;
 			}
-		});
+		}, item.IconKey);
 	}
 
 	/// <summary>
@@ -364,6 +365,26 @@ internal partial class DesktopLayerWindow : Window
 	}
 
 	/// <summary>
+	/// 方向键、首字母定位选中图标；extend 为 true 时追加到已有选择。
+	/// </summary>
+	public void SelectFromKeyboard(FenceItem item, bool extend)
+	{
+		CommitAllRenames();
+		if (!extend)
+		{
+			ItemsList.UnselectAll();
+		}
+		if (!ItemsList.SelectedItems.Contains(item))
+		{
+			ItemsList.SelectedItems.Add(item);
+		}
+		if (IsKeyboardFocusWithin)
+		{
+			FocusItem(item);
+		}
+	}
+
+	/// <summary>
 	/// 开始框选：记下已有选择，追加模式下框选结果与之合并。
 	/// </summary>
 	public void BeginBand(bool additive)
@@ -431,7 +452,7 @@ internal partial class DesktopLayerWindow : Window
 			return;
 		}
 		// 与系统桌面一样，多个显示器上的图标共用一个选择
-		_takeover.OnLayerPressed(this, (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0);
+		_takeover.OnLayerPressed(this, (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0, item);
 		_pressPoint = e.GetPosition(this);
 		_pressedItem = item;
 		_deferSelection = false;
@@ -529,7 +550,7 @@ internal partial class DesktopLayerWindow : Window
 				{
 					return false;
 				}
-				if (!items[0].IsVirtual)
+				if (items[0].CanRename)
 				{
 					BeginRename(items[0]);
 				}
@@ -580,7 +601,7 @@ internal partial class DesktopLayerWindow : Window
 
 	public void BeginRename(FenceItem item)
 	{
-		if (item.IsVirtual)
+		if (!item.CanRename)
 		{
 			return;
 		}
@@ -702,11 +723,17 @@ internal partial class DesktopLayerWindow : Window
 			Key.D when ctrl => DesktopKey.Delete,
 			Key.Apps => DesktopKey.ContextMenu,
 			Key.F10 when shift => DesktopKey.ContextMenu,
+			Key.Left when !ctrl => DesktopKey.Left,
+			Key.Up when !ctrl => DesktopKey.Up,
+			Key.Right when !ctrl => DesktopKey.Right,
+			Key.Down when !ctrl => DesktopKey.Down,
+			Key.Home when !ctrl => DesktopKey.Home,
+			Key.End when !ctrl => DesktopKey.End,
 			_ => null,
 		};
 		if (command is DesktopKey value)
 		{
-			_takeover.HandleKey(value);
+			_takeover.HandleKey(value, shift);
 		}
 		else if (key == Key.V && ctrl)
 		{
@@ -728,15 +755,47 @@ internal partial class DesktopLayerWindow : Window
 		e.Handled = true;
 	}
 
+	/// <summary>
+	/// 输入字母或数字时按名称定位图标（改名框里的输入不受影响）。
+	/// </summary>
+	protected override void OnPreviewTextInput(TextCompositionEventArgs e)
+	{
+		base.OnPreviewTextInput(e);
+		if (e.Handled || e.OriginalSource is TextBox || e.Text.Length == 0 || !char.IsLetterOrDigit(e.Text[0]))
+		{
+			return;
+		}
+		_takeover.TypeAhead(e.Text);
+		e.Handled = true;
+	}
+
 	#endregion
 
 	#region 拖入
+
+	/// <summary>
+	/// 拖到图标上时交给图标自己处理（文件夹、程序、回收站等），否则按图标层的规则。
+	/// </summary>
+	DragDropEffects ComputeEffect(DragEventArgs e)
+	{
+		return _forwarder.Over(_hwnd, DropItemAt(e), true, e) ?? _takeover.GetLayerDropEffect(e);
+	}
+
+	/// <summary>
+	/// 拖动经过的图标；正被拖动的图标自身不算。
+	/// </summary>
+	FenceItem? DropItemAt(DragEventArgs e)
+	{
+		var item = ItemFromSource(InputHitTest(e.GetPosition(this)));
+		var dragged = DesktopDrag.Current?.Keys;
+		return item != null && dragged != null && dragged.Contains(item.FullPath, StringComparer.OrdinalIgnoreCase) ? null : item;
+	}
 
 	protected override void OnDragEnter(DragEventArgs e)
 	{
 		base.OnDragEnter(e);
 		_dragVersion++;
-		e.Effects = _takeover.GetLayerDropEffect(e);
+		e.Effects = ComputeEffect(e);
 		if (!_dragInside)
 		{
 			_dragInside = true;
@@ -753,7 +812,7 @@ internal partial class DesktopLayerWindow : Window
 	{
 		base.OnDragOver(e);
 		_dragVersion++;
-		e.Effects = _takeover.GetLayerDropEffect(e);
+		e.Effects = ComputeEffect(e);
 		_dropPreview.Over(e);
 		e.Handled = true;
 	}
@@ -768,6 +827,7 @@ internal partial class DesktopLayerWindow : Window
 			if (version == _dragVersion && _dragInside)
 			{
 				_dragInside = false;
+				_forwarder.Leave();
 				_dropPreview.Leave();
 			}
 		}, DispatcherPriority.Input);
@@ -778,11 +838,19 @@ internal partial class DesktopLayerWindow : Window
 	{
 		base.OnDrop(e);
 		_dragVersion++;
+		_dragInside = false;
+		e.Handled = true;
+		if (_forwarder.Drop(e) is DragDropEffects done)
+		{
+			// 图标自己完成了放置（移进文件夹、用程序打开、删除到回收站）
+			_dropPreview.Drop(e, done);
+			e.Effects = done;
+			_takeover.Items.RefreshSoon();
+			return;
+		}
 		var effect = _takeover.GetLayerDropEffect(e);
 		_dropPreview.Drop(e, effect);
-		_dragInside = false;
 		e.Effects = _takeover.DropOnLayer(e, effect, _hwnd);
-		e.Handled = true;
 	}
 
 	#endregion

@@ -43,6 +43,8 @@ internal sealed class FenceManager
 	SettingsWindow? _settingsWindow;
 	DesktopTakeover? _takeover;
 	readonly Dictionary<string, DateTime> _missingMembers = new(StringComparer.OrdinalIgnoreCase);
+	// 剪贴板里被剪切的文件，显示成半透明
+	HashSet<string> _cutPaths = new(StringComparer.OrdinalIgnoreCase);
 	// 是否处于隐藏状态（双击切换）；下面两个是按「双击桌面隐藏」的对象实际生效的结果
 	bool _hidden;
 	bool _iconsHidden;
@@ -117,6 +119,7 @@ internal sealed class FenceManager
 			_takeover?.OnDisplayChanged();
 		}, DispatcherPriority.Background);
 		_tray.ThemeChanged += SystemTheme.ApplyToMenus;
+		_tray.ClipboardChanged += () => _dispatcher.InvokeAsync(UpdateCutState, DispatcherPriority.Background);
 
 		// 上次异常退出时桌面图标可能停留在隐藏状态，启动时先恢复
 		if (!DesktopHost.IconsHiddenBySystem())
@@ -132,6 +135,7 @@ internal sealed class FenceManager
 		EnsureAllOnScreen();
 		// 读到资源管理器的桌面视图后即接管桌面图标（隐藏系统图标、由图标层画出散放图标）
 		_takeover = new DesktopTakeover(this);
+		UpdateCutState();
 		ApplyMouseHookSettings();
 		Organizer.ApplyWatchSetting();
 		WatchElevationSettings();
@@ -374,6 +378,18 @@ internal sealed class FenceManager
 		}
 	}
 
+	public bool IsCut(string path) => _cutPaths.Contains(path);
+
+	void UpdateCutState()
+	{
+		_cutPaths = ItemOps.GetCutPaths();
+		foreach (var window in _windows)
+		{
+			window.ApplyCutState();
+		}
+		_takeover?.ApplyCutState();
+	}
+
 	/// <summary>
 	/// 桌面视图变化：刷新桌面分区，并清理文件已被删除的成员。
 	/// </summary>
@@ -388,17 +404,17 @@ internal sealed class FenceManager
 
 	/// <summary>
 	/// 文件被删除或移走的成员在宽限期后移出分区，免得以后桌面上出现同名文件时被自动拉进分区。
-	/// 系统图标（此电脑等）只是可能被设置为不显示，一律保留。
+	/// 系统图标（此电脑等）只是可能被设置为不显示，一律保留。返回成员是否有变化。
 	/// </summary>
-	void PruneMembers()
+	bool PruneMembers()
 	{
 		var snapshot = _takeover?.Items.Snapshot;
 		if (snapshot == null)
 		{
-			return;
+			return false;
 		}
 		var now = DateTime.Now;
-		bool changed = false;
+		bool changed = RemapMovedMembers(snapshot);
 		foreach (var model in Settings.Fences.Where(f => !f.IsPortal))
 		{
 			changed |= model.Members.RemoveAll(key =>
@@ -420,6 +436,49 @@ internal sealed class FenceManager
 		{
 			SaveSoon();
 		}
+		return changed;
+	}
+
+	/// <summary>
+	/// 桌面文件夹被迁移（如 OneDrive 的「备份桌面」）后，成员里指向旧位置的路径换成新位置上的同名项目。
+	/// 只处理父目录已不是当前桌面文件夹的成员；仍在当前桌面里却找不到的是被删除了，交给清理。
+	/// </summary>
+	bool RemapMovedMembers(DesktopSnapshot snapshot)
+	{
+		string[] desktops = [AppPaths.Desktop, AppPaths.CommonDesktop];
+		var fenced = FencedKeys();
+		// 同名的只认唯一一个，有歧义时不动
+		var byName = snapshot.Items.Where(e => e.IsFileSystem && !fenced.Contains(e.Key))
+				.GroupBy(e => Path.GetFileName(e.Key), StringComparer.OrdinalIgnoreCase)
+				.Where(g => g.Count() == 1)
+				.ToDictionary(g => g.Key, g => g.First().Key, StringComparer.OrdinalIgnoreCase);
+		bool changed = false;
+		foreach (var model in Settings.Fences.Where(f => !f.IsPortal))
+		{
+			for (int i = 0; i < model.Members.Count; i++)
+			{
+				var key = model.Members[i];
+				if (snapshot.ByKey.ContainsKey(key)
+						|| !Path.IsPathFullyQualified(key)
+						|| Path.GetDirectoryName(key) is not string parent
+						|| desktops.Any(d => PathUtil.AreEqual(d, parent))
+						|| File.Exists(key)
+						|| Directory.Exists(key)
+						|| !byName.Remove(Path.GetFileName(key), out var moved))
+				{
+					continue;
+				}
+				model.Members[i] = moved;
+				int order = model.CustomOrder.FindIndex(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase));
+				if (order >= 0)
+				{
+					model.CustomOrder[order] = moved;
+				}
+				changed = true;
+				Log.Info($"桌面文件夹已迁移，分区成员改为新位置：{key} -> {moved}");
+			}
+		}
+		return changed;
 	}
 
 	public bool TryBeginRenameInFence(string key)
@@ -623,7 +682,8 @@ internal sealed class FenceManager
 			_mouse.BlankPressed += additive => _takeover?.OnBlankPressed(additive);
 			_mouse.BandUpdated += rect => _takeover?.OnBandUpdated(rect);
 			_mouse.BandFinished += () => _takeover?.OnBandFinished();
-			_mouse.KeyIntercepted += key => _takeover?.HandleKey(key);
+			_mouse.KeyIntercepted += (key, shift) => _takeover?.HandleKey(key, shift);
+			_mouse.CharIntercepted += character => _takeover?.TypeAhead(character.ToString());
 		}
 		_mouse.DoubleClickEnabled = Settings.DoubleClickToHide;
 		_mouse.DrawEnabled = Settings.DrawToCreate;
@@ -938,7 +998,16 @@ internal sealed class FenceManager
 		{
 			window.CheckFolder();
 		}
-		PruneMembers();
+		if (PruneMembers())
+		{
+			foreach (var window in _windows.Where(w => !w.Model.IsPortal))
+			{
+				window.RefreshItems();
+			}
+			_takeover?.RelayoutSoon();
+		}
+		// 桌面文件夹被迁移后，自动整理改为监视新位置
+		Organizer.ApplyWatchSetting();
 	}
 
 	void OnExplorerRestarted()

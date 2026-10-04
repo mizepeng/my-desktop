@@ -95,8 +95,136 @@ internal sealed class DropPreview
 }
 
 /// <summary>
+/// 把拖动转给图标自己的放置目标：拖到文件夹里、拖给程序打开、拖进回收站删除，与资源管理器一致。
+/// 图标不接受这次拖动时，由调用方按自己的规则处理（调整位置、归入分区等）。
+/// </summary>
+internal sealed class ItemDropForwarder
+{
+	FenceItem? _item;
+	IOleDropTarget? _target;
+	bool _accepts;
+
+	/// <summary>
+	/// 拖动经过 item（为 null 表示不在图标上）。图标接受时返回它给出的效果，否则返回 null。
+	/// </summary>
+	public DragDropEffects? Over(IntPtr hwnd, FenceItem? item, bool desktop, DragEventArgs e)
+	{
+		var point = NativeMethods.GetCursorPos();
+		uint keys = (uint)e.KeyStates;
+		uint effect = (uint)e.AllowedEffects;
+		if (item != _item)
+		{
+			Leave();
+			if (item == null || e.Data is not ComIDataObject data || CreateTarget(hwnd, item, desktop) is not IOleDropTarget target)
+			{
+				return null;
+			}
+			_item = item;
+			_target = target;
+			_accepts = Call(() => target.DragEnter(data, keys, point, ref effect)) && effect != 0;
+		}
+		else if (_target != null)
+		{
+			var target = _target;
+			_accepts = Call(() => target.DragOver(keys, point, ref effect)) && effect != 0;
+		}
+		if (_item != null)
+		{
+			_item.IsDropTarget = _accepts;
+		}
+		return _accepts ? (DragDropEffects)effect : null;
+	}
+
+	public void Leave()
+	{
+		if (_target != null)
+		{
+			var target = _target;
+			Call(target.DragLeave);
+		}
+		Release();
+	}
+
+	/// <summary>
+	/// 松手：图标接受时由它完成放置并返回效果，否则返回 null。
+	/// </summary>
+	public DragDropEffects? Drop(DragEventArgs e)
+	{
+		if (_target == null || !_accepts || e.Data is not ComIDataObject data)
+		{
+			Leave();
+			return null;
+		}
+		var target = _target;
+		var point = NativeMethods.GetCursorPos();
+		uint keys = (uint)e.KeyStates;
+		uint effect = (uint)e.AllowedEffects;
+		if (!Call(() => target.Drop(data, keys, point, ref effect)))
+		{
+			effect = 0;
+		}
+		Release();
+		return (DragDropEffects)effect;
+	}
+
+	void Release()
+	{
+		if (_target != null)
+		{
+			Marshal.ReleaseComObject(_target);
+			_target = null;
+		}
+		if (_item != null)
+		{
+			_item.IsDropTarget = false;
+			_item = null;
+		}
+		_accepts = false;
+	}
+
+	static bool Call(Func<int> action)
+	{
+		try
+		{
+			return action() == 0;
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("转发拖放到图标失败", ex);
+			return false;
+		}
+	}
+
+	static IOleDropTarget? CreateTarget(IntPtr hwnd, FenceItem item, bool desktop)
+	{
+		try
+		{
+			using var set = ItemOps.CreateItemSet([item], desktop);
+			if (set == null || set.GetAttributes(SFGAO_DROPTARGET) == 0)
+			{
+				return null;
+			}
+			var ptr = set.GetUIObject(hwnd, typeof(IOleDropTarget).GUID);
+			try
+			{
+				return (IOleDropTarget)Marshal.GetObjectForIUnknown(ptr);
+			}
+			finally
+			{
+				Marshal.Release(ptr);
+			}
+		}
+		catch (Exception ex)
+		{
+			Log.Warn($"获取图标的放置目标失败：{item.FullPath}", ex);
+			return null;
+		}
+	}
+}
+
+/// <summary>
 /// 分区和散放图标层共用的项目操作：打开、删除、剪贴板、改名、右键菜单、拖出（含预览图）。
-/// 系统图标（此电脑、回收站等）不对应文件，只能打开、弹出右键菜单和拖动，删除、复制、改名时自动跳过。
+/// 系统图标（此电脑、回收站等）不对应文件：不能复制，改名、删除走它们自己的 Shell 命令（删除即从桌面移除图标）。
 /// </summary>
 internal static class ItemOps
 {
@@ -192,11 +320,60 @@ internal static class ItemOps
 
 	public static void Delete(IntPtr hwnd, IEnumerable<FenceItem> items, bool permanent)
 	{
-		var paths = items.Where(i => !i.IsVirtual).Select(i => i.FullPath).ToList();
+		var list = items.ToList();
+		var paths = list.Where(i => !i.IsVirtual).Select(i => i.FullPath).ToList();
 		if (paths.Count > 0)
 		{
 			ShellFileOps.Delete(hwnd, paths, !permanent);
 		}
+		// 此电脑、控制面板这类系统图标交给它们自己的「删除」命令，效果是从桌面移除图标，与在资源管理器里删除一致。
+		// 用户文件夹等解析名是真实路径的系统图标不经键盘删除（可以用右键菜单），以免误伤整个文件夹
+		var shellItems = list.Where(i => i.IsVirtual && i.CanDelete && i.FullPath.StartsWith("::", StringComparison.Ordinal)).ToList();
+		if (shellItems.Count == 0)
+		{
+			return;
+		}
+		try
+		{
+			using var set = CreateItemSet(shellItems, true);
+			if (set != null)
+			{
+				ShellContextMenu.InvokeVerb(hwnd, set, "delete");
+			}
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("删除系统图标失败", ex);
+		}
+	}
+
+	/// <summary>
+	/// 剪贴板里被剪切（而不是复制）的文件，用于把它们显示成半透明；不是剪切时返回空集合。
+	/// </summary>
+	public static HashSet<string> GetCutPaths()
+	{
+		var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		try
+		{
+			if (Clipboard.ContainsFileDropList()
+					&& Clipboard.GetData("Preferred DropEffect") is MemoryStream stream
+					&& stream.Length >= 4
+					&& (BitConverter.ToInt32(stream.ToArray(), 0) & 2) != 0)
+			{
+				foreach (var file in Clipboard.GetFileDropList())
+				{
+					if (file != null)
+					{
+						result.Add(file);
+					}
+				}
+			}
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("读取剪贴板失败", ex);
+		}
+		return result;
 	}
 
 	public static void CopyToClipboard(IEnumerable<FenceItem> items, bool cut)
@@ -268,13 +445,27 @@ internal static class ItemOps
 
 	/// <summary>
 	/// 按用户输入的新显示名改名，返回新的完整路径；没有改动、名称不合法或改名失败时返回 null。
+	/// 系统图标（如此电脑）用 Shell 改显示名，完整解析名不变。
 	/// </summary>
 	public static string? Rename(IntPtr hwnd, FenceItem item, string input)
 	{
 		var newName = input.Trim();
-		if (item.IsVirtual || newName.Length == 0 || newName == item.DisplayName)
+		if (!item.CanRename || newName.Length == 0 || newName == item.DisplayName)
 		{
 			return null;
+		}
+		if (item.IsVirtual)
+		{
+			try
+			{
+				using var set = CreateItemSet([item], true);
+				return set?.SetName(hwnd, newName) == true ? item.FullPath : null;
+			}
+			catch (Exception ex)
+			{
+				Log.Warn($"重命名系统图标失败：{item.FullPath}", ex);
+				return null;
+			}
 		}
 		var target = newName;
 		var extension = Path.GetExtension(item.FileName);
