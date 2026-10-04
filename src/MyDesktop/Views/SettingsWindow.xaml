@@ -101,7 +101,7 @@
 						<CheckBox x:Name="DesktopMenuBox" Click="Setting_Changed">
 							<StackPanel>
 								<TextBlock Text="在桌面右键菜单中显示 MyDesktop" />
-								<TextBlock Style="{StaticResource Hint}" Text="只在桌面空白处右键时出现；Windows 11 新式菜单需要已签名的扩展包（见 README）" />
+								<TextBlock Style="{StaticResource Hint}" Text="只在桌面空白处右键时出现；用安装包安装时，Windows 11 的新式菜单里也会出现" />
 							</StackPanel>
 						</CheckBox>
 					</Border>

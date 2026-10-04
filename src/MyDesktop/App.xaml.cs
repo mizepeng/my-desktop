@@ -21,6 +21,12 @@ public partial class App : Application
 		base.OnStartup(e);
 		var command = ParseArguments(e.Args);
 		Log.Init(AppPaths.DataDir);
+		if (command == AppCommand.Exit)
+		{
+			ExitRunningInstance();
+			Shutdown();
+			return;
+		}
 		if (!AcquireSingleInstance())
 		{
 			// 已有实例在运行：把命令（默认打开设置）转交给它
@@ -120,6 +126,28 @@ public partial class App : Application
 		var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(AppPaths.DataDir.ToUpperInvariant())))[..16];
 		_mutex = new Mutex(true, $"Local\\MyDesktop-{hash}", out _ownsMutex);
 		return _ownsMutex;
+	}
+
+	/// <summary>
+	/// 安装程序升级、卸载前调用（--command exit）：让正在运行的实例正常退出并恢复桌面图标，
+	/// 等它释放单实例互斥体再返回，最多等 20 秒；没有实例在运行时直接返回，不启动程序。
+	/// </summary>
+	void ExitRunningInstance()
+	{
+		if (AcquireSingleInstance())
+		{
+			return;
+		}
+		AppCommands.Broadcast(AppCommand.Exit);
+		try
+		{
+			_ownsMutex = _mutex!.WaitOne(TimeSpan.FromSeconds(20));
+		}
+		catch (AbandonedMutexException)
+		{
+			// 对方没释放互斥体就结束了（如被强制结束），同样算已退出，此时本进程已取得互斥体
+			_ownsMutex = true;
+		}
 	}
 
 	void RegisterExceptionHandlers()

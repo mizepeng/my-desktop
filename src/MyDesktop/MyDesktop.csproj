@@ -31,7 +31,7 @@
 		<Resource Include="Assets\app.png" />
 	</ItemGroup>
 
-	<!-- 生成并签名桌面右键菜单扩展包，放在 exe 旁边；没有签名证书时脚本只给出提示（见 README），输入未变化时跳过 -->
+	<!-- 生成并签名桌面右键菜单扩展包，放在 exe 旁边；没有签名证书时脚本只给出提示（创建方法见 ShellExtension\Pack-DesktopMenu.ps1），输入未变化时跳过 -->
 	<Target Name="PackDesktopMenu" AfterTargets="Build"
 			Inputs="ShellExtension\AppxManifest.xml;ShellExtension\Pack-DesktopMenu.ps1;Assets\app.png"
 			Outputs="$(OutDir)MyDesktop.DesktopMenu.msix">

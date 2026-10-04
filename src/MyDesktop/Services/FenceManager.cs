@@ -625,6 +625,7 @@ internal sealed class FenceManager
 			AppCommand.DoubleClickHidesAll => () => SetDoubleClickTarget(HideTarget.All),
 			AppCommand.DoubleClickHidesIcons => () => SetDoubleClickTarget(HideTarget.Icons),
 			AppCommand.DoubleClickHidesFences => () => SetDoubleClickTarget(HideTarget.Fences),
+			AppCommand.Exit => App.Current.ExitApp,
 		};
 		action();
 	}
