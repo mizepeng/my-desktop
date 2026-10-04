@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -29,6 +30,9 @@ internal partial class FenceWindow : Window
 	const double ResizeBorderDip = 5;
 	const double SnapDistanceDip = 12;
 	const double FadeMilliseconds = 180;
+	const double MinWidthDip = 120;
+	// 离屏幕边缘这么近算贴着这条边，决定自动卷起方向
+	const double DockDistanceDip = 24;
 
 	static readonly DropShadowEffect TextShadowEffect = CreateShadow();
 	static readonly int[] CustomColors = new int[16];
@@ -56,6 +60,10 @@ internal partial class FenceWindow : Window
 	bool _dragFinished;
 	bool _inSizeMove;
 	bool _heightResized;
+	bool _widthResized;
+
+	// 标题栏当前摆在哪一侧，没变时不重排布局
+	RollEdge? _titleEdge;
 
 	// 列表鼠标交互
 	Point _pressPoint;
@@ -144,6 +152,11 @@ internal partial class FenceWindow : Window
 		{
 			Model.Height = (int)(240 * scale);
 		}
+		// 没卷起的分区按当前位置定标题栏在哪一侧，卷起的沿用保存的
+		if (!Model.RolledUp)
+		{
+			Model.RollEdge = Model.RollDirection ?? AutoRollEdge(ExpandedRect);
+		}
 		UpdateTitle();
 		ApplyAppearance();
 		ApplyViewMode();
@@ -209,13 +222,9 @@ internal partial class FenceWindow : Window
 	public RECT GetBounds() => GetWindowRect(_hwnd);
 
 	/// <summary>
-	/// 散放图标排布时要避开的范围（物理像素）：按保存的位置和尺寸，卷起时只算标题栏，不受悬停临时展开影响。
+	/// 散放图标排布时要避开的范围（物理像素）：按保存的位置和尺寸，卷起时只算收在边上的那一条，不受悬停临时展开影响。
 	/// </summary>
-	public RECT GetLayoutBounds()
-	{
-		int height = Model.RolledUp ? CollapsedHeight() : Model.Height;
-		return new RECT(Model.X, Model.Y, Model.X + Model.Width, Model.Y + height);
-	}
+	public RECT GetLayoutBounds() => Model.RolledUp ? CollapsedRect() : ExpandedRect;
 
 	#endregion
 
@@ -244,6 +253,7 @@ internal partial class FenceWindow : Window
 				_dragFinished = false;
 				_inSizeMove = true;
 				_heightResized = false;
+				_widthResized = false;
 				break;
 			}
 			case WM_NCHITTEST:
@@ -278,6 +288,7 @@ internal partial class FenceWindow : Window
 			case WM_SIZING:
 			{
 				_heightResized |= (int)wParam is not (WMSZ_LEFT or WMSZ_RIGHT);
+				_widthResized |= (int)wParam is not (WMSZ_TOP or WMSZ_BOTTOM);
 				var grid = GridSizes();
 				if (Settings.SnapToEdges || Settings.SnapToGrid)
 				{
@@ -310,10 +321,13 @@ internal partial class FenceWindow : Window
 		int y = unchecked((short)((value >> 16) & 0xFFFF));
 		var rect = GetWindowRect(_hwnd);
 		int border = (int)Math.Ceiling(ResizeBorderDip * ScaleFactor);
-		bool left = x < rect.Left + border;
-		bool right = x >= rect.Right - border;
-		bool top = !IsCollapsed && y < rect.Top + border;
-		bool bottom = !IsCollapsed && y >= rect.Bottom - border;
+		// 收起后只能顺着那一条的长边方向调整大小
+		bool lengthwiseOnly = IsCollapsed;
+		bool vertical = IsVerticalRoll;
+		bool left = !(lengthwiseOnly && vertical) && x < rect.Left + border;
+		bool right = !(lengthwiseOnly && vertical) && x >= rect.Right - border;
+		bool top = !(lengthwiseOnly && !vertical) && y < rect.Top + border;
+		bool bottom = !(lengthwiseOnly && !vertical) && y >= rect.Bottom - border;
 		if (top)
 		{
 			return left ? HTTOPLEFT : right ? HTTOPRIGHT : HTTOP;
@@ -595,6 +609,7 @@ internal partial class FenceWindow : Window
 		SaveBounds();
 		_inSizeMove = false;
 		_heightResized = false;
+		_widthResized = false;
 		// 悬停展开时调整完大小，鼠标若已移出，按正常节奏收起
 		if (_tempExpanded)
 		{
@@ -628,16 +643,72 @@ internal partial class FenceWindow : Window
 	void SaveBounds()
 	{
 		var rect = GetBounds();
-		Model.X = rect.Left;
-		Model.Y = rect.Top;
-		Model.Width = rect.Width;
-		// 卷起状态下（含悬停临时展开，高度可能被屏幕底部裁剪）不覆盖用户设定的展开高度，除非用户刚拖动上下边调整了高度
-		if (!Model.RolledUp || _heightResized)
+		if (Model.RolledUp)
 		{
+			SaveRolledBounds(rect);
+		}
+		else
+		{
+			Model.X = rect.Left;
+			Model.Y = rect.Top;
+			Model.Width = rect.Width;
 			Model.Height = rect.Height;
+			// 标题栏随新位置换到贴着的那一侧
+			var edge = Model.RollDirection ?? AutoRollEdge(rect);
+			if (edge != Model.RollEdge)
+			{
+				Model.RollEdge = edge;
+				ApplyBounds();
+			}
 		}
 		_manager.SaveSoon();
 		_manager.OnFenceLayoutChanged();
+	}
+
+	/// <summary>
+	/// 卷起状态下移动或调整大小后反推展开后的范围：窗口是收起的那一条，或悬停临时展开时可能被屏幕边缘截短的分区。
+	/// 收向的一侧与窗口对齐，另一方向上的尺寸只在用户拖动了对应的边时才更新；
+	/// 自动方向时，收起的那一条被拖到屏幕下边或左右边就改为收向那条边，临时展开时按新位置重新确定。
+	/// </summary>
+	void SaveRolledBounds(RECT window)
+	{
+		bool vertical = IsVerticalRoll;
+		int width = vertical && !_widthResized ? Model.Width : window.Width;
+		int height = !vertical && !_heightResized ? Model.Height : window.Height;
+		RECT Expanded(RollEdge edge)
+		{
+			int left = edge == RollEdge.Right ? window.Right - width : window.Left;
+			int top = edge == RollEdge.Bottom ? window.Bottom - height : window.Top;
+			return new RECT(left, top, left + width, top + height);
+		}
+		var edge = Model.RollEdge;
+		var expanded = Expanded(edge);
+		if (Model.RollDirection == null)
+		{
+			if (IsCollapsed)
+			{
+				var (work, _) = GetMonitorWorkArea(MonitorFromRect(ref window, MONITOR_DEFAULTTONEAREST));
+				int near = (int)(DockDistanceDip * ScaleFactor);
+				edge = vertical
+						? IsNear(window.Left, work.Left, near) ? RollEdge.Left : IsNear(window.Right, work.Right, near) ? RollEdge.Right : edge
+						: IsNear(window.Bottom, work.Bottom, near) ? RollEdge.Bottom : RollEdge.Top;
+				// 收起的那一条留在松手的位置，展开范围改按新的一侧推算
+				expanded = Expanded(edge);
+			}
+			else
+			{
+				edge = AutoRollEdge(expanded);
+			}
+		}
+		Model.X = expanded.Left;
+		Model.Y = expanded.Top;
+		Model.Width = expanded.Width;
+		Model.Height = expanded.Height;
+		if (edge != Model.RollEdge)
+		{
+			Model.RollEdge = edge;
+			ApplyBounds();
+		}
 	}
 
 	#endregion
@@ -650,22 +721,93 @@ internal partial class FenceWindow : Window
 		{
 			return;
 		}
-		int height = IsCollapsed ? CollapsedHeight() : Model.Height;
-		if (_tempExpanded)
-		{
-			// 悬停临时展开时不超出屏幕底部
-			var rect = new RECT(Model.X, Model.Y, Model.X + Model.Width, Model.Y + Model.Height);
-			var (work, _) = GetMonitorWorkArea(MonitorFromRect(ref rect, MONITOR_DEFAULTTONEAREST));
-			height = Math.Max(CollapsedHeight() * 3, Math.Min(height, work.Bottom - Model.Y));
-		}
-		SetWindowPos(_hwnd, IntPtr.Zero, Model.X, Model.Y, Model.Width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+		var rect = !Model.RolledUp ? ExpandedRect : IsCollapsed ? CollapsedRect() : TempExpandedRect();
+		// 左右收起时窗口只有标题栏那么宽：先放开最小宽度再改大小，改完再按当前形态设回，免得被最小宽度撑开
+		double minWidth = IsCollapsed && IsVerticalRoll ? TitleBarDip + 2 : MinWidthDip;
+		MinWidth = Math.Min(MinWidth, minWidth);
+		SetWindowPos(_hwnd, IntPtr.Zero, rect.Left, rect.Top, rect.Width, rect.Height, SWP_NOZORDER | SWP_NOACTIVATE);
+		MinWidth = minWidth;
 		UpdateRollVisuals();
 	}
 
 	int CollapsedHeight() => (int)Math.Round((TitleBarDip + 2) * ScaleFactor);
 
+	RECT ExpandedRect => new(Model.X, Model.Y, Model.X + Model.Width, Model.Y + Model.Height);
+
+	bool IsVerticalRoll => Model.RollEdge is RollEdge.Left or RollEdge.Right;
+
+	/// <summary>
+	/// 收起后剩下的那一条：沿收向的一侧，宽度（或高度）正好是标题栏。
+	/// </summary>
+	RECT CollapsedRect()
+	{
+		int thickness = CollapsedHeight();
+		var r = ExpandedRect;
+		return Model.RollEdge switch
+		{
+			RollEdge.Top => new RECT(r.Left, r.Top, r.Right, r.Top + thickness),
+			RollEdge.Bottom => new RECT(r.Left, r.Bottom - thickness, r.Right, r.Bottom),
+			RollEdge.Left => new RECT(r.Left, r.Top, r.Left + thickness, r.Bottom),
+			RollEdge.Right => new RECT(r.Right - thickness, r.Top, r.Right, r.Bottom),
+		};
+	}
+
+	/// <summary>
+	/// 悬停临时展开：从收向的一侧朝屏幕内展开，另一侧不超出工作区。
+	/// </summary>
+	RECT TempExpandedRect()
+	{
+		var r = ExpandedRect;
+		var (work, _) = GetMonitorWorkArea(MonitorFromRect(ref r, MONITOR_DEFAULTTONEAREST));
+		int min = CollapsedHeight() * 3;
+		return Model.RollEdge switch
+		{
+			RollEdge.Top => new RECT(r.Left, r.Top, r.Right, Math.Max(r.Top + min, Math.Min(r.Bottom, work.Bottom))),
+			RollEdge.Bottom => new RECT(r.Left, Math.Min(r.Bottom - min, Math.Max(r.Top, work.Top)), r.Right, r.Bottom),
+			RollEdge.Left => new RECT(r.Left, r.Top, Math.Max(r.Left + min, Math.Min(r.Right, work.Right)), r.Bottom),
+			RollEdge.Right => new RECT(Math.Min(r.Right - min, Math.Max(r.Left, work.Left)), r.Top, r.Right, r.Bottom),
+		};
+	}
+
+	/// <summary>
+	/// 自动卷起方向：贴着屏幕上边或下边时上下收（同时贴着左右边也按上下），只贴左右边时左右收，不贴边时向上。
+	/// </summary>
+	RollEdge AutoRollEdge(RECT rect)
+	{
+		var (work, _) = GetMonitorWorkArea(MonitorFromRect(ref rect, MONITOR_DEFAULTTONEAREST));
+		int near = (int)(DockDistanceDip * ScaleFactor);
+		if (IsNear(rect.Top, work.Top, near))
+		{
+			return RollEdge.Top;
+		}
+		if (IsNear(rect.Bottom, work.Bottom, near))
+		{
+			return RollEdge.Bottom;
+		}
+		if (IsNear(rect.Left, work.Left, near))
+		{
+			return RollEdge.Left;
+		}
+		return IsNear(rect.Right, work.Right, near) ? RollEdge.Right : RollEdge.Top;
+	}
+
+	/// <summary>
+	/// 分区的边离屏幕边足够近才算贴着；伸出屏幕外很多的不算，免得收起后那一条落到屏幕外。
+	/// </summary>
+	static bool IsNear(int edge, int screenEdge, int near) => Math.Abs(edge - screenEdge) <= near;
+
+	void SetRollDirection(RollEdge? direction)
+	{
+		Model.RollDirection = direction;
+		Model.RollEdge = direction ?? AutoRollEdge(ExpandedRect);
+		ApplyBounds();
+		_manager.OnFenceLayoutChanged();
+		_manager.SaveSoon();
+	}
+
 	public void ToggleRollUp()
 	{
+		// 收向标题栏所在的一侧，卷起和固定展开时标题栏都不动
 		Model.RolledUp = !Model.RolledUp;
 		_tempExpanded = false;
 		_collapseTimer.Stop();
@@ -677,11 +819,83 @@ internal partial class FenceWindow : Window
 	void UpdateRollVisuals()
 	{
 		bool collapsed = IsCollapsed;
+		// 标题栏固定在收向的一侧（抽屉式），收起、悬停展开、固定展开时都不动
+		var edge = Model.RollEdge;
+		ApplyTitlePlacement(edge);
 		RollButton.Content = Model.RolledUp ? "" : "";
 		RollButton.ToolTip = Model.RolledUp ? "固定展开" : "卷起";
 		double radius = Math.Max(0, Settings.CornerRadius - 1);
-		TitleBar.CornerRadius = collapsed ? new CornerRadius(radius) : new CornerRadius(radius, radius, 0, 0);
+		TitleBar.CornerRadius = collapsed ? new CornerRadius(radius) : edge switch
+		{
+			RollEdge.Top => new CornerRadius(radius, radius, 0, 0),
+			RollEdge.Bottom => new CornerRadius(0, 0, radius, radius),
+			RollEdge.Left => new CornerRadius(radius, 0, 0, radius),
+			RollEdge.Right => new CornerRadius(0, radius, radius, 0),
+		};
 		ContentHost.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+	}
+
+	/// <summary>
+	/// 把标题栏放到指定一侧，内容区占其余部分；左右两侧的标题栏竖着放，文字旋转 90°。
+	/// </summary>
+	void ApplyTitlePlacement(RollEdge edge)
+	{
+		if (_titleEdge == edge)
+		{
+			return;
+		}
+		_titleEdge = edge;
+		bool vertical = edge is RollEdge.Left or RollEdge.Right;
+		int barIndex = edge is RollEdge.Top or RollEdge.Left ? 0 : 1;
+		var bar = new GridLength(TitleBarDip);
+		var rest = new GridLength(1, GridUnitType.Star);
+		LayoutRoot.RowDefinitions.Clear();
+		LayoutRoot.ColumnDefinitions.Clear();
+		if (vertical)
+		{
+			LayoutRoot.ColumnDefinitions.Add(new ColumnDefinition { Width = barIndex == 0 ? bar : rest });
+			LayoutRoot.ColumnDefinitions.Add(new ColumnDefinition { Width = barIndex == 0 ? rest : bar });
+		}
+		else
+		{
+			LayoutRoot.RowDefinitions.Add(new RowDefinition { Height = barIndex == 0 ? bar : rest });
+			LayoutRoot.RowDefinitions.Add(new RowDefinition { Height = barIndex == 0 ? rest : bar });
+		}
+		Grid.SetRow(TitleBar, vertical ? 0 : barIndex);
+		Grid.SetColumn(TitleBar, vertical ? barIndex : 0);
+		Grid.SetRow(ContentHost, vertical ? 0 : 1 - barIndex);
+		Grid.SetColumn(ContentHost, vertical ? 1 - barIndex : 0);
+		TitleContent.LayoutTransform = vertical ? new RotateTransform(90) : Transform.Identity;
+		TitleContent.Margin = vertical ? new Thickness(0, 10, 0, 4) : new Thickness(10, 0, 4, 0);
+		ShowTitleText(TitleEditor.Visibility != Visibility.Visible);
+	}
+
+	/// <summary>
+	/// 标题栏竖放时显示竖排标题，否则显示横排标题；改名期间都不显示。
+	/// </summary>
+	void ShowTitleText(bool show)
+	{
+		bool vertical = _titleEdge is RollEdge.Left or RollEdge.Right;
+		TitleText.Visibility = vertical ? Visibility.Collapsed : show ? Visibility.Visible : Visibility.Hidden;
+		VerticalTitleText.Visibility = vertical && show ? Visibility.Visible : Visibility.Collapsed;
+	}
+
+	/// <summary>
+	/// 竖排标题：每个字单独一行，去掉空格，子文件夹路径的分隔符换成圆点。
+	/// </summary>
+	static string ToVerticalText(string text)
+	{
+		var characters = new List<string>();
+		var elements = StringInfo.GetTextElementEnumerator(text.Replace("›", "·"));
+		while (elements.MoveNext())
+		{
+			var element = elements.GetTextElement();
+			if (!string.IsNullOrWhiteSpace(element))
+			{
+				characters.Add(element);
+			}
+		}
+		return string.Join("\n", characters);
 	}
 
 	public void ApplyAppearance()
@@ -723,6 +937,8 @@ internal partial class FenceWindow : Window
 		// 进入子文件夹后标题带上相对路径，如「下载 › 图片 › 2024」
 		TitleText.Text = _subFolder == null ? Model.Title : $"{Model.Title} › {Path.GetRelativePath(Model.FolderPath, _subFolder).Replace("\\", " › ")}";
 		TitleText.ToolTip = Model.IsPortal ? CurrentFolder : null;
+		VerticalTitleText.Text = ToVerticalText(TitleText.Text);
+		VerticalTitleText.ToolTip = TitleText.ToolTip;
 		BackButton.Visibility = _subFolder == null ? Visibility.Collapsed : Visibility.Visible;
 		var badges = new List<string>();
 		if (Model.IsPortal)
@@ -1450,7 +1666,7 @@ internal partial class FenceWindow : Window
 		ActivateForInput();
 		TitleEditor.Text = Model.Title;
 		TitleEditor.Visibility = Visibility.Visible;
-		TitleText.Visibility = Visibility.Hidden;
+		ShowTitleText(false);
 		Dispatcher.InvokeAsync(() =>
 		{
 			TitleEditor.Focus();
@@ -1465,7 +1681,7 @@ internal partial class FenceWindow : Window
 			return;
 		}
 		TitleEditor.Visibility = Visibility.Collapsed;
-		TitleText.Visibility = Visibility.Visible;
+		ShowTitleText(true);
 		var title = TitleEditor.Text.Trim();
 		if (accept && title.Length > 0 && title != Model.Title)
 		{
@@ -1552,6 +1768,15 @@ internal partial class FenceWindow : Window
 			menu.AddSeparator();
 			menu.Add("重命名分区", BeginTitleEdit);
 			menu.Add(Model.RolledUp ? "展开分区" : "卷起分区", ToggleRollUp);
+			menu.AddSubMenu("卷起方向", sub =>
+			{
+				sub.Add("自动（按贴着的屏幕边）", () => SetRollDirection(null), isChecked: Model.RollDirection == null, radio: true);
+				sub.AddSeparator();
+				foreach (var edge in Enum.GetValues<RollEdge>())
+				{
+					sub.Add(edge.DisplayName(), () => SetRollDirection(edge), isChecked: Model.RollDirection == edge, radio: true);
+				}
+			});
 			menu.Add("锁定分区", ToggleLock, isChecked: Model.Locked);
 			if (Model.IsPortal)
 			{

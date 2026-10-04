@@ -831,7 +831,9 @@ internal sealed class FenceManager
 		foreach (var window in _windows)
 		{
 			var model = window.Model;
-			var probe = new POINT(model.X + model.Width / 2, model.Y + 10);
+			// 卷起的分区看收在边上的那一条（向下卷起时在展开范围的底部）
+			var visible = window.GetLayoutBounds();
+			var probe = new POINT(visible.Left + visible.Width / 2, visible.Top + Math.Min(10, visible.Height / 2));
 			if (MonitorFromPoint(probe, MONITOR_DEFAULTTONULL) != IntPtr.Zero)
 			{
 				continue;
@@ -839,7 +841,12 @@ internal sealed class FenceManager
 			var (work, _) = GetMonitorWorkArea(MonitorFromPoint(probe, MONITOR_DEFAULTTONEAREST));
 			model.Width = Math.Min(model.Width, work.Width);
 			model.X = Math.Clamp(model.X, work.Left, work.Right - model.Width);
-			model.Y = Math.Clamp(model.Y, work.Top, Math.Max(work.Top, work.Bottom - 40));
+			bool rolledDown = model.RolledUp && model.RollEdge == RollEdge.Bottom;
+			if (rolledDown)
+			{
+				model.Height = Math.Min(model.Height, work.Height);
+			}
+			model.Y = Math.Clamp(model.Y, work.Top, Math.Max(work.Top, rolledDown ? work.Bottom - model.Height : work.Bottom - 40));
 			window.ApplyBounds();
 			SaveSoon();
 			_takeover?.RelayoutSoon();

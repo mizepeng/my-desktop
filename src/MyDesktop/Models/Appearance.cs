@@ -62,6 +62,17 @@ public static class Appearance
 		};
 	}
 
+	public static string DisplayName(this RollEdge edge)
+	{
+		return edge switch
+		{
+			RollEdge.Top => "向上",
+			RollEdge.Bottom => "向下",
+			RollEdge.Left => "向左",
+			RollEdge.Right => "向右",
+		};
+	}
+
 	public static string DisplayName(this HideTarget target)
 	{
 		return target switch

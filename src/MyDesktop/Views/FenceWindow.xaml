@@ -11,7 +11,6 @@
 		ResizeMode="CanResize"
 		ShowInTaskbar="False"
 		ShowActivated="False"
-		MinWidth="120"
 		MinHeight="32"
 		AllowDrop="True"
 		UseLayoutRounding="True"
@@ -121,7 +120,8 @@
 	</Window.Resources>
 
 	<Border x:Name="Frame" BorderThickness="1" CornerRadius="8" Background="#73000000" BorderBrush="#38FFFFFF">
-		<Grid>
+		<!-- 卷起的分区标题栏放在收向的一侧，行列由代码按卷起方向重排 -->
+		<Grid x:Name="LayoutRoot">
 			<Grid.RowDefinitions>
 				<RowDefinition Height="30" />
 				<RowDefinition Height="*" />
@@ -132,7 +132,7 @@
 					CornerRadius="7,7,0,0"
 					MouseLeftButtonDown="TitleBar_MouseLeftButtonDown"
 					MouseRightButtonUp="TitleBar_MouseRightButtonUp">
-				<Grid Margin="10,0,4,0">
+				<Grid x:Name="TitleContent" Margin="10,0,4,0">
 					<Grid.ColumnDefinitions>
 						<ColumnDefinition Width="Auto" />
 						<ColumnDefinition Width="*" />
@@ -163,6 +163,21 @@
 							TextTrimming="CharacterEllipsis"
 							Foreground="{DynamicResource FenceForeground}"
 							Effect="{DynamicResource TextShadow}" />
+					<!-- 左右收起时的竖排标题：标题栏整体旋转 90°，这里再转回来，每个字一行、正立 -->
+					<TextBlock x:Name="VerticalTitleText"
+							Grid.Column="1"
+							HorizontalAlignment="Left"
+							VerticalAlignment="Center"
+							Visibility="Collapsed"
+							FontSize="13"
+							FontWeight="SemiBold"
+							TextAlignment="Center"
+							Foreground="{DynamicResource FenceForeground}"
+							Effect="{DynamicResource TextShadow}">
+						<TextBlock.LayoutTransform>
+							<RotateTransform Angle="-90" />
+						</TextBlock.LayoutTransform>
+					</TextBlock>
 					<TextBox x:Name="TitleEditor"
 							Grid.Column="1"
 							Margin="0,0,4,0"
@@ -219,6 +234,7 @@
 			<!-- 调整大小时显示能容纳的列数 × 行数 -->
 			<Border x:Name="GridHint"
 					Grid.RowSpan="2"
+					Grid.ColumnSpan="2"
 					HorizontalAlignment="Center"
 					VerticalAlignment="Center"
 					Padding="14,4"

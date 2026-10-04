@@ -27,6 +27,17 @@ public enum FenceView
 }
 
 /// <summary>
+/// 分区卷起后收向哪条边，标题栏就在这一侧。
+/// </summary>
+public enum RollEdge
+{
+	Top,
+	Bottom,
+	Left,
+	Right,
+}
+
+/// <summary>
 /// 隐藏/显示的对象。
 /// </summary>
 public enum HideTarget
@@ -135,6 +146,16 @@ public sealed class FenceSettings
 	public int Height { get; set; }
 
 	public bool RolledUp { get; set; }
+
+	/// <summary>
+	/// 用户指定的卷起方向；为空时自动：贴着屏幕上边或下边时上下收（同时贴着左右边也按上下），只贴左右边时左右收，不贴边时向上。
+	/// </summary>
+	public RollEdge? RollDirection { get; set; }
+
+	/// <summary>
+	/// 标题栏所在、卷起时收向的边：按卷起方向和位置确定，移动分区后随之更新（收起状态下拖到屏幕下边或左右边时也更新）。
+	/// </summary>
+	public RollEdge RollEdge { get; set; }
 
 	public bool Locked { get; set; }
 
