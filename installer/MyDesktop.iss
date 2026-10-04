@@ -3,7 +3,7 @@
 ;   dotnet publish src/MyDesktop/MyDesktop.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish
 ;   "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer\MyDesktop.iss
 ; （ISCC.exe 在 Inno Setup 的安装目录里，winget 默认按用户装在上面这个位置）
-; publish 目录里还要有签名证书的公钥 MyDesktop.cer（导出方法见 src\MyDesktop\ShellExtension\Pack-DesktopMenu.ps1）。
+; 签名证书的公钥 MyDesktop.cer 随仓库放在本目录；更换签名证书后按 src\MyDesktop\ShellExtension\Pack-DesktopMenu.ps1 开头的命令重新导出覆盖它。
 
 #define PublishDir AddBackslash(SourcePath) + "..\publish\"
 #define VerMajor
@@ -13,7 +13,7 @@
 #expr GetVersionComponents(PublishDir + "MyDesktop.exe", VerMajor, VerMinor, VerRev, VerBuild)
 #define AppVersion Str(VerMajor) + "." + Str(VerMinor) + "." + Str(VerRev)
 ; 卸载时按指纹删除导入的证书；.cer 是 DER 格式，文件本身的 SHA-1 就是证书指纹
-#define CertThumbprint GetSHA1OfFile(PublishDir + "MyDesktop.cer")
+#define CertThumbprint GetSHA1OfFile(AddBackslash(SourcePath) + "MyDesktop.cer")
 ; 运行时固定版本并校验 SHA-256，只在电脑上没有任何 10.x 版本时下载
 #define RuntimeFile "windowsdesktop-runtime-10.0.12-win-x64.exe"
 #define RuntimeUrl "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/10.0.12/" + RuntimeFile
@@ -52,7 +52,7 @@ Name: "autostart"; Description: "开机自动启动"
 [Files]
 Source: "{#PublishDir}MyDesktop.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PublishDir}MyDesktop.DesktopMenu.msix"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#PublishDir}MyDesktop.cer"; DestDir: "{tmp}"; Flags: deleteafterinstall
+Source: "MyDesktop.cer"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [Icons]
 Name: "{autoprograms}\MyDesktop 桌面分区"; Filename: "{app}\MyDesktop.exe"

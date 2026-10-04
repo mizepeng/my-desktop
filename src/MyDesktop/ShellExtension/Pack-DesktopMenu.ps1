@@ -7,10 +7,10 @@
 
 	首次在一台电脑上编译前创建签名证书（只需一次，私钥留在本机，不需要管理员权限）：
 		New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=MyDesktop' -CertStoreLocation Cert:\CurrentUser\My -KeyLength 2048 -HashAlgorithm SHA256 -NotAfter (Get-Date).AddYears(10)
-	导出公钥（安装包会带上它，由安装程序替用户信任）：
-		Export-Certificate -Cert (Get-ChildItem Cert:\CurrentUser\My | Where-Object Subject -eq 'CN=MyDesktop' | Select-Object -First 1) -FilePath publish\MyDesktop.cer
+	导出公钥覆盖 installer\MyDesktop.cer（随仓库提交，安装包会带上它，由安装程序替用户信任）：
+		Export-Certificate -Cert (Get-ChildItem Cert:\CurrentUser\My | Where-Object Subject -eq 'CN=MyDesktop' | Select-Object -First 1) -FilePath installer\MyDesktop.cer
 	不经安装包、直接运行编译结果时，以管理员身份信任一次证书，程序启动时才能注册扩展包：
-		Import-Certificate -FilePath publish\MyDesktop.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
+		Import-Certificate -FilePath installer\MyDesktop.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
 #>
 param(
 	[Parameter(Mandatory)] [string]$OutFile,
