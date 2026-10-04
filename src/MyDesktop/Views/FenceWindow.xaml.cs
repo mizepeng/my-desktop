@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -9,7 +10,9 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using MyDesktop.Core;
 using MyDesktop.Models;
@@ -28,22 +31,26 @@ internal partial class FenceWindow : Window
 	const double TitleBarDip = 30;
 	const double ResizeBorderDip = 5;
 	const double SnapDistanceDip = 12;
+	const double FadeMilliseconds = 180;
 	const int ErrorCancelled = 1223;
 
 	static readonly DropShadowEffect TextShadowEffect = CreateShadow();
 	static readonly int[] CustomColors = new int[16];
+	// 多选拖动时数量徽标的底色，与资源管理器一致的系统蓝
+	static readonly SolidColorBrush CountBadgeBrush = new(Color.FromRgb(0x00, 0x78, 0xD4));
 
 	readonly FenceManager _manager;
 	readonly ObservableCollection<FenceItem> _items = [];
 	readonly DispatcherTimer _refreshTimer;
-	readonly DispatcherTimer _hoverTimer;
+	readonly DispatcherTimer _collapseTimer;
+	readonly DispatcherTimer _buttonsTimer;
 	IntPtr _hwnd;
 	FileSystemWatcher? _watcher;
+	ScrollViewer? _scroller;
 	Brush? _frameBorder;
 	bool _folderExisted;
 	bool _allowClose;
 	bool _tempExpanded;
-	bool _hoverExpand;
 	bool _menuOpen;
 
 	// 移动/缩放跟踪：按鼠标相对起点的绝对位移计算目标位置
@@ -51,6 +58,8 @@ internal partial class FenceWindow : Window
 	RECT _dragRectStart;
 	RECT? _dragLastRect;
 	bool _dragFinished;
+	bool _inSizeMove;
+	bool _heightResized;
 
 	// 列表鼠标交互
 	Point _pressPoint;
@@ -63,6 +72,7 @@ internal partial class FenceWindow : Window
 	string[]? _dropPaths;
 	bool _dragInside;
 	int _dragVersion;
+	int _insertIndex = -1;
 	IDropTargetHelper? _dropHelper;
 
 	public FenceWindow(FenceManager manager, FenceSettings model)
@@ -77,8 +87,17 @@ internal partial class FenceWindow : Window
 			_refreshTimer.Stop();
 			RefreshItems();
 		};
-		_hoverTimer = new DispatcherTimer();
-		_hoverTimer.Tick += HoverTimer_Tick;
+		_collapseTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+		_collapseTimer.Tick += CollapseTimer_Tick;
+		_buttonsTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+		_buttonsTimer.Tick += (_, _) =>
+		{
+			_buttonsTimer.Stop();
+			if (!_menuOpen && !IsMouseOver)
+			{
+				ShowTitleButtons(false);
+			}
+		};
 	}
 
 	public FenceSettings Model { get; }
@@ -140,7 +159,8 @@ internal partial class FenceWindow : Window
 		_allowClose = true;
 		StopWatcher();
 		_refreshTimer.Stop();
-		_hoverTimer.Stop();
+		_collapseTimer.Stop();
+		_buttonsTimer.Stop();
 		Close();
 	}
 
@@ -199,6 +219,8 @@ internal partial class FenceWindow : Window
 				_dragRectStart = GetBounds();
 				_dragLastRect = null;
 				_dragFinished = false;
+				_inSizeMove = true;
+				_heightResized = false;
 				break;
 			}
 			case WM_NCHITTEST:
@@ -232,16 +254,19 @@ internal partial class FenceWindow : Window
 			}
 			case WM_SIZING:
 			{
-				if (Settings.SnapToEdges)
+				_heightResized |= (int)wParam is not (WMSZ_LEFT or WMSZ_RIGHT);
+				var grid = GridSizes();
+				if (Settings.SnapToEdges || Settings.SnapToGrid)
 				{
-					SnapSizing((int)wParam, lParam);
+					SnapSizing((int)wParam, lParam, grid);
 					handled = true;
-					return new IntPtr(1);
 				}
-				break;
+				ShowGridHint(Marshal.PtrToStructure<RECT>(lParam), grid);
+				return handled ? new IntPtr(1) : IntPtr.Zero;
 			}
 			case WM_EXITSIZEMOVE:
 			{
+				GridHint.Visibility = Visibility.Collapsed;
 				_dragFinished = true;
 				// 等系统的拖动循环完全结束后再收尾
 				Dispatcher.InvokeAsync(FinishMoveSize, DispatcherPriority.Input);
@@ -369,7 +394,7 @@ internal partial class FenceWindow : Window
 	/// <summary>
 	/// 与移动同理，被拖动的边按鼠标相对起点的绝对位移计算后再吸附。
 	/// </summary>
-	void SnapSizing(int edge, IntPtr lParam)
+	void SnapSizing(int edge, IntPtr lParam, (List<int> Widths, List<int> Heights) grid)
 	{
 		var rect = Marshal.PtrToStructure<RECT>(lParam);
 		var cursor = NativeMethods.GetCursorPos();
@@ -395,7 +420,15 @@ internal partial class FenceWindow : Window
 		{
 			rect.Bottom = _dragRectStart.Bottom + dy;
 		}
-		var lines = CollectSnapLines(rect);
+		var lines = Settings.SnapToEdges ? CollectSnapLines(rect) : new SnapLines();
+		if (Settings.SnapToGrid && !IsCollapsed)
+		{
+			// 按图标整行、整列吸附：候选尺寸换算成被拖动那条边的位置
+			lines.Left.AddRange(grid.Widths.Select(w => rect.Right - w));
+			lines.Right.AddRange(grid.Widths.Select(w => rect.Left + w));
+			lines.Top.AddRange(grid.Heights.Select(h => rect.Bottom - h));
+			lines.Bottom.AddRange(grid.Heights.Select(h => rect.Top + h));
+		}
 		int threshold = (int)(SnapDistanceDip * ScaleFactor);
 		if (left)
 		{
@@ -442,6 +475,74 @@ internal partial class FenceWindow : Window
 	}
 
 	/// <summary>
+	/// 刚好容纳整数行、整数列图标时的窗口宽高（物理像素），按当前实际布局计算，超出现有内容的部分按行高/列宽外推。
+	/// </summary>
+	(List<int> Widths, List<int> Heights) GridSizes()
+	{
+		var widths = new List<int>();
+		var heights = new List<int>();
+		var containers = Enumerable.Range(0, _items.Count)
+				.Select(i => ItemsList.ItemContainerGenerator.ContainerFromIndex(i) as ListBoxItem)
+				.OfType<ListBoxItem>()
+				.Where(c => c.IsVisible)
+				.ToList();
+		if (containers.Count == 0 || VisualTreeHelper.GetParent(containers[0]) is not Panel panel)
+		{
+			return (widths, heights);
+		}
+		double scale = ScaleFactor;
+		var rect = GetBounds();
+		var (work, _) = GetMonitorWorkArea(MonitorFromRect(ref rect, MONITOR_DEFAULTTONEAREST));
+		// 窗口外框：上下左右边框 + 标题栏 + 列表内边距；竖向滚动条出现时还要加上它占的宽度
+		_scroller ??= FindDescendant<ScrollViewer>(ItemsList);
+		double scrollBar = _scroller?.ComputedVerticalScrollBarVisibility == Visibility.Visible ? 10 : 0;
+		double chromeWidth = 2 + ItemsList.Padding.Left + ItemsList.Padding.Right + scrollBar;
+		double chromeHeight = 2 + TitleBarDip + ItemsList.Padding.Top + ItemsList.Padding.Bottom;
+
+		var slots = containers.Select(c =>
+		{
+			var bounds = c.TransformToAncestor(panel).TransformBounds(new Rect(c.RenderSize));
+			var margin = c.Margin;
+			return new Rect(bounds.Left - margin.Left, bounds.Top - margin.Top, bounds.Width + margin.Left + margin.Right, bounds.Height + margin.Top + margin.Bottom);
+		}).ToList();
+		var rowBottoms = slots.GroupBy(s => Math.Round(s.Top)).OrderBy(g => g.Key).Select(g => g.Max(s => s.Bottom)).ToList();
+		double rowHeight = rowBottoms[0];
+		for (double bottom = rowBottoms[^1] + rowHeight; (chromeHeight + bottom) * scale <= work.Height; bottom += rowHeight)
+		{
+			rowBottoms.Add(bottom);
+		}
+		heights.AddRange(rowBottoms.Select(b => (int)Math.Round((chromeHeight + b) * scale)));
+
+		// 列表视图只有一列，不按列吸附
+		if (Model.View == FenceView.Icons)
+		{
+			double columnWidth = slots[0].Width;
+			for (int n = 1; (chromeWidth + n * columnWidth) * scale <= work.Width; n++)
+			{
+				widths.Add((int)Math.Round((chromeWidth + n * columnWidth) * scale));
+			}
+		}
+		return (widths, heights);
+	}
+
+	/// <summary>
+	/// 调整大小时在分区中央显示当前尺寸能完整容纳的列数 × 行数；没有图标可供测量时不显示。
+	/// </summary>
+	void ShowGridHint(RECT rect, (List<int> Widths, List<int> Heights) grid)
+	{
+		if (IsCollapsed || grid.Heights.Count == 0)
+		{
+			GridHint.Visibility = Visibility.Collapsed;
+			return;
+		}
+		// 留 1 像素余量，避免换算取整让刚好吸附到的尺寸少算一行
+		int rows = grid.Heights.Count(h => h <= rect.Height + 1);
+		int columns = grid.Widths.Count(w => w <= rect.Width + 1);
+		GridHintText.Text = Model.View == FenceView.List ? $"{rows} 行" : $"{columns} × {rows}";
+		GridHint.Visibility = Visibility.Visible;
+	}
+
+	/// <summary>
 	/// 拖动或缩放结束时，系统会按鼠标位置再定位一次而忽略最后的吸附结果，这里改回拖动中最后显示的位置；
 	/// 按 Esc 取消（回到起点）时不干预。
 	/// </summary>
@@ -485,6 +586,13 @@ internal partial class FenceWindow : Window
 		_dragLastRect = null;
 		_dragFinished = false;
 		SaveBounds();
+		_inSizeMove = false;
+		_heightResized = false;
+		// 悬停展开时调整完大小，鼠标若已移出，按正常节奏收起
+		if (_tempExpanded)
+		{
+			RestartTimer(_collapseTimer);
+		}
 	}
 
 	static int? Snap(int edge, List<int> lines, int threshold)
@@ -516,8 +624,8 @@ internal partial class FenceWindow : Window
 		Model.X = rect.Left;
 		Model.Y = rect.Top;
 		Model.Width = rect.Width;
-		// 卷起状态下（含悬停临时展开，高度可能被屏幕底部裁剪）不覆盖用户设定的展开高度
-		if (!Model.RolledUp)
+		// 卷起状态下（含悬停临时展开，高度可能被屏幕底部裁剪）不覆盖用户设定的展开高度，除非用户刚拖动上下边调整了高度
+		if (!Model.RolledUp || _heightResized)
 		{
 			Model.Height = rect.Height;
 		}
@@ -552,7 +660,7 @@ internal partial class FenceWindow : Window
 	{
 		Model.RolledUp = !Model.RolledUp;
 		_tempExpanded = false;
-		_hoverTimer.Stop();
+		_collapseTimer.Stop();
 		ApplyBounds();
 		_manager.SaveSoon();
 	}
@@ -650,71 +758,88 @@ internal partial class FenceWindow : Window
 
 	#endregion
 
-	#region 悬停展开
+	#region 悬停展开、标题栏按钮、淡入淡出
 
 	protected override void OnMouseEnter(MouseEventArgs e)
 	{
 		base.OnMouseEnter(e);
-		TitleButtons.Opacity = 1;
+		// 悬停时立即出现，移开后延迟消失
+		_buttonsTimer.Stop();
+		_collapseTimer.Stop();
+		ShowTitleButtons(true);
 		if (Model.RolledUp && !_tempExpanded && Settings.ExpandOnHover)
 		{
-			StartHoverTimer(true, 300);
+			_tempExpanded = true;
+			ApplyBounds();
 		}
 	}
 
 	protected override void OnMouseLeave(MouseEventArgs e)
 	{
 		base.OnMouseLeave(e);
-		if (!_menuOpen)
-		{
-			TitleButtons.Opacity = 0;
-		}
+		RestartTimer(_buttonsTimer);
 		if (_tempExpanded)
 		{
-			StartHoverTimer(false, 600);
-		}
-		else
-		{
-			_hoverTimer.Stop();
+			RestartTimer(_collapseTimer);
 		}
 	}
 
-	void StartHoverTimer(bool expand, int delayMilliseconds)
+	void CollapseTimer_Tick(object? sender, EventArgs e)
 	{
-		_hoverExpand = expand;
-		_hoverTimer.Stop();
-		_hoverTimer.Interval = TimeSpan.FromMilliseconds(delayMilliseconds);
-		_hoverTimer.Start();
-	}
-
-	void HoverTimer_Tick(object? sender, EventArgs e)
-	{
-		_hoverTimer.Stop();
-		bool inside = GetBounds().Contains(NativeMethods.GetCursorPos());
-		if (_hoverExpand)
-		{
-			if (inside && Model.RolledUp && !_tempExpanded)
-			{
-				_tempExpanded = true;
-				ApplyBounds();
-			}
-			return;
-		}
+		_collapseTimer.Stop();
 		if (!_tempExpanded)
 		{
 			return;
 		}
-		// 鼠标仍在窗口内、菜单打开、拖放或重命名进行中时保持展开，稍后再检查
-		if (inside || _menuOpen || _dragInside || IsEditing())
+		// 鼠标仍在窗口内、正在移动或调整大小（吸附时边框与鼠标会错开）、菜单打开、拖放或重命名进行中时保持展开，稍后再检查
+		if (GetBounds().Contains(NativeMethods.GetCursorPos()) || _inSizeMove || _menuOpen || _dragInside || IsEditing())
 		{
-			StartHoverTimer(false, 600);
+			RestartTimer(_collapseTimer);
 			return;
 		}
 		_tempExpanded = false;
 		ApplyBounds();
 	}
 
+	static void RestartTimer(DispatcherTimer timer)
+	{
+		timer.Stop();
+		timer.Start();
+	}
+
+	void ShowTitleButtons(bool visible)
+	{
+		var animation = new DoubleAnimation(visible ? 1 : 0, TimeSpan.FromMilliseconds(visible ? 0 : 200));
+		TitleButtons.BeginAnimation(OpacityProperty, animation);
+	}
+
 	bool IsEditing() => TitleEditor.IsVisible || _items.Any(i => i.IsRenaming);
+
+	public void FadeOut()
+	{
+		var animation = new DoubleAnimation(0, TimeSpan.FromMilliseconds(FadeMilliseconds));
+		animation.Completed += (_, _) =>
+		{
+			// 淡出过程中可能又被要求显示
+			if (_manager.IsHidden)
+			{
+				Hide();
+			}
+		};
+		BeginAnimation(OpacityProperty, animation);
+	}
+
+	public void FadeIn()
+	{
+		if (!IsVisible)
+		{
+			BeginAnimation(OpacityProperty, null);
+			Opacity = 0;
+			Show();
+			PlaceAboveDesktop();
+		}
+		BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(FadeMilliseconds)));
+	}
 
 	#endregion
 
@@ -815,18 +940,27 @@ internal partial class FenceWindow : Window
 
 	void Sort(List<FenceItem> items)
 	{
+		bool custom = Model.SortBy == SortField.Custom;
+		var rank = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+		for (int i = 0; custom && i < Model.CustomOrder.Count; i++)
+		{
+			rank.TryAdd(Model.CustomOrder[i], i);
+		}
+		// 自定义顺序里没有的（新加入的）项目排在最后
+		int Rank(FenceItem item) => rank.TryGetValue(item.FileName, out int index) ? index : int.MaxValue;
 		Comparison<FenceItem> byField = Model.SortBy switch
 		{
 			SortField.Name => (a, b) => StrCmpLogicalW(a.DisplayName, b.DisplayName),
 			SortField.Type => (a, b) => string.Compare(a.TypeName, b.TypeName, StringComparison.CurrentCultureIgnoreCase),
 			SortField.Size => (a, b) => a.Size.CompareTo(b.Size),
 			SortField.Modified => (a, b) => a.Modified.CompareTo(b.Modified),
+			SortField.Custom => (a, b) => Rank(a).CompareTo(Rank(b)),
 		};
-		int direction = Model.SortDescending ? -1 : 1;
+		int direction = !custom && Model.SortDescending ? -1 : 1;
 		items.Sort((a, b) =>
 		{
-			// 与资源管理器一致：文件夹始终排在文件前面
-			if (a.IsFolder != b.IsFolder)
+			// 与资源管理器一致：文件夹始终排在文件前面（自定义顺序完全按用户的摆放）
+			if (!custom && a.IsFolder != b.IsFolder)
 			{
 				return a.IsFolder ? -1 : 1;
 			}
@@ -864,6 +998,18 @@ internal partial class FenceWindow : Window
 			{
 				_items.Move(index, i);
 			}
+		}
+	}
+
+	/// <summary>
+	/// 重新加载全部图标，加载完成前保留旧图标。
+	/// </summary>
+	public void ReloadIcons()
+	{
+		foreach (var item in _items)
+		{
+			item.IconPixelSize = 0;
+			RequestIcon(item);
 		}
 	}
 
@@ -997,7 +1143,7 @@ internal partial class FenceWindow : Window
 			ItemsList.UnselectAll();
 			ItemsList.SelectedItem = item;
 		}
-		StartDragOut(SelectedItems);
+		StartDragOut(SelectedItems, item);
 	}
 
 	void ItemsList_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -1098,7 +1244,8 @@ internal partial class FenceWindow : Window
 				|| Math.Abs(position.Y - _pressPoint.Y) >= SystemParameters.MinimumVerticalDragDistance;
 	}
 
-	void StartDragOut(List<FenceItem> items)
+	/// <param name="anchor">鼠标按下的那一项，拖动预览图按它生成。</param>
+	void StartDragOut(List<FenceItem> items, FenceItem anchor)
 	{
 		if (items.Count == 0)
 		{
@@ -1107,13 +1254,100 @@ internal partial class FenceWindow : Window
 		Mouse.Capture(null);
 		try
 		{
-			ShellFileOps.DoDragDrop(_hwnd, items.Select(i => i.FullPath).ToList());
+			ShellFileOps.DoDragDrop(_hwnd, items.Select(i => i.FullPath).ToList(), CreateDragImage(anchor, items.Count));
 		}
 		catch (Exception ex)
 		{
 			Log.Warn("拖出文件失败", ex);
 		}
 		ScheduleRefresh();
+	}
+
+	/// <summary>
+	/// 按分区中的实际样子（图标 + 名称，不含选中底色）生成拖动预览图，与原图标重合地跟随鼠标；
+	/// 多选时在图标右上角标出数量。生成失败返回 null，由系统生成默认预览图。
+	/// </summary>
+	SHDRAGIMAGE? CreateDragImage(FenceItem anchor, int count)
+	{
+		if (ItemsList.ItemContainerGenerator.ContainerFromItem(anchor) is not ListBoxItem container
+				|| FindDescendant<ContentPresenter>(container) is not ContentPresenter content
+				|| content.ActualWidth <= 0
+				|| content.ActualHeight <= 0)
+		{
+			return null;
+		}
+		double scale = ScaleFactor;
+		var size = new Size(content.ActualWidth, content.ActualHeight);
+		var visual = new DrawingVisual();
+		using (var context = visual.RenderOpen())
+		{
+			var brush = new VisualBrush(content)
+			{
+				Viewbox = new Rect(size),
+				ViewboxUnits = BrushMappingMode.Absolute,
+			};
+			context.DrawRectangle(brush, null, new Rect(size));
+			if (count > 1 && FindDescendant<Image>(content) is Image icon)
+			{
+				DrawCountBadge(context, icon.TransformToAncestor(content).TransformBounds(new Rect(icon.RenderSize)), size, count, scale);
+			}
+		}
+		var image = new RenderTargetBitmap((int)Math.Ceiling(size.Width * scale), (int)Math.Ceiling(size.Height * scale), 96 * scale, 96 * scale, PixelFormats.Pbgra32);
+		image.Render(visual);
+		var bitmap = CreateDragBitmap(image);
+		if (bitmap == IntPtr.Zero)
+		{
+			return null;
+		}
+		var origin = content.PointToScreen(new Point());
+		var cursor = NativeMethods.GetCursorPos();
+		return new SHDRAGIMAGE
+		{
+			sizeDragImage = new SIZE(image.PixelWidth, image.PixelHeight),
+			ptOffset = new POINT(Math.Clamp(cursor.X - (int)Math.Round(origin.X), 0, image.PixelWidth), Math.Clamp(cursor.Y - (int)Math.Round(origin.Y), 0, image.PixelHeight)),
+			hbmpDragImage = bitmap,
+			// 带 alpha 通道的位图不需要透明色
+			crColorKey = 0xFFFFFFFF,
+		};
+	}
+
+	static void DrawCountBadge(DrawingContext context, Rect icon, Size bounds, int count, double scale)
+	{
+		var text = new FormattedText(count.ToString(CultureInfo.InvariantCulture), CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+				new Typeface(SystemFonts.MessageFontFamily, FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal), 11, Brushes.White, scale);
+		double height = 18;
+		double width = Math.Max(height, text.Width + 10);
+		// 徽标中心落在图标右上角，同时不超出预览图范围
+		double x = Math.Clamp(icon.Right - width / 2, 0, Math.Max(0, bounds.Width - width));
+		double y = Math.Clamp(icon.Top - height / 2, 0, Math.Max(0, bounds.Height - height));
+		context.DrawRoundedRectangle(CountBadgeBrush, null, new Rect(x, y, width, height), height / 2, height / 2);
+		context.DrawText(text, new Point(x + (width - text.Width) / 2, y + (height - text.Height) / 2));
+	}
+
+	/// <summary>
+	/// 转成 32 位自上而下、预乘 alpha 的 DIB，这是拖放预览图要求的格式。
+	/// </summary>
+	static IntPtr CreateDragBitmap(BitmapSource source)
+	{
+		int width = source.PixelWidth;
+		int height = source.PixelHeight;
+		var info = new BITMAPINFO
+		{
+			bmiHeader = new BITMAPINFOHEADER
+			{
+				biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(),
+				biWidth = width,
+				biHeight = -height,
+				biPlanes = 1,
+				biBitCount = 32,
+			},
+		};
+		var bitmap = CreateDIBSection(IntPtr.Zero, ref info, 0, out var bits, IntPtr.Zero, 0);
+		if (bitmap != IntPtr.Zero)
+		{
+			source.CopyPixels(Int32Rect.Empty, bits, width * height * 4, width * 4);
+		}
+		return bitmap;
 	}
 
 	FenceItem? ItemFromSource(object source)
@@ -1249,7 +1483,8 @@ internal partial class FenceWindow : Window
 	{
 		bool folderExists = Directory.Exists(Model.FolderPath);
 		_menuOpen = true;
-		TitleButtons.Opacity = 1;
+		_buttonsTimer.Stop();
+		ShowTitleButtons(true);
 		try
 		{
 			using var menu = new NativeMenu();
@@ -1267,8 +1502,9 @@ internal partial class FenceWindow : Window
 					sub.Add(field.DisplayName(), () => SetSort(field, Model.SortDescending), isChecked: Model.SortBy == field, radio: true);
 				}
 				sub.AddSeparator();
-				sub.Add("递增", () => SetSort(Model.SortBy, false), isChecked: !Model.SortDescending, radio: true);
-				sub.Add("递减", () => SetSort(Model.SortBy, true), isChecked: Model.SortDescending, radio: true);
+				bool custom = Model.SortBy == SortField.Custom;
+				sub.Add("递增", () => SetSort(Model.SortBy, false), isChecked: !Model.SortDescending, enabled: !custom, radio: true);
+				sub.Add("递减", () => SetSort(Model.SortBy, true), isChecked: Model.SortDescending, enabled: !custom, radio: true);
 			});
 			menu.AddSubMenu("查看", sub =>
 			{
@@ -1309,6 +1545,7 @@ internal partial class FenceWindow : Window
 				menu.Add("更换映射文件夹…", () => _manager.ChangePortalFolder(this));
 			}
 			menu.AddSeparator();
+			menu.Add("MyDesktop 设置…", _manager.ShowSettings);
 			menu.Add("删除分区…", () => _manager.DeleteFence(this));
 			menu.Show(_hwnd, point);
 		}
@@ -1317,7 +1554,7 @@ internal partial class FenceWindow : Window
 			_menuOpen = false;
 			if (!IsMouseOver)
 			{
-				TitleButtons.Opacity = 0;
+				RestartTimer(_buttonsTimer);
 			}
 		}
 	}
@@ -1361,6 +1598,11 @@ internal partial class FenceWindow : Window
 
 	void SetSort(SortField field, bool descending)
 	{
+		// 切到自定义排序时以当前显示顺序为起点
+		if (field == SortField.Custom && Model.SortBy != SortField.Custom)
+		{
+			Model.CustomOrder = _items.Select(i => i.FileName).ToList();
+		}
 		Model.SortBy = field;
 		Model.SortDescending = descending;
 		RefreshItems();
@@ -1662,7 +1904,13 @@ internal partial class FenceWindow : Window
 		var directory = Path.GetDirectoryName(item.FullPath);
 		if (directory != null)
 		{
-			ShellFileOps.Rename(_hwnd, item.FullPath, Path.Combine(directory, target));
+			int index = Model.CustomOrder.FindIndex(n => string.Equals(n, item.FileName, StringComparison.OrdinalIgnoreCase));
+			// 自定义顺序按文件名记录，改名后同步更新，位置不变
+			if (ShellFileOps.Rename(_hwnd, item.FullPath, Path.Combine(directory, target)) && index >= 0)
+			{
+				Model.CustomOrder[index] = target;
+				_manager.SaveSoon();
+			}
 		}
 		ScheduleRefresh();
 	}
@@ -1670,6 +1918,24 @@ internal partial class FenceWindow : Window
 	TextBox? FindRenameBox(FenceItem item)
 	{
 		return ItemsList.ItemContainerGenerator.ContainerFromItem(item) is ListBoxItem container ? FindChild<TextBox>(container, "RenameBox") : null;
+	}
+
+	static T? FindDescendant<T>(DependencyObject parent) where T : DependencyObject
+	{
+		for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+		{
+			var child = VisualTreeHelper.GetChild(parent, i);
+			if (child is T match)
+			{
+				return match;
+			}
+			var nested = FindDescendant<T>(child);
+			if (nested != null)
+			{
+				return nested;
+			}
+		}
+		return null;
 	}
 
 	static T? FindChild<T>(DependencyObject parent, string name) where T : FrameworkElement
@@ -1775,6 +2041,7 @@ internal partial class FenceWindow : Window
 			}
 		}
 		e.Effects = ComputeDropEffect(e);
+		TrackReorder(e);
 		if (firstEnter)
 		{
 			HelperDragEnter(e);
@@ -1791,6 +2058,7 @@ internal partial class FenceWindow : Window
 		base.OnDragOver(e);
 		_dragVersion++;
 		e.Effects = ComputeDropEffect(e);
+		TrackReorder(e);
 		HelperDragOver(e);
 		e.Handled = true;
 	}
@@ -1816,9 +2084,18 @@ internal partial class FenceWindow : Window
 		_dragVersion++;
 		var effect = ComputeDropEffect(e);
 		var paths = _dropPaths;
+		bool reorder = IsReorderDrag();
+		int insertIndex = _insertIndex;
 		HelperDrop(e, effect);
 		EndDragInside(false);
 		e.Handled = true;
+		if (reorder && paths != null)
+		{
+			// 同一分区内拖动只调整顺序，不动文件；回报 None，拖放源无需做任何事
+			e.Effects = DragDropEffects.None;
+			ApplyReorder(paths, insertIndex);
+			return;
+		}
 		if (paths == null || effect == DragDropEffects.None)
 		{
 			e.Effects = DragDropEffects.None;
@@ -1841,6 +2118,8 @@ internal partial class FenceWindow : Window
 	{
 		_dragInside = false;
 		_dropPaths = null;
+		_insertIndex = -1;
+		InsertMarker.Visibility = Visibility.Collapsed;
 		SetDropHighlight(false);
 		if (notifyHelper)
 		{
@@ -1848,8 +2127,125 @@ internal partial class FenceWindow : Window
 		}
 		if (_tempExpanded)
 		{
-			StartHoverTimer(false, 800);
+			RestartTimer(_collapseTimer);
 		}
+	}
+
+	/// <summary>
+	/// 拖动的全是本分区里的文件：视为调整顺序。
+	/// </summary>
+	bool IsReorderDrag()
+	{
+		return _dropPaths is { Length: > 0 } paths && paths.All(p => PathUtil.AreEqual(Path.GetDirectoryName(p), Model.FolderPath));
+	}
+
+	void TrackReorder(DragEventArgs e)
+	{
+		if (!IsReorderDrag())
+		{
+			InsertMarker.Visibility = Visibility.Collapsed;
+			return;
+		}
+		var position = e.GetPosition(ContentHost);
+		AutoScroll(position);
+		_insertIndex = GetInsertIndex(position, out var marker);
+		if (marker is Rect rect)
+		{
+			Canvas.SetLeft(InsertMarker, rect.X);
+			Canvas.SetTop(InsertMarker, rect.Y);
+			InsertMarker.Width = rect.Width;
+			InsertMarker.Height = rect.Height;
+			InsertMarker.Visibility = Visibility.Visible;
+		}
+		else
+		{
+			InsertMarker.Visibility = Visibility.Collapsed;
+		}
+	}
+
+	/// <summary>
+	/// 根据鼠标位置计算插入序号，并给出插入标记线的位置（ContentHost 坐标）。
+	/// </summary>
+	int GetInsertIndex(Point position, out Rect? marker)
+	{
+		marker = null;
+		bool list = Model.View == FenceView.List;
+		Rect? previous = null;
+		for (int i = 0; i < _items.Count; i++)
+		{
+			if (ItemsList.ItemContainerGenerator.ContainerFromIndex(i) is not ListBoxItem container || !container.IsVisible)
+			{
+				continue;
+			}
+			var bounds = container.TransformToAncestor(ContentHost).TransformBounds(new Rect(container.RenderSize));
+			if (list)
+			{
+				if (position.Y < bounds.Top + bounds.Height / 2)
+				{
+					marker = new Rect(bounds.Left, bounds.Top - 1.5, bounds.Width, 3);
+					return i;
+				}
+			}
+			else if (position.Y < bounds.Top)
+			{
+				// 鼠标在上一行的空白处：标记画在上一行末尾
+				marker = previous is Rect prev && position.Y >= prev.Top
+						? new Rect(prev.Right - 1.5, prev.Top, 3, prev.Height)
+						: new Rect(bounds.Left - 1.5, bounds.Top, 3, bounds.Height);
+				return i;
+			}
+			else if (position.Y <= bounds.Bottom && position.X < bounds.Left + bounds.Width / 2)
+			{
+				marker = new Rect(bounds.Left - 1.5, bounds.Top, 3, bounds.Height);
+				return i;
+			}
+			previous = bounds;
+		}
+		if (previous is Rect last)
+		{
+			marker = list ? new Rect(last.Left, last.Bottom - 1.5, last.Width, 3) : new Rect(last.Right - 1.5, last.Top, 3, last.Height);
+		}
+		return _items.Count;
+	}
+
+	/// <summary>
+	/// 拖到列表上下边缘时自动滚动，方便把图标拖到看不见的位置。
+	/// </summary>
+	void AutoScroll(Point position)
+	{
+		_scroller ??= FindDescendant<ScrollViewer>(ItemsList);
+		if (_scroller == null)
+		{
+			return;
+		}
+		const double edge = 24;
+		if (position.Y < edge)
+		{
+			_scroller.ScrollToVerticalOffset(_scroller.VerticalOffset - 12);
+		}
+		else if (position.Y > ContentHost.ActualHeight - edge)
+		{
+			_scroller.ScrollToVerticalOffset(_scroller.VerticalOffset + 12);
+		}
+	}
+
+	void ApplyReorder(string[] paths, int insertIndex)
+	{
+		var moving = new HashSet<string>(paths.Select(Path.GetFileName).OfType<string>(), StringComparer.OrdinalIgnoreCase);
+		var order = _items.Select(i => i.FileName).ToList();
+		if (insertIndex < 0 || insertIndex > order.Count)
+		{
+			insertIndex = order.Count;
+		}
+		// 插入点之前被拖走的项目会让插入位置前移
+		int target = insertIndex - order.Take(insertIndex).Count(moving.Contains);
+		var dragged = order.Where(moving.Contains).ToList();
+		order.RemoveAll(moving.Contains);
+		order.InsertRange(Math.Clamp(target, 0, order.Count), dragged);
+		Model.SortBy = SortField.Custom;
+		Model.CustomOrder = order;
+		RefreshItems();
+		_manager.SaveSoon();
 	}
 
 	/// <summary>
@@ -1863,9 +2259,13 @@ internal partial class FenceWindow : Window
 		{
 			return DragDropEffects.None;
 		}
-		// 在同一分区内拖动，或把文件夹拖进它自己（及其子目录）对应的分区，都不处理
-		if (paths.All(p => PathUtil.AreEqual(Path.GetDirectoryName(p), folder))
-				|| paths.Any(p => PathUtil.AreEqual(p, folder) || PathUtil.IsUnder(folder, p)))
+		// 在同一分区内拖动是调整顺序
+		if (IsReorderDrag())
+		{
+			return (e.AllowedEffects & DragDropEffects.Move) != 0 ? DragDropEffects.Move : DragDropEffects.None;
+		}
+		// 把文件夹拖进它自己（及其子目录）对应的分区不处理
+		if (paths.Any(p => PathUtil.AreEqual(p, folder) || PathUtil.IsUnder(folder, p)))
 		{
 			return DragDropEffects.None;
 		}

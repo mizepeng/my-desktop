@@ -4,17 +4,11 @@ using System.Windows;
 using System.Windows.Threading;
 using MyDesktop.Core;
 using MyDesktop.Services;
-using static MyDesktop.Native.NativeMethods;
 
 namespace MyDesktop;
 
 public partial class App : Application
 {
-	/// <summary>
-	/// 重复启动时，新进程广播此消息让已运行的实例打开设置窗口。
-	/// </summary>
-	public const string ActivateMessageName = "MyDesktop.ShowSettings";
-
 	Mutex? _mutex;
 	bool _ownsMutex;
 
@@ -25,11 +19,12 @@ public partial class App : Application
 	protected override void OnStartup(StartupEventArgs e)
 	{
 		base.OnStartup(e);
-		ParseArguments(e.Args);
+		var command = ParseArguments(e.Args);
 		Log.Init(AppPaths.DataDir);
 		if (!AcquireSingleInstance())
 		{
-			PostMessage(HWND_BROADCAST, RegisterWindowMessage(ActivateMessageName), IntPtr.Zero, IntPtr.Zero);
+			// 已有实例在运行：把命令（默认打开设置）转交给它
+			AppCommands.Broadcast(command ?? AppCommand.ShowSettings);
 			Shutdown();
 			return;
 		}
@@ -38,7 +33,7 @@ public partial class App : Application
 		Log.Info($"启动 {typeof(App).Assembly.GetName().Version}，数据目录：{AppPaths.DataDir}");
 		var settings = SettingsStore.Load(out bool firstRun);
 		Manager = new FenceManager(settings);
-		StartWhenDesktopReady(Manager, firstRun);
+		StartWhenDesktopReady(Manager, firstRun, command);
 	}
 
 	public void ExitApp()
@@ -68,11 +63,19 @@ public partial class App : Application
 	/// <summary>
 	/// 开机自启时 Explorer 可能还没创建好桌面窗口，轮询等待（最多约一分钟）。
 	/// </summary>
-	static void StartWhenDesktopReady(FenceManager manager, bool firstRun)
+	static void StartWhenDesktopReady(FenceManager manager, bool firstRun, AppCommand? command)
 	{
-		if (DesktopHost.FindFolderView() != IntPtr.Zero)
+		void Start()
 		{
 			manager.Start(firstRun);
+			if (command is AppCommand value)
+			{
+				manager.ExecuteCommand(value);
+			}
+		}
+		if (DesktopHost.FindFolderView() != IntPtr.Zero)
+		{
+			Start();
 			return;
 		}
 		int attempts = 0;
@@ -84,20 +87,29 @@ public partial class App : Application
 				return;
 			}
 			timer.Stop();
-			manager.Start(firstRun);
+			Start();
 		};
 		timer.Start();
 	}
 
-	static void ParseArguments(string[] args)
+	/// <summary>
+	/// 解析 --data（数据目录）与 --command（桌面右键菜单发来的命令）。
+	/// </summary>
+	static AppCommand? ParseArguments(string[] args)
 	{
+		AppCommand? command = null;
 		for (int i = 0; i < args.Length - 1; i++)
 		{
 			if (string.Equals(args[i], "--data", StringComparison.OrdinalIgnoreCase))
 			{
 				AppPaths.UseDataDir(args[i + 1]);
 			}
+			else if (string.Equals(args[i], "--command", StringComparison.OrdinalIgnoreCase))
+			{
+				command = AppCommands.Parse(args[i + 1]);
+			}
 		}
+		return command;
 	}
 
 	/// <summary>

@@ -82,6 +82,22 @@
 						</CheckBox>
 					</Border>
 					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="DrawToCreateBox" Click="Setting_Changed">
+							<StackPanel>
+								<TextBlock Text="在桌面上按住右键拖动画框新建分区" />
+								<TextBlock Style="{StaticResource Hint}" Text="普通右键单击不受影响，桌面右键菜单照常弹出" />
+							</StackPanel>
+						</CheckBox>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="DesktopMenuBox" Click="Setting_Changed">
+							<StackPanel>
+								<TextBlock Text="在桌面右键菜单中显示 MyDesktop" />
+								<TextBlock Style="{StaticResource Hint}" Text="只在桌面空白处右键时出现；Windows 11 新式菜单需要已签名的扩展包（见 README）" />
+							</StackPanel>
+						</CheckBox>
+					</Border>
+					<Border Style="{StaticResource Card}">
 						<CheckBox x:Name="ExpandOnHoverBox" Click="Setting_Changed">
 							<StackPanel>
 								<TextBlock Text="卷起的分区在鼠标悬停时自动展开" />
@@ -94,6 +110,14 @@
 							<StackPanel>
 								<TextBlock Text="移动或调整分区时自动吸附对齐" />
 								<TextBlock Style="{StaticResource Hint}" Text="吸附到屏幕边缘和相邻的分区" />
+							</StackPanel>
+						</CheckBox>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="SnapGridBox" Click="Setting_Changed">
+							<StackPanel>
+								<TextBlock Text="调整大小时按图标整行整列吸附" />
+								<TextBlock Style="{StaticResource Hint}" Text="分区尺寸恰好容纳一行、两行……图标时会吸住" />
 							</StackPanel>
 						</CheckBox>
 					</Border>

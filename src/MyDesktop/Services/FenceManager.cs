@@ -25,10 +25,16 @@ internal sealed class FenceManager
 	readonly DispatcherTimer _saveTimer;
 	readonly DispatcherTimer _watchdogTimer;
 	readonly DispatcherTimer _zOrderTimer;
+	readonly DispatcherTimer _iconReloadTimer;
+	readonly List<RegistryWatcher> _registryWatchers = [];
 	readonly WinEventProc _foregroundCallback;
+	readonly WinEventProc _reorderCallback;
+	readonly IntPtr _rootWindow = GetDesktopWindow();
 	IntPtr _foregroundHook;
+	IntPtr _reorderHook;
 	TrayIcon? _tray;
-	DesktopDoubleClickWatcher? _doubleClick;
+	DesktopMouseWatcher? _mouse;
+	DrawFrameWindow? _drawFrame;
 	SettingsWindow? _settingsWindow;
 	bool _hidden;
 	bool _shutdown;
@@ -47,8 +53,15 @@ internal sealed class FenceManager
 			_zOrderTimer.Stop();
 			KeepFencesAboveDesktop();
 		};
+		_iconReloadTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+		_iconReloadTimer.Tick += (_, _) =>
+		{
+			_iconReloadTimer.Stop();
+			ReloadIcons();
+		};
 		// 委托必须由字段持有，防止被 GC 回收
 		_foregroundCallback = OnForegroundChanged;
+		_reorderCallback = OnZOrderChanged;
 		Organizer = new DesktopOrganizer(this);
 	}
 
@@ -66,10 +79,16 @@ internal sealed class FenceManager
 
 	public void Start(bool firstRun)
 	{
-		_tray = new TrayIcon("MyDesktop 桌面分区", App.ActivateMessageName);
+		_tray = new TrayIcon("MyDesktop 桌面分区", AppCommands.MessageName);
 		_tray.LeftClick += ShowSettings;
 		_tray.RightClick += ShowTrayMenu;
-		_tray.ActivateRequested += ShowSettings;
+		_tray.CommandReceived += code =>
+		{
+			if (Enum.IsDefined((AppCommand)code))
+			{
+				ExecuteCommand((AppCommand)code);
+			}
+		};
 		_tray.TaskbarCreated += OnExplorerRestarted;
 		_tray.DisplayChanged += () => _dispatcher.InvokeAsync(EnsureAllOnScreen, DispatcherPriority.Background);
 		_tray.ThemeChanged += SystemTheme.ApplyToMenus;
@@ -85,9 +104,13 @@ internal sealed class FenceManager
 			OpenWindow(model);
 		}
 		EnsureAllOnScreen();
-		ApplyDoubleClickSetting();
+		ApplyMouseHookSettings();
 		Organizer.ApplyWatchSetting();
+		WatchElevationSettings();
+		DesktopMenu.Apply(Settings.DesktopContextMenu);
 		_foregroundHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, _foregroundCallback, 0, 0,
+				WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+		_reorderHook = SetWinEventHook(EVENT_OBJECT_REORDER, EVENT_OBJECT_REORDER, IntPtr.Zero, _reorderCallback, 0, 0,
 				WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 		_watchdogTimer.Start();
 		Log.Info($"启动完成，共 {_windows.Count} 个分区");
@@ -107,15 +130,22 @@ internal sealed class FenceManager
 		_shutdown = true;
 		_watchdogTimer.Stop();
 		_zOrderTimer.Stop();
-		if (_foregroundHook != IntPtr.Zero)
+		_iconReloadTimer.Stop();
+		_registryWatchers.ForEach(w => w.Dispose());
+		foreach (var hook in new[] { _foregroundHook, _reorderHook })
 		{
-			UnhookWinEvent(_foregroundHook);
-			_foregroundHook = IntPtr.Zero;
+			if (hook != IntPtr.Zero)
+			{
+				UnhookWinEvent(hook);
+			}
 		}
+		_foregroundHook = IntPtr.Zero;
+		_reorderHook = IntPtr.Zero;
 		// 先关设置窗口，它关闭时会写回未保存的规则修改
 		_settingsWindow?.Close();
 		SaveNow();
-		_doubleClick?.Dispose();
+		_mouse?.Dispose();
+		_drawFrame?.Close();
 		Organizer.Dispose();
 		if (_hidden && !DesktopHost.IconsHiddenBySystem())
 		{
@@ -130,8 +160,10 @@ internal sealed class FenceManager
 
 	#region 分区增删改
 
+	/// <param name="bounds">指定位置与大小（屏幕物理像素）；为空时自动找空位。</param>
 	/// <param name="reveal">处于隐藏状态时是否恢复显示；后台自动整理时不打扰用户的隐藏状态。</param>
-	public FenceWindow CreateFence(string? title = null, string? portalFolder = null, FenceWindow? near = null, bool editTitle = false, bool reveal = true)
+	public FenceWindow CreateFence(string? title = null, string? portalFolder = null, FenceWindow? near = null, bool editTitle = false, bool reveal = true,
+			RECT? bounds = null)
 	{
 		if (reveal)
 		{
@@ -144,11 +176,11 @@ internal sealed class FenceManager
 			IsPortal = portalFolder != null,
 			FolderPath = portalFolder ?? CreateManagedFolder(title),
 		};
-		var bounds = FindFreeSlot(near?.GetBounds());
-		model.X = bounds.Left;
-		model.Y = bounds.Top;
-		model.Width = bounds.Width;
-		model.Height = bounds.Height;
+		var rect = bounds ?? FindFreeSlot(near?.GetBounds());
+		model.X = rect.Left;
+		model.Y = rect.Top;
+		model.Width = rect.Width;
+		model.Height = rect.Height;
 		Settings.Fences.Add(model);
 		var window = OpenWindow(model);
 		SaveSoon();
@@ -338,22 +370,51 @@ internal sealed class FenceManager
 			return;
 		}
 		_hidden = hidden;
-		foreach (var window in _windows)
-		{
-			if (hidden)
-			{
-				window.Hide();
-			}
-			else
-			{
-				window.Show();
-				window.PlaceAboveDesktop();
-			}
-		}
+		// 先切换桌面图标（异步，立即生效），再让分区淡入淡出，两者同时开始
 		if (!DesktopHost.IconsHiddenBySystem())
 		{
 			DesktopHost.SetIconsVisible(!hidden);
 		}
+		foreach (var window in _windows)
+		{
+			if (hidden)
+			{
+				window.FadeOut();
+			}
+			else
+			{
+				window.FadeIn();
+			}
+		}
+	}
+
+	/// <summary>
+	/// 执行来自桌面右键菜单、托盘或第二个实例的命令。
+	/// </summary>
+	public void ExecuteCommand(AppCommand command)
+	{
+		Action action = command switch
+		{
+			AppCommand.ShowSettings => ShowSettings,
+			AppCommand.NewFence => () => CreateFenceAtCursor(),
+			AppCommand.Organize => Organizer.OrganizeInteractive,
+			AppCommand.ToggleHidden => () => SetHidden(!_hidden),
+		};
+		action();
+	}
+
+	/// <summary>
+	/// 在鼠标位置新建分区（桌面右键菜单「新建分区」）。
+	/// </summary>
+	FenceWindow CreateFenceAtCursor()
+	{
+		var cursor = NativeMethods.GetCursorPos();
+		var (work, scale) = GetMonitorWorkArea(MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST));
+		int width = (int)(DefaultWidthDip * scale);
+		int height = (int)(DefaultHeightDip * scale);
+		int left = Math.Clamp(cursor.X, work.Left, Math.Max(work.Left, work.Right - width));
+		int top = Math.Clamp(cursor.Y, work.Top, Math.Max(work.Top, work.Bottom - height));
+		return CreateFence(editTitle: true, bounds: new RECT(left, top, left + width, top + height));
 	}
 
 	public void SetAllLocked(bool locked)
@@ -366,19 +427,74 @@ internal sealed class FenceManager
 		SaveSoon();
 	}
 
-	public void ApplyDoubleClickSetting()
+	/// <summary>
+	/// 「双击桌面隐藏」与「右键画框新建分区」共用一个鼠标钩子，两者都关闭时卸载钩子。
+	/// </summary>
+	public void ApplyMouseHookSettings()
 	{
-		if (!Settings.DoubleClickToHide)
+		if (!Settings.DoubleClickToHide && !Settings.DrawToCreate)
 		{
-			_doubleClick?.Stop();
+			_mouse?.Stop();
 			return;
 		}
-		if (_doubleClick == null)
+		if (_mouse == null)
 		{
-			_doubleClick = new DesktopDoubleClickWatcher(_dispatcher);
-			_doubleClick.DoubleClicked += () => SetHidden(!_hidden);
+			_mouse = new DesktopMouseWatcher(_dispatcher);
+			_mouse.DoubleClicked += () => SetHidden(!_hidden);
+			_mouse.DrawUpdated += rect =>
+			{
+				_drawFrame ??= new DrawFrameWindow();
+				_drawFrame.ShowAt(rect);
+			};
+			_mouse.DrawFinished += OnDrawFinished;
 		}
-		_doubleClick.Start();
+		_mouse.DoubleClickEnabled = Settings.DoubleClickToHide;
+		_mouse.DrawEnabled = Settings.DrawToCreate;
+		_mouse.Start();
+	}
+
+	void OnDrawFinished(RECT rect)
+	{
+		_drawFrame?.Hide();
+		// 空矩形表示画得太小、按普通右键处理了
+		if (rect.Width == 0 || rect.Height == 0)
+		{
+			return;
+		}
+		var (_, scale) = GetMonitorWorkArea(MonitorFromRect(ref rect, MONITOR_DEFAULTTONEAREST));
+		int minWidth = (int)(160 * scale);
+		int minHeight = (int)(100 * scale);
+		var bounds = new RECT(rect.Left, rect.Top, rect.Left + Math.Max(rect.Width, minWidth), rect.Top + Math.Max(rect.Height, minHeight));
+		CreateFence(editTitle: true, bounds: bounds);
+	}
+
+	/// <summary>
+	/// 快捷方式属性「兼容性」页的「以管理员身份运行此程序」记在这两个键里（当前用户 / 所有用户），
+	/// 改动不会触碰快捷方式文件，要单独监视才能及时更新图标上的管理员盾牌。
+	/// </summary>
+	void WatchElevationSettings()
+	{
+		const string layers = @"Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers";
+		var keys = new[] { Registry.CurrentUser.CreateSubKey(layers, false), Registry.LocalMachine.OpenSubKey(layers) };
+		foreach (var key in keys.OfType<RegistryKey>())
+		{
+			var watcher = new RegistryWatcher(key);
+			watcher.Changed += () => _dispatcher.BeginInvoke(() =>
+			{
+				_iconReloadTimer.Stop();
+				_iconReloadTimer.Start();
+			});
+			_registryWatchers.Add(watcher);
+		}
+	}
+
+	void ReloadIcons()
+	{
+		ShellIconLoader.ClearCache();
+		foreach (var window in _windows)
+		{
+			window.ReloadIcons();
+		}
 	}
 
 	public void RefreshAllAppearance()
@@ -597,11 +713,34 @@ internal sealed class FenceManager
 		}
 	}
 
+	/// <summary>
+	/// 顶层窗口层级变化时立即响应：「显示桌面」把桌面提到最前的那一刻就把分区放回其上，
+	/// 比等前台切换事件更早，避免能看到分区"后弹出来"。事件的 hwnd 为桌面根窗口时才是顶层窗口的层级变化。
+	/// </summary>
+	void OnZOrderChanged(IntPtr hook, uint eventType, IntPtr hwnd, int objectId, int childId, uint threadId, uint time)
+	{
+		if (hwnd != _rootWindow)
+		{
+			return;
+		}
+		try
+		{
+			KeepFencesAboveDesktop();
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("处理层级变化失败", ex);
+		}
+	}
+
 	void KeepFencesAboveDesktop()
 	{
-		foreach (var window in _windows.Where(w => w.IsVisible))
+		foreach (var window in _windows)
 		{
-			window.PlaceAboveDesktop();
+			if (window.IsVisible && DesktopHost.GetInsertAfterAboveDesktop(window.Handle) != null)
+			{
+				window.PlaceAboveDesktop();
+			}
 		}
 	}
 

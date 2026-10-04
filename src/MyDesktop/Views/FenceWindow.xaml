@@ -185,8 +185,27 @@
 							Fill="#333B82F6"
 							Stroke="#CC60A5FA"
 							StrokeThickness="1" />
+					<!-- 拖动调整顺序时的插入位置 -->
+					<Rectangle x:Name="InsertMarker"
+							Visibility="Collapsed"
+							RadiusX="1.5"
+							RadiusY="1.5"
+							Fill="#FF60A5FA" />
 				</Canvas>
 			</Grid>
+
+			<!-- 调整大小时显示能容纳的列数 × 行数 -->
+			<Border x:Name="GridHint"
+					Grid.RowSpan="2"
+					HorizontalAlignment="Center"
+					VerticalAlignment="Center"
+					Padding="14,4"
+					CornerRadius="6"
+					Background="#B3000000"
+					Visibility="Collapsed"
+					IsHitTestVisible="False">
+				<TextBlock x:Name="GridHintText" FontSize="22" FontWeight="SemiBold" Foreground="White" />
+			</Border>
 		</Grid>
 	</Border>
 </Window>

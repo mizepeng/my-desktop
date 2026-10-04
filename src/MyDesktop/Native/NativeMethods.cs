@@ -1,10 +1,11 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 
 namespace MyDesktop.Native;
 
 /// <summary>
-/// Win32 API 声明（user32 / shell32 / gdi32 / shcore / comdlg32 / uxtheme）。
+/// Win32 API 声明（user32 / shell32 / gdi32 / shcore / comdlg32 / uxtheme / advapi32 / ole32）。
 /// </summary>
 internal static class NativeMethods
 {
@@ -14,10 +15,13 @@ internal static class NativeMethods
 
 	public const long WS_MINIMIZEBOX = 0x00020000L;
 	public const long WS_MAXIMIZEBOX = 0x00010000L;
+	public const long WS_EX_TRANSPARENT = 0x00000020L;
 	public const long WS_EX_TOOLWINDOW = 0x00000080L;
 	public const long WS_EX_APPWINDOW = 0x00040000L;
+	public const long WS_EX_NOACTIVATE = 0x08000000L;
 
 	public static readonly IntPtr HWND_BOTTOM = new(1);
+	public static readonly IntPtr HWND_TOPMOST = new(-1);
 	public static readonly IntPtr HWND_BROADCAST = new(0xFFFF);
 
 	public const uint SWP_NOSIZE = 0x0001;
@@ -39,8 +43,10 @@ internal static class NativeMethods
 	public const int WM_SYSCOMMAND = 0x0112;
 	public const int WM_INITMENUPOPUP = 0x0117;
 	public const int WM_MENUCHAR = 0x0120;
+	public const int WM_MOUSEMOVE = 0x0200;
 	public const int WM_LBUTTONDOWN = 0x0201;
 	public const int WM_LBUTTONUP = 0x0202;
+	public const int WM_RBUTTONDOWN = 0x0204;
 	public const int WM_RBUTTONUP = 0x0205;
 	public const int WM_SIZING = 0x0214;
 	public const int WM_MOVING = 0x0216;
@@ -75,7 +81,16 @@ internal static class NativeMethods
 	public const int SM_CXDOUBLECLK = 36;
 	public const int SM_CYDOUBLECLK = 37;
 	public const int SM_CXSMICON = 49;
+	public const int SM_CXDRAG = 68;
+	public const int SM_CYDRAG = 69;
 	public const int SM_CXMENUCHECK = 71;
+
+	public const uint LLMHF_INJECTED = 0x01;
+	public const uint INPUT_MOUSE = 0;
+	public const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
+	public const uint MOUSEEVENTF_RIGHTUP = 0x0010;
+	public const int ASFW_ANY = -1;
+	public const int DWMWA_CLOAKED = 14;
 
 	public const uint MONITOR_DEFAULTTONULL = 0;
 	public const uint MONITOR_DEFAULTTOPRIMARY = 1;
@@ -88,6 +103,7 @@ internal static class NativeMethods
 	public const uint GW_HWNDPREV = 3;
 
 	public const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+	public const uint EVENT_OBJECT_REORDER = 0x8004;
 	public const uint WINEVENT_OUTOFCONTEXT = 0x0000;
 	public const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
 
@@ -156,6 +172,21 @@ internal static class NativeMethods
 
 	[DllImport("user32.dll")]
 	public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+
+	[DllImport("user32.dll")]
+	public static extern IntPtr GetTopWindow(IntPtr hwnd);
+
+	[DllImport("user32.dll")]
+	public static extern IntPtr GetDesktopWindow();
+
+	[DllImport("user32.dll")]
+	public static extern bool AllowSetForegroundWindow(int processId);
+
+	[DllImport("user32.dll", SetLastError = true)]
+	public static extern uint SendInput(uint count, INPUT[] inputs, int size);
+
+	[DllImport("dwmapi.dll")]
+	public static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
 
 	[DllImport("user32.dll")]
 	public static extern bool IsWindow(IntPtr hwnd);
@@ -304,8 +335,27 @@ internal static class NativeMethods
 	[DllImport("shell32.dll")]
 	public static extern int SHDoDragDrop(IntPtr hwnd, IntPtr dataObject, IntPtr dropSource, uint okEffects, out uint effect);
 
+	[DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+	public static extern int SHGetStockIconInfo(uint stockIconId, uint flags, ref SHSTOCKICONINFO info);
+
+	[DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+	public static extern int SHDefExtractIcon(string iconFile, int index, uint flags, out IntPtr largeIcon, IntPtr smallIcon, uint iconSize);
+
 	[DllImport("shlwapi.dll", CharSet = CharSet.Unicode)]
 	public static extern int StrCmpLogicalW(string a, string b);
+
+	#endregion
+
+	#region ole32
+
+	public const uint CLSCTX_LOCAL_SERVER = 0x4;
+	public const uint REGCLS_MULTIPLEUSE = 0x1;
+
+	[DllImport("ole32.dll")]
+	public static extern int CoRegisterClassObject(ref Guid clsid, [MarshalAs(UnmanagedType.IUnknown)] object classFactory, uint context, uint flags, out uint cookie);
+
+	[DllImport("ole32.dll")]
+	public static extern int CoRevokeClassObject(uint cookie);
 
 	#endregion
 
@@ -326,6 +376,15 @@ internal static class NativeMethods
 	/// </summary>
 	[DllImport("uxtheme.dll", EntryPoint = "#136")]
 	public static extern void FlushMenuThemes();
+
+	#endregion
+
+	#region advapi32
+
+	public const uint REG_NOTIFY_CHANGE_LAST_SET = 0x00000004;
+
+	[DllImport("advapi32.dll")]
+	public static extern int RegNotifyChangeKeyValue(SafeRegistryHandle key, bool watchSubtree, uint filter, SafeWaitHandle changedEvent, bool asynchronous);
 
 	#endregion
 
@@ -443,6 +502,27 @@ internal struct MSLLHOOKSTRUCT
 	public IntPtr dwExtraInfo;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+internal struct MOUSEINPUT
+{
+	public int dx;
+	public int dy;
+	public uint mouseData;
+	public uint dwFlags;
+	public uint time;
+	public IntPtr dwExtraInfo;
+}
+
+/// <summary>
+/// 只用到鼠标输入；联合体中 MOUSEINPUT 最大，布局与原生 INPUT 一致。
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct INPUT
+{
+	public uint type;
+	public MOUSEINPUT mi;
+}
+
 [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
 internal struct MENUITEMINFO
 {
@@ -511,6 +591,26 @@ internal struct SHFILEINFO
 	public string szDisplayName;
 	[MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
 	public string szTypeName;
+}
+
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+internal struct SHSTOCKICONINFO
+{
+	public uint cbSize;
+	public IntPtr hIcon;
+	public int iSysImageIndex;
+	public int iIcon;
+	[MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+	public string szPath;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct SHDRAGIMAGE
+{
+	public SIZE sizeDragImage;
+	public POINT ptOffset;
+	public IntPtr hbmpDragImage;
+	public uint crColorKey;
 }
 
 [StructLayout(LayoutKind.Sequential)]

@@ -127,6 +127,100 @@ internal interface IShellItemImageFactory
 }
 
 [ComImport]
+[Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IShellItem
+{
+	void BindToHandler(IntPtr bindContext, ref Guid handler, ref Guid iid, out IntPtr result);
+
+	void GetParent(out IShellItem parent);
+
+	void GetDisplayName(uint type, [MarshalAs(UnmanagedType.LPWStr)] out string name);
+}
+
+[ComImport]
+[Guid("B63EA76D-1F85-456F-A19C-48159EFA858B")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IShellItemArray
+{
+	void BindToHandler(IntPtr bindContext, ref Guid handler, ref Guid iid, out IntPtr result);
+
+	void GetPropertyStore(int flags, ref Guid iid, out IntPtr result);
+
+	void GetPropertyDescriptionList(IntPtr keyType, ref Guid iid, out IntPtr result);
+
+	void GetAttributes(int flags, uint mask, out uint attributes);
+
+	void GetCount(out uint count);
+
+	void GetItemAt(uint index, out IShellItem item);
+}
+
+/// <summary>
+/// Windows 11 右键菜单扩展的命令接口；参数中的 IShellItemArray 用指针接收，按需再转换。
+/// </summary>
+[ComImport]
+[Guid("A08CE4D0-FA25-44AB-B57C-C7B1C323E0B9")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IExplorerCommand
+{
+	[PreserveSig]
+	int GetTitle(IntPtr items, out IntPtr name);
+
+	[PreserveSig]
+	int GetIcon(IntPtr items, out IntPtr icon);
+
+	[PreserveSig]
+	int GetToolTip(IntPtr items, out IntPtr infoTip);
+
+	[PreserveSig]
+	int GetCanonicalName(out Guid name);
+
+	[PreserveSig]
+	int GetState(IntPtr items, [MarshalAs(UnmanagedType.Bool)] bool okToBeSlow, out uint state);
+
+	[PreserveSig]
+	int Invoke(IntPtr items, IntPtr bindContext);
+
+	[PreserveSig]
+	int GetFlags(out uint flags);
+
+	[PreserveSig]
+	int EnumSubCommands(out IntPtr enumerator);
+}
+
+[ComImport]
+[Guid("A88826F8-186F-4987-AADE-EA0CEF8FBFE8")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IEnumExplorerCommand
+{
+	/// <param name="fetched">可选参数，调用方可能传空指针，所以用指针接收。</param>
+	[PreserveSig]
+	int Next(uint count, IntPtr commands, IntPtr fetched);
+
+	[PreserveSig]
+	int Skip(uint count);
+
+	[PreserveSig]
+	int Reset();
+
+	[PreserveSig]
+	int Clone(out IntPtr enumerator);
+}
+
+[ComImport]
+[Guid("00000001-0000-0000-C000-000000000046")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IClassFactory
+{
+	[PreserveSig]
+	int CreateInstance(IntPtr outer, ref Guid iid, out IntPtr result);
+
+	[PreserveSig]
+	int LockServer([MarshalAs(UnmanagedType.Bool)] bool doLock);
+}
+
+[ComImport]
 [Guid("4657278B-411B-11D2-839A-00C04FD918D0")]
 [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 internal interface IDropTargetHelper
@@ -145,6 +239,30 @@ internal interface IDropTargetHelper
 
 	[PreserveSig]
 	int Show([MarshalAs(UnmanagedType.Bool)] bool show);
+}
+
+[ComImport]
+[Guid("DE5BF786-477A-11D2-839D-00C04FD918D0")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IDragSourceHelper
+{
+	[PreserveSig]
+	int InitializeFromBitmap(ref SHDRAGIMAGE dragImage, IntPtr dataObject);
+
+	[PreserveSig]
+	int InitializeFromWindow(IntPtr hwnd, ref POINT point, IntPtr dataObject);
+}
+
+[ComImport]
+[Guid("000214FA-0000-0000-C000-000000000046")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IExtractIconW
+{
+	[PreserveSig]
+	int GetIconLocation(uint flags, [Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder iconFile, int maxIconFile, out int index, out uint resultFlags);
+
+	[PreserveSig]
+	int Extract([MarshalAs(UnmanagedType.LPWStr)] string iconFile, uint index, out IntPtr largeIcon, out IntPtr smallIcon, uint iconSizes);
 }
 
 /// <summary>

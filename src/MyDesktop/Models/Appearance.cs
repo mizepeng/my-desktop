@@ -58,6 +58,7 @@ public static class Appearance
 			SortField.Type => "类型",
 			SortField.Size => "大小",
 			SortField.Modified => "修改日期",
+			SortField.Custom => "自定义（拖动调整）",
 		};
 	}
 

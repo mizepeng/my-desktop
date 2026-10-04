@@ -10,6 +10,8 @@
 		<AssemblyName>MyDesktop</AssemblyName>
 		<ApplicationManifest>app.manifest</ApplicationManifest>
 		<ApplicationIcon>Assets\app.ico</ApplicationIcon>
+		<!-- 自定义入口：右键菜单服务进程不加载 WPF -->
+		<StartupObject>MyDesktop.Program</StartupObject>
 		<Product>MyDesktop 桌面分区</Product>
 		<Description>Windows 11 桌面分区整理工具</Description>
 		<Version>1.0.0</Version>
@@ -28,5 +30,17 @@
 		<Resource Include="Assets\app.ico" />
 		<Resource Include="Assets\app.png" />
 	</ItemGroup>
+
+	<!-- 生成并签名桌面右键菜单扩展包，放在 exe 旁边；没有签名证书时脚本只给出提示（见 README），输入未变化时跳过 -->
+	<Target Name="PackDesktopMenu" AfterTargets="Build"
+			Inputs="ShellExtension\AppxManifest.xml;ShellExtension\Pack-DesktopMenu.ps1;Assets\app.png"
+			Outputs="$(OutDir)MyDesktop.DesktopMenu.msix">
+		<Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\ShellExtension\Pack-DesktopMenu.ps1&quot; -OutFile &quot;$(OutDir)MyDesktop.DesktopMenu.msix&quot; -Version $(Version)"
+				ContinueOnError="true" />
+	</Target>
+
+	<Target Name="PublishDesktopMenu" AfterTargets="Publish" Condition="Exists('$(OutDir)MyDesktop.DesktopMenu.msix')">
+		<Copy SourceFiles="$(OutDir)MyDesktop.DesktopMenu.msix" DestinationFolder="$(PublishDir)" />
+	</Target>
 
 </Project>

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -17,6 +18,11 @@ internal static class ShellIconLoader
 {
 	const uint SIIGBF_RESIZETOFIT = 0x00;
 	const uint SIIGBF_ICONONLY = 0x04;
+	const uint GIL_FORSHELL = 0x0002;
+	const uint GIL_CHECKSHIELD = 0x0200;
+	const uint GIL_SHIELD = 0x0200;
+	const uint SIID_SHIELD = 77;
+	const uint SHGSI_ICONLOCATION = 0;
 	const int WorkerCount = 2;
 	const int MaxCacheEntries = 3000;
 
@@ -24,6 +30,7 @@ internal static class ShellIconLoader
 
 	static readonly BlockingCollection<LoadRequest> Queue = new();
 	static readonly ConcurrentDictionary<string, BitmapSource> Cache = new(StringComparer.OrdinalIgnoreCase);
+	static readonly ConcurrentDictionary<int, BitmapSource?> Shields = new();
 
 	static ShellIconLoader()
 	{
@@ -49,6 +56,11 @@ internal static class ShellIconLoader
 		}
 		Queue.Add(new LoadRequest(path, pixelSize, key, callback, Dispatcher.CurrentDispatcher));
 	}
+
+	/// <summary>
+	/// 缓存只按文件修改时间失效；文件没变而角标状态变了（如兼容性里的「以管理员身份运行」）时整体清空。
+	/// </summary>
+	public static void ClearCache() => Cache.Clear();
 
 	static void Work()
 	{
@@ -97,20 +109,107 @@ internal static class ShellIconLoader
 					return null;
 				}
 			}
+			BitmapSource image;
 			try
 			{
-				return ToBitmapSource(bitmap);
+				image = ToBitmapSource(bitmap);
 			}
 			finally
 			{
 				DeleteObject(bitmap);
 			}
+			return NeedsShield(path) ? StampShield(image) : image;
 		}
 		finally
 		{
 			Marshal.ReleaseComObject(factory);
 			Marshal.Release(ptr);
 		}
+	}
+
+	/// <summary>
+	/// 资源管理器按 IExtractIcon 返回的 GIL_SHIELD 决定是否叠加管理员盾牌
+	/// （需要提权的程序、勾选了「以管理员身份运行」的快捷方式）。
+	/// </summary>
+	static bool NeedsShield(string path)
+	{
+		try
+		{
+			using var items = ShellItemSet.Create([path]);
+			if (items == null)
+			{
+				return false;
+			}
+			var ptr = items.GetUIObject(IntPtr.Zero, typeof(IExtractIconW).GUID);
+			var extract = (IExtractIconW)Marshal.GetObjectForIUnknown(ptr);
+			try
+			{
+				var location = new StringBuilder(260);
+				return extract.GetIconLocation(GIL_FORSHELL | GIL_CHECKSHIELD, location, location.Capacity, out _, out var flags) == 0
+						&& (flags & GIL_SHIELD) != 0;
+			}
+			finally
+			{
+				Marshal.ReleaseComObject(extract);
+				Marshal.Release(ptr);
+			}
+		}
+		catch (Exception ex)
+		{
+			Log.Warn($"检查管理员盾牌失败：{path}", ex);
+			return false;
+		}
+	}
+
+	/// <summary>
+	/// 与资源管理器相同：盾牌边长为图标的一半，贴图标右下角。
+	/// </summary>
+	static BitmapSource StampShield(BitmapSource image)
+	{
+		int width = image.PixelWidth;
+		int height = image.PixelHeight;
+		int shieldSize = Math.Min(width, height) / 2;
+		if (LoadShield(shieldSize) is not BitmapSource shield)
+		{
+			return image;
+		}
+		var visual = new DrawingVisual();
+		using (var context = visual.RenderOpen())
+		{
+			context.DrawImage(image, new Rect(0, 0, width, height));
+			context.DrawImage(shield, new Rect(width - shieldSize, height - shieldSize, shieldSize, shieldSize));
+		}
+		var result = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+		result.Render(visual);
+		result.Freeze();
+		return result;
+	}
+
+	/// <summary>
+	/// 按目标尺寸直接从系统资源取盾牌图标（避免缩放发糊），每种尺寸只取一次。
+	/// </summary>
+	static BitmapSource? LoadShield(int size)
+	{
+		return Shields.GetOrAdd(size, s =>
+		{
+			var info = new SHSTOCKICONINFO { cbSize = (uint)Marshal.SizeOf<SHSTOCKICONINFO>() };
+			if (s <= 0
+					|| SHGetStockIconInfo(SIID_SHIELD, SHGSI_ICONLOCATION, ref info) != 0
+					|| SHDefExtractIcon(info.szPath, info.iIcon, 0, out var icon, IntPtr.Zero, (uint)s) != 0)
+			{
+				return null;
+			}
+			try
+			{
+				var source = Imaging.CreateBitmapSourceFromHIcon(icon, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+				source.Freeze();
+				return source;
+			}
+			finally
+			{
+				DestroyIcon(icon);
+			}
+		});
 	}
 
 	/// <summary>
@@ -138,16 +237,17 @@ internal static class ShellIconLoader
 			Marshal.Copy(section.dsBm.bmBits + sourceRow * section.dsBm.bmWidthBytes, pixels, y * stride, stride);
 		}
 
-		// 部分缩略图不带透明通道（alpha 全为 0），按不透明处理，否则会显示成全透明
+		// Shell 返回的图标通常是非预乘 alpha（存在颜色值大于 alpha 的像素），按预乘解读会让半透明边缘发白；
+		// 预乘数据不可能出现这种像素，据此逐张判断格式
 		bool hasAlpha = false;
-		for (int i = 3; i < pixels.Length; i += 4)
+		bool straightAlpha = false;
+		for (int i = 0; i < pixels.Length && !(hasAlpha && straightAlpha); i += 4)
 		{
-			if (pixels[i] != 0)
-			{
-				hasAlpha = true;
-				break;
-			}
+			byte alpha = pixels[i + 3];
+			hasAlpha |= alpha != 0;
+			straightAlpha |= pixels[i] > alpha || pixels[i + 1] > alpha || pixels[i + 2] > alpha;
 		}
+		// 部分缩略图不带透明通道（alpha 全为 0），按不透明处理，否则会显示成全透明
 		if (!hasAlpha)
 		{
 			for (int i = 3; i < pixels.Length; i += 4)
@@ -156,7 +256,8 @@ internal static class ShellIconLoader
 			}
 		}
 
-		var source = BitmapSource.Create(width, height, 96, 96, PixelFormats.Pbgra32, null, pixels, stride);
+		var format = !hasAlpha || straightAlpha ? PixelFormats.Bgra32 : PixelFormats.Pbgra32;
+		var source = BitmapSource.Create(width, height, 96, 96, format, null, pixels, stride);
 		source.Freeze();
 		return source;
 	}

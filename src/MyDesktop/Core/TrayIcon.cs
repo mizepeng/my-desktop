@@ -16,20 +16,20 @@ internal sealed class TrayIcon : IDisposable
 
 	readonly HwndSource _window;
 	readonly int _taskbarCreatedMessage;
-	readonly int _activateMessage;
+	readonly int _commandMessage;
 	readonly string _tooltip;
 	IntPtr _icon;
 
 	public event Action? LeftClick;
 	public event Action<POINT>? RightClick;
 	public event Action? TaskbarCreated;
-	public event Action? ActivateRequested;
+	public event Action<int>? CommandReceived;
 	public event Action? DisplayChanged;
 	public event Action? ThemeChanged;
 
 	public IntPtr Handle => _window.Handle;
 
-	public TrayIcon(string tooltip, string activateMessageName)
+	public TrayIcon(string tooltip, string commandMessageName)
 	{
 		_tooltip = tooltip;
 		// 必须是顶层窗口（不能用 message-only 窗口），否则收不到 TaskbarCreated 等广播
@@ -43,10 +43,10 @@ internal sealed class TrayIcon : IDisposable
 		_window = new HwndSource(parameters);
 		_window.AddHook(WndProc);
 		_taskbarCreatedMessage = RegisterWindowMessage("TaskbarCreated");
-		_activateMessage = RegisterWindowMessage(activateMessageName);
+		_commandMessage = RegisterWindowMessage(commandMessageName);
 		// 以管理员身份运行时，放行来自普通权限进程（Explorer、第二个实例）的广播
 		ChangeWindowMessageFilterEx(Handle, _taskbarCreatedMessage, MSGFLT_ALLOW, IntPtr.Zero);
-		ChangeWindowMessageFilterEx(Handle, _activateMessage, MSGFLT_ALLOW, IntPtr.Zero);
+		ChangeWindowMessageFilterEx(Handle, _commandMessage, MSGFLT_ALLOW, IntPtr.Zero);
 		_icon = LoadAppIcon();
 		Add();
 	}
@@ -115,9 +115,9 @@ internal sealed class TrayIcon : IDisposable
 			Add();
 			TaskbarCreated?.Invoke();
 		}
-		else if (msg == _activateMessage)
+		else if (msg == _commandMessage)
 		{
-			ActivateRequested?.Invoke();
+			CommandReceived?.Invoke((int)wParam);
 			handled = true;
 		}
 		else if (msg == WM_DISPLAYCHANGE)

@@ -81,23 +81,53 @@ internal static class ShellFileOps
 	}
 
 	/// <summary>
-	/// 以 Shell 数据对象发起拖放，拖到资源管理器、桌面或其他程序时行为与资源管理器一致（含拖动预览图）。
+	/// 以 Shell 数据对象发起拖放，拖到资源管理器、桌面或其他程序时行为与资源管理器一致。
 	/// </summary>
-	public static void DoDragDrop(IntPtr hwnd, IReadOnlyList<string> paths)
+	/// <param name="image">拖动预览图，位图的所有权随之转移；为 null 时由系统按大图标生成默认预览图。</param>
+	public static void DoDragDrop(IntPtr hwnd, IReadOnlyList<string> paths, SHDRAGIMAGE? image)
 	{
-		using var items = ShellItemSet.Create(paths);
-		if (items == null)
-		{
-			return;
-		}
-		var dataObject = items.GetUIObject(hwnd, IID_IDataObject);
+		var bitmap = image?.hbmpDragImage ?? IntPtr.Zero;
 		try
 		{
-			SHDoDragDrop(hwnd, dataObject, IntPtr.Zero, DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, out _);
+			using var items = ShellItemSet.Create(paths);
+			if (items == null)
+			{
+				return;
+			}
+			var dataObject = items.GetUIObject(hwnd, IID_IDataObject);
+			try
+			{
+				// 预先放入数据对象的预览图会被 SHDoDragDrop 沿用，成功后位图归 IDragSourceHelper 所有
+				if (image is SHDRAGIMAGE dragImage && SetDragImage(dataObject, dragImage))
+				{
+					bitmap = IntPtr.Zero;
+				}
+				SHDoDragDrop(hwnd, dataObject, IntPtr.Zero, DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, out _);
+			}
+			finally
+			{
+				Marshal.Release(dataObject);
+			}
 		}
 		finally
 		{
-			Marshal.Release(dataObject);
+			if (bitmap != IntPtr.Zero)
+			{
+				DeleteObject(bitmap);
+			}
+		}
+	}
+
+	static bool SetDragImage(IntPtr dataObject, SHDRAGIMAGE image)
+	{
+		var helper = (IDragSourceHelper)new DragDropHelper();
+		try
+		{
+			return helper.InitializeFromBitmap(ref image, dataObject) == 0;
+		}
+		finally
+		{
+			Marshal.ReleaseComObject(helper);
 		}
 	}
 

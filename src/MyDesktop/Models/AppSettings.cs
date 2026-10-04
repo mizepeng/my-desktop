@@ -6,6 +6,10 @@ public enum SortField
 	Type,
 	Size,
 	Modified,
+	/// <summary>
+	/// 用户拖动图标调整的顺序。
+	/// </summary>
+	Custom,
 }
 
 public enum IconSizeMode
@@ -42,6 +46,21 @@ public sealed class AppSettings
 	/// 吸附到相邻分区时两者之间的间距（DIP），0 表示紧贴。
 	/// </summary>
 	public double SnapGap { get; set; } = 6;
+
+	/// <summary>
+	/// 调整分区大小时按图标的整行、整列吸附。
+	/// </summary>
+	public bool SnapToGrid { get; set; } = true;
+
+	/// <summary>
+	/// 在桌面空白处按住右键拖动画框新建分区。
+	/// </summary>
+	public bool DrawToCreate { get; set; } = true;
+
+	/// <summary>
+	/// 在桌面右键菜单中显示 MyDesktop 子菜单。
+	/// </summary>
+	public bool DesktopContextMenu { get; set; } = true;
 
 	public bool ShowHiddenFiles { get; set; }
 
@@ -107,6 +126,11 @@ public sealed class FenceSettings
 	public SortField SortBy { get; set; } = SortField.Name;
 
 	public bool SortDescending { get; set; }
+
+	/// <summary>
+	/// 自定义排序时的文件名顺序；不在列表中的新文件按名称排在最后。
+	/// </summary>
+	public List<string> CustomOrder { get; set; } = [];
 }
 
 /// <summary>

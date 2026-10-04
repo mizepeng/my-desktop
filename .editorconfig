@@ -20,6 +20,10 @@ indent_size = 2
 [*.md]
 trim_trailing_whitespace = false
 
+# Windows PowerShell 5.1 按系统代码页读取无 BOM 的脚本，含中文时必须带 BOM
+[*.ps1]
+charset = utf-8-bom
+
 [*.cs]
 csharp_new_line_before_open_brace = all
 csharp_style_namespace_declarations = file_scoped:suggestion

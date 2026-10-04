@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+	桌面右键菜单扩展包（外部位置包，不含程序文件，只为 MyDesktop.exe 提供包身份并注册菜单扩展）。
+	__VERSION__ 由 Pack-DesktopMenu.ps1 替换为程序版本；CLSID 与 DesktopMenuServer.Clsid 保持一致。
+-->
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+		xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+		xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+		xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+		xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
+		xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+		xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+		IgnorableNamespaces="uap uap10 desktop4 desktop5 com rescap">
+	<Identity Name="MyDesktop.DesktopMenu" Publisher="CN=MyDesktop" Version="__VERSION__" ProcessorArchitecture="neutral" />
+	<Properties>
+		<DisplayName>MyDesktop 桌面右键菜单</DisplayName>
+		<PublisherDisplayName>MyDesktop</PublisherDisplayName>
+		<Logo>Assets\logo.png</Logo>
+		<uap10:AllowExternalContent>true</uap10:AllowExternalContent>
+	</Properties>
+	<Resources>
+		<Resource Language="zh-CN" />
+	</Resources>
+	<Dependencies>
+		<TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26300.0" />
+	</Dependencies>
+	<Capabilities>
+		<rescap:Capability Name="runFullTrust" />
+	</Capabilities>
+	<Applications>
+		<Application Id="MyDesktop" Executable="MyDesktop.exe" uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="win32App">
+			<uap:VisualElements DisplayName="MyDesktop" Description="MyDesktop 桌面右键菜单扩展" BackgroundColor="transparent"
+					Square150x150Logo="Assets\logo.png" Square44x44Logo="Assets\logo.png" AppListEntry="none" />
+			<Extensions>
+				<com:Extension Category="windows.comServer">
+					<com:ComServer>
+						<com:ExeServer Executable="MyDesktop.exe" Arguments="--shell-extension" DisplayName="MyDesktop 桌面右键菜单">
+							<com:Class Id="54873389-EF3D-41F1-8659-877D58CE2CBD" DisplayName="MyDesktop 桌面右键菜单" />
+						</com:ExeServer>
+					</com:ComServer>
+				</com:Extension>
+				<!-- 桌面空白处属于目录背景；文件夹空白处右键时由 DesktopMenuServer 隐藏菜单项 -->
+				<desktop4:Extension Category="windows.fileExplorerContextMenus">
+					<desktop4:FileExplorerContextMenus>
+						<desktop5:ItemType Type="Directory\Background">
+							<desktop5:Verb Id="MyDesktop" Clsid="54873389-EF3D-41F1-8659-877D58CE2CBD" />
+						</desktop5:ItemType>
+					</desktop4:FileExplorerContextMenus>
+				</desktop4:Extension>
+			</Extensions>
+		</Application>
+	</Applications>
+</Package>

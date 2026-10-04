@@ -17,10 +17,13 @@ internal partial class SettingsWindow : Window
 	[
 		"· 把桌面上的文件拖进分区即可收纳，从分区拖回桌面即可还原",
 		"· 拖入时按住 Ctrl 为复制，按住 Alt 为创建快捷方式",
-		"· 拖动标题栏移动分区、拖动边缘调整大小，双击标题栏卷起/展开",
+		"· 在分区内拖动图标可以自由调整顺序",
+		"· 在桌面空白处按住右键拖出一个框，松开即在该位置新建分区",
+		"· 拖动标题栏移动分区、拖动边缘调整大小（会按整行整列吸附），双击标题栏卷起/展开",
 		"· 右键分区空白处或点击标题栏的「⋯」打开分区菜单，可修改颜色、排序、视图等",
 		"· 右键文件弹出系统右键菜单；F2 重命名，Delete 删除到回收站",
 		"· 双击桌面空白处可以一键隐藏/显示所有图标和分区",
+		"· 桌面空白处的右键菜单里有 MyDesktop 子菜单",
 	];
 
 	readonly FenceManager _manager;
@@ -43,8 +46,11 @@ internal partial class SettingsWindow : Window
 		_loading = true;
 		AutoStartBox.IsChecked = AutoStart.IsEnabled();
 		DoubleClickBox.IsChecked = Settings.DoubleClickToHide;
+		DrawToCreateBox.IsChecked = Settings.DrawToCreate;
+		DesktopMenuBox.IsChecked = Settings.DesktopContextMenu;
 		ExpandOnHoverBox.IsChecked = Settings.ExpandOnHover;
 		SnapBox.IsChecked = Settings.SnapToEdges;
+		SnapGridBox.IsChecked = Settings.SnapToGrid;
 		ShowHiddenBox.IsChecked = Settings.ShowHiddenFiles;
 		AutoOrganizeBox.IsChecked = Settings.AutoOrganize;
 		TextShadowBox.IsChecked = Settings.TextShadow;
@@ -110,14 +116,23 @@ internal partial class SettingsWindow : Window
 		bool textShadow = TextShadowBox.IsChecked == true;
 		bool hiddenChanged = Settings.ShowHiddenFiles != showHidden;
 		bool shadowChanged = Settings.TextShadow != textShadow;
+		bool desktopMenu = DesktopMenuBox.IsChecked == true;
+		bool desktopMenuChanged = Settings.DesktopContextMenu != desktopMenu;
 		Settings.DoubleClickToHide = DoubleClickBox.IsChecked == true;
+		Settings.DrawToCreate = DrawToCreateBox.IsChecked == true;
 		Settings.ExpandOnHover = ExpandOnHoverBox.IsChecked == true;
 		Settings.SnapToEdges = SnapBox.IsChecked == true;
+		Settings.SnapToGrid = SnapGridBox.IsChecked == true;
 		Settings.AutoOrganize = AutoOrganizeBox.IsChecked == true;
 		Settings.ShowHiddenFiles = showHidden;
 		Settings.TextShadow = textShadow;
-		_manager.ApplyDoubleClickSetting();
+		Settings.DesktopContextMenu = desktopMenu;
+		_manager.ApplyMouseHookSettings();
 		_manager.Organizer.ApplyWatchSetting();
+		if (desktopMenuChanged)
+		{
+			DesktopMenu.Apply(desktopMenu);
+		}
 		if (hiddenChanged)
 		{
 			_manager.RefreshAllItems();
