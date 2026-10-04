@@ -29,6 +29,40 @@ internal enum DesktopKey
 }
 
 /// <summary>
+/// 把高频的矩形更新合并成「界面线程有空时只处理最新的一个」。鼠标每秒可产生上千次移动，逐个排队的话界面线程
+/// 来不及重绘，积压的更新会让选框越来越落后于鼠标；同时用低于重绘的优先级，不挤占界面重绘。
+/// </summary>
+sealed class RectUpdateCoalescer(Dispatcher dispatcher, Action<RECT> handler)
+{
+	readonly object _gate = new();
+	RECT _latest;
+	bool _queued;
+
+	public void Post(RECT rect)
+	{
+		lock (_gate)
+		{
+			_latest = rect;
+			if (_queued)
+			{
+				return;
+			}
+			_queued = true;
+		}
+		dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+		{
+			RECT latest;
+			lock (_gate)
+			{
+				latest = _latest;
+				_queued = false;
+			}
+			handler(latest);
+		});
+	}
+}
+
+/// <summary>
 /// 低级鼠标钩子：检测「双击桌面空白处」以及「在桌面上按住右键拖动画框」；
 /// 接管桌面图标后还负责在空白处拖动框选，以及用低级键盘钩子拦下删除、改名等按键。
 /// 钩子运行在独立线程上，界面线程偶尔忙碌也不会拖慢全系统的鼠标响应。
@@ -43,6 +77,8 @@ internal sealed class DesktopMouseWatcher : IDisposable
 	readonly LowLevelMouseProc _callback;
 	readonly LowLevelKeyboardProc _keyboardCallback;
 	readonly Dispatcher _uiDispatcher;
+	readonly RectUpdateCoalescer _drawUpdates;
+	readonly RectUpdateCoalescer _bandUpdates;
 	Thread? _thread;
 	Dispatcher? _hookDispatcher;
 	IntPtr _hook;
@@ -70,6 +106,8 @@ internal sealed class DesktopMouseWatcher : IDisposable
 		// 委托必须由字段持有，否则被 GC 回收后钩子回调会崩溃
 		_callback = HookCallback;
 		_keyboardCallback = KeyboardCallback;
+		_drawUpdates = new RectUpdateCoalescer(uiDispatcher, rect => DrawUpdated?.Invoke(rect));
+		_bandUpdates = new RectUpdateCoalescer(uiDispatcher, rect => BandUpdated?.Invoke(rect));
 	}
 
 	public event Action? DoubleClicked;
@@ -94,6 +132,9 @@ internal sealed class DesktopMouseWatcher : IDisposable
 	/// </summary>
 	public event Action<RECT>? BandUpdated;
 
+	/// <summary>
+	/// 框选结束，在界面线程上触发；与选框更新同一优先级排队，不会跑到最后一次更新前面。
+	/// </summary>
 	public event Action? BandFinished;
 
 	/// <summary>
@@ -345,7 +386,7 @@ internal sealed class DesktopMouseWatcher : IDisposable
 					if (_banding)
 					{
 						_banding = false;
-						_uiDispatcher.BeginInvoke(() => BandFinished?.Invoke());
+						_uiDispatcher.BeginInvoke(DispatcherPriority.Input, () => BandFinished?.Invoke());
 					}
 				}
 				return false;
@@ -428,8 +469,7 @@ internal sealed class DesktopMouseWatcher : IDisposable
 			}
 			_banding = true;
 		}
-		var rect = Normalize(_leftStart, point);
-		_uiDispatcher.BeginInvoke(() => BandUpdated?.Invoke(rect));
+		_bandUpdates.Post(Normalize(_leftStart, point));
 	}
 
 	void TrackDraw(POINT point)
@@ -442,8 +482,7 @@ internal sealed class DesktopMouseWatcher : IDisposable
 			}
 			_drawing = true;
 		}
-		var rect = Normalize(_rightStart, point);
-		_uiDispatcher.BeginInvoke(() => DrawUpdated?.Invoke(rect));
+		_drawUpdates.Post(Normalize(_rightStart, point));
 	}
 
 	void FinishRightButton(POINT point)
@@ -454,12 +493,12 @@ internal sealed class DesktopMouseWatcher : IDisposable
 		// 拖得太小视为手滑，按普通右键处理
 		if (drew && rect.Width >= 48 && rect.Height >= 32)
 		{
-			_uiDispatcher.BeginInvoke(() => DrawFinished?.Invoke(rect));
+			_uiDispatcher.BeginInvoke(DispatcherPriority.Input, () => DrawFinished?.Invoke(rect));
 			return;
 		}
 		if (drew)
 		{
-			_uiDispatcher.BeginInvoke(() => DrawFinished?.Invoke(default));
+			_uiDispatcher.BeginInvoke(DispatcherPriority.Input, () => DrawFinished?.Invoke(default));
 		}
 		// 不能在钩子回调里直接注入输入，放到钩子线程稍后执行
 		_hookDispatcher?.BeginInvoke(ReplayRightClick);
