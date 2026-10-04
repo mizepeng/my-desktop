@@ -253,7 +253,8 @@ internal sealed class DesktopMouseWatcher : IDisposable
 	{
 		try
 		{
-			if (code >= 0 && _takeoverEnabled && (int)wParam is WM_KEYDOWN or WM_SYSKEYDOWN)
+			// 按着 Win 键的组合键（Win+E、Win+I、Win+D 等）属于系统，一律放行
+			if (code >= 0 && _takeoverEnabled && (int)wParam is WM_KEYDOWN or WM_SYSKEYDOWN && !IsPressed(VK_LWIN) && !IsPressed(VK_RWIN))
 			{
 				// 不排除注入的按键：屏幕键盘、触摸键盘和宏工具发出的 Delete 同样会作用到隐藏的图标上
 				var info = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);

@@ -95,6 +95,8 @@ internal static class NativeMethods
 	public const int VK_DELETE = 0x2E;
 	public const int VK_NUMPAD0 = 0x60;
 	public const int VK_NUMPAD9 = 0x69;
+	public const int VK_LWIN = 0x5B;
+	public const int VK_RWIN = 0x5C;
 	public const int VK_APPS = 0x5D;
 	public const int VK_F2 = 0x71;
 	public const int VK_F10 = 0x79;
