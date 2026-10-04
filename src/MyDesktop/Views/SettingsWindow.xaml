@@ -207,6 +207,14 @@
 						</CheckBox>
 					</Border>
 					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="ShortcutArrowBox" Click="Setting_Changed">
+							<StackPanel>
+								<TextBlock Text="显示快捷方式小箭头" />
+								<TextBlock Style="{StaticResource Hint}" Text="快捷方式图标左下角的箭头；只影响 MyDesktop 显示的图标，不改系统设置" />
+							</StackPanel>
+						</CheckBox>
+					</Border>
+					<Border Style="{StaticResource Card}">
 						<DockPanel>
 							<Button VerticalAlignment="Center" Content="全部重置" DockPanel.Dock="Right" Click="ResetAppearance_Click" />
 							<StackPanel Margin="0,0,12,0">

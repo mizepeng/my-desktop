@@ -54,6 +54,7 @@ internal sealed class FenceManager
 	public FenceManager(AppSettings settings)
 	{
 		Settings = settings;
+		ShellIconLoader.ShowShortcutArrows = settings.ShowShortcutArrows;
 		_dispatcher = Dispatcher.CurrentDispatcher;
 		_saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
 		_saveTimer.Tick += (_, _) => SaveNow();
@@ -738,6 +739,15 @@ internal sealed class FenceManager
 			});
 			_registryWatchers.Add(watcher);
 		}
+	}
+
+	/// <summary>
+	/// 设置里开关快捷方式小箭头后，按新设置重新加载全部图标。
+	/// </summary>
+	public void ApplyShortcutArrows()
+	{
+		ShellIconLoader.ShowShortcutArrows = Settings.ShowShortcutArrows;
+		ReloadIcons();
 	}
 
 	void ReloadIcons()

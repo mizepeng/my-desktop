@@ -55,6 +55,7 @@ internal partial class SettingsWindow : Window
 		ShowHiddenBox.IsChecked = Settings.ShowHiddenFiles;
 		AutoOrganizeBox.IsChecked = Settings.AutoOrganize;
 		TextShadowBox.IsChecked = Settings.TextShadow;
+		ShortcutArrowBox.IsChecked = Settings.ShowShortcutArrows;
 		OpacitySlider.Value = Math.Round(Settings.DefaultOpacity * 100);
 		RadiusSlider.Value = Settings.CornerRadius;
 		SnapGapSlider.Value = Settings.SnapGap;
@@ -116,6 +117,8 @@ internal partial class SettingsWindow : Window
 		bool textShadow = TextShadowBox.IsChecked == true;
 		bool hiddenChanged = Settings.ShowHiddenFiles != showHidden;
 		bool shadowChanged = Settings.TextShadow != textShadow;
+		bool arrows = ShortcutArrowBox.IsChecked == true;
+		bool arrowsChanged = Settings.ShowShortcutArrows != arrows;
 		bool desktopMenu = DesktopMenuBox.IsChecked == true;
 		bool desktopMenuChanged = Settings.DesktopContextMenu != desktopMenu;
 		Settings.DoubleClickToHide = DoubleClickBox.IsChecked == true;
@@ -126,6 +129,7 @@ internal partial class SettingsWindow : Window
 		Settings.AutoOrganize = AutoOrganizeBox.IsChecked == true;
 		Settings.ShowHiddenFiles = showHidden;
 		Settings.TextShadow = textShadow;
+		Settings.ShowShortcutArrows = arrows;
 		Settings.DesktopContextMenu = desktopMenu;
 		_manager.ApplyMouseHookSettings();
 		_manager.Organizer.ApplyWatchSetting();
@@ -140,6 +144,10 @@ internal partial class SettingsWindow : Window
 		if (shadowChanged)
 		{
 			_manager.RefreshAllAppearance();
+		}
+		if (arrowsChanged)
+		{
+			_manager.ApplyShortcutArrows();
 		}
 		_manager.SaveSoon();
 	}

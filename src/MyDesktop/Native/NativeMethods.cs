@@ -431,6 +431,12 @@ internal static class NativeMethods
 	[DllImport("shell32.dll")]
 	public static extern int SHGetImageList(int imageList, ref Guid riid, out IntPtr result);
 
+	// 取系统标准角标（如快捷方式箭头）的角标序号
+	public const int IDO_SHGIOI_LINK = 0x0FFFFFFE;
+
+	[DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+	public static extern int SHGetIconOverlayIndex(string? iconPath, int iconIndex);
+
 	[DllImport("shlwapi.dll", CharSet = CharSet.Unicode)]
 	public static extern int StrRetToBuf(IntPtr strret, IntPtr pidl, StringBuilder buffer, uint maxLength);
 

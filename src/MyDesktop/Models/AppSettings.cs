@@ -84,6 +84,11 @@ public sealed class AppSettings
 
 	public bool TextShadow { get; set; } = true;
 
+	/// <summary>
+	/// 快捷方式图标左下角叠加系统的小箭头角标，与资源管理器一致。
+	/// </summary>
+	public bool ShowShortcutArrows { get; set; } = true;
+
 	public string DefaultColor { get; set; } = "#1E1E1E";
 
 	public double DefaultOpacity { get; set; } = 0.45;

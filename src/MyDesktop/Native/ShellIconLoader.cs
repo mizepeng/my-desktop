@@ -48,6 +48,12 @@ internal static class ShellIconLoader
 	static readonly ConcurrentDictionary<string, BitmapSource> Cache = new(StringComparer.OrdinalIgnoreCase);
 	static readonly ConcurrentDictionary<int, BitmapSource?> Shields = new();
 	static readonly ConcurrentDictionary<int, BitmapSource?> Overlays = new();
+	static readonly Lazy<int> LinkOverlay = new(() => SHGetIconOverlayIndex(null, IDO_SHGIOI_LINK));
+
+	/// <summary>
+	/// 是否叠加快捷方式小箭头（设置项），改了之后要清空缓存重新加载图标。
+	/// </summary>
+	public static bool ShowShortcutArrows { get; set; } = true;
 
 	static ShellIconLoader()
 	{
@@ -203,7 +209,7 @@ internal static class ShellIconLoader
 			Log.Warn($"读取图标角标失败：{path}", ex);
 			return image;
 		}
-		if (overlay <= 0 || LoadOverlay(overlay) is not BitmapSource badge)
+		if (overlay <= 0 || (!ShowShortcutArrows && overlay == LinkOverlay.Value) || LoadOverlay(overlay) is not BitmapSource badge)
 		{
 			return image;
 		}
