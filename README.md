@@ -22,7 +22,7 @@ Windows 11 桌面分区整理工具，对标 Fences / 小智桌面：用半透�
 - 退出 MyDesktop 即恢复系统的桌面图标，排列与运行时一致；主程序被任务管理器等强制结束时，由随它启动的守护进程（同为 `MyDesktop.exe`）恢复
 - 旧版本的托管分区会在启动时自动转换，不移动任何文件：文件夹里还有文件的转为映射分区，空的转为普通分区并删除空文件夹
 ## 三、构建与发布
-构建需要 .NET 10 SDK，运行需要 .NET 10 桌面运行时。
+构建需要 .NET 10 SDK，运行需要 .NET 10 桌面运行时（发行版里附带官方安装包 `windowsdesktop-runtime-10.0.x-win-x64.exe`，没装过的先运行它）。
 ```bash
 dotnet build src/MyDesktop/MyDesktop.csproj
 ```
