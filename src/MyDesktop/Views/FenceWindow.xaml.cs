@@ -43,6 +43,8 @@ internal partial class FenceWindow : Window
 	ScrollViewer? _scroller;
 	Brush? _frameBorder;
 	bool _folderExisted;
+	// 映射分区里进入的子文件夹；为空时显示映射的文件夹本身
+	string? _subFolder;
 	bool _allowClose;
 	bool _tempExpanded;
 	bool _menuOpen;
@@ -105,6 +107,11 @@ internal partial class FenceWindow : Window
 	/// 桌面分区：成员是桌面上的项目，文件留在桌面；否则为映射分区。
 	/// </summary>
 	bool IsDesktopFence => !Model.IsPortal;
+
+	/// <summary>
+	/// 映射分区当前显示的文件夹：在分区里进入子文件夹后是该子文件夹，否则是映射的文件夹。
+	/// </summary>
+	string CurrentFolder => _subFolder ?? Model.FolderPath;
 
 	/// <summary>
 	/// 正在重命名其中的项目（自动整理会等改完名再处理）。
@@ -713,8 +720,10 @@ internal partial class FenceWindow : Window
 
 	public void UpdateTitle()
 	{
-		TitleText.Text = Model.Title;
-		TitleText.ToolTip = Model.IsPortal ? Model.FolderPath : null;
+		// 进入子文件夹后标题带上相对路径，如「下载 › 图片 › 2024」
+		TitleText.Text = _subFolder == null ? Model.Title : $"{Model.Title} › {Path.GetRelativePath(Model.FolderPath, _subFolder).Replace("\\", " › ")}";
+		TitleText.ToolTip = Model.IsPortal ? CurrentFolder : null;
+		BackButton.Visibility = _subFolder == null ? Visibility.Collapsed : Visibility.Visible;
 		var badges = new List<string>();
 		if (Model.IsPortal)
 		{
@@ -786,6 +795,17 @@ internal partial class FenceWindow : Window
 		}
 	}
 
+	protected override void OnPreviewMouseUp(MouseButtonEventArgs e)
+	{
+		base.OnPreviewMouseUp(e);
+		// 鼠标侧键「后退」返回上一级文件夹
+		if (e.ChangedButton == MouseButton.XButton1 && _subFolder != null)
+		{
+			NavigateUp();
+			e.Handled = true;
+		}
+	}
+
 	void CollapseTimer_Tick(object? sender, EventArgs e)
 	{
 		_collapseTimer.Stop();
@@ -853,6 +873,12 @@ internal partial class FenceWindow : Window
 		{
 			return;
 		}
+		// 映射的文件夹换了，或进入的子文件夹被删除、改名，回到映射的文件夹
+		if (_subFolder != null && (!PathUtil.IsUnder(_subFolder, Model.FolderPath) || !Directory.Exists(_subFolder)))
+		{
+			_subFolder = null;
+			UpdateTitle();
+		}
 		// 桌面分区的内容来自桌面视图，由管理器在桌面变化时刷新，不需要监视文件夹
 		if (Model.IsPortal)
 		{
@@ -870,7 +896,7 @@ internal partial class FenceWindow : Window
 	/// </summary>
 	public void CheckFolder()
 	{
-		if (Model.IsPortal && Directory.Exists(Model.FolderPath) != _folderExisted)
+		if (Model.IsPortal && Directory.Exists(CurrentFolder) != _folderExisted)
 		{
 			OnFolderChanged();
 		}
@@ -908,7 +934,7 @@ internal partial class FenceWindow : Window
 			RequestIcon(item);
 		}
 		ApplyCutState();
-		EmptyHint.Text = IsDesktopFence ? "把桌面图标拖到这里" : _folderExisted ? "拖放文件到这里" : $"文件夹不存在\n{Model.FolderPath}";
+		EmptyHint.Text = IsDesktopFence ? "把桌面图标拖到这里" : _folderExisted ? "拖放文件到这里" : $"文件夹不存在\n{CurrentFolder}";
 		EmptyHint.Visibility = fresh.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 	}
 
@@ -955,7 +981,7 @@ internal partial class FenceWindow : Window
 
 	List<FenceItem> LoadFolder()
 	{
-		var folder = Model.FolderPath;
+		var folder = CurrentFolder;
 		_folderExisted = Directory.Exists(folder);
 		var existing = _items.ToDictionary(i => i.FullPath, StringComparer.OrdinalIgnoreCase);
 		var fresh = new List<FenceItem>();
@@ -1030,7 +1056,9 @@ internal partial class FenceWindow : Window
 
 	void Sort(List<FenceItem> items)
 	{
-		bool custom = Model.SortBy == SortField.Custom;
+		// 自定义顺序只记映射的文件夹本身，进入子文件夹后按名称排列
+		var sortBy = Model.SortBy == SortField.Custom && _subFolder != null ? SortField.Name : Model.SortBy;
+		bool custom = sortBy == SortField.Custom;
 		var rank = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 		for (int i = 0; custom && i < Model.CustomOrder.Count; i++)
 		{
@@ -1038,7 +1066,7 @@ internal partial class FenceWindow : Window
 		}
 		// 自定义顺序里没有的（新加入的）项目排在最后
 		int Rank(FenceItem item) => rank.TryGetValue(OrderKey(item), out int index) ? index : int.MaxValue;
-		Comparison<FenceItem> byField = Model.SortBy switch
+		Comparison<FenceItem> byField = sortBy switch
 		{
 			SortField.Name => (a, b) => StrCmpLogicalW(a.DisplayName, b.DisplayName),
 			SortField.Type => (a, b) => string.Compare(a.TypeName, b.TypeName, StringComparison.CurrentCultureIgnoreCase),
@@ -1123,13 +1151,14 @@ internal partial class FenceWindow : Window
 	void StartWatcher()
 	{
 		StopWatcher();
-		if (!Directory.Exists(Model.FolderPath))
+		var folder = CurrentFolder;
+		if (!Directory.Exists(folder))
 		{
 			return;
 		}
 		try
 		{
-			var watcher = new FileSystemWatcher(Model.FolderPath)
+			var watcher = new FileSystemWatcher(folder)
 			{
 				IncludeSubdirectories = false,
 				NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.Attributes,
@@ -1144,7 +1173,7 @@ internal partial class FenceWindow : Window
 		}
 		catch (Exception ex)
 		{
-			Log.Warn($"监视分区文件夹失败：{Model.FolderPath}", ex);
+			Log.Warn($"监视分区文件夹失败：{folder}", ex);
 		}
 	}
 
@@ -1466,7 +1495,7 @@ internal partial class FenceWindow : Window
 
 	void ShowFenceMenu(POINT point)
 	{
-		bool folderExists = IsDesktopFence || Directory.Exists(Model.FolderPath);
+		bool folderExists = IsDesktopFence || Directory.Exists(CurrentFolder);
 		_menuOpen = true;
 		_buttonsTimer.Stop();
 		ShowTitleButtons(true);
@@ -1590,8 +1619,8 @@ internal partial class FenceWindow : Window
 
 	void SetSort(SortField field, bool descending)
 	{
-		// 切到自定义排序时以当前显示顺序为起点
-		if (field == SortField.Custom && Model.SortBy != SortField.Custom)
+		// 切到自定义排序时以当前显示顺序为起点；在子文件夹里切换时，映射的文件夹本身的顺序保持不变
+		if (field == SortField.Custom && Model.SortBy != SortField.Custom && _subFolder == null)
 		{
 			Model.CustomOrder = _items.Select(OrderKey).ToList();
 		}
@@ -1663,17 +1692,62 @@ internal partial class FenceWindow : Window
 
 	#region 文件操作
 
-	void OpenItems(IEnumerable<FenceItem> items) => ItemOps.Open(_hwnd, items, IsDesktopFence);
+	void OpenItems(IEnumerable<FenceItem> items)
+	{
+		var list = items.ToList();
+		// 映射分区里打开单个文件夹时在分区里进入它，不用资源管理器打开
+		if (Model.IsPortal && list is [{ IsFolder: true } folder] && Directory.Exists(folder.FullPath))
+		{
+			NavigateTo(folder.FullPath);
+			return;
+		}
+		ItemOps.Open(_hwnd, list, IsDesktopFence);
+	}
+
+	/// <summary>
+	/// 映射分区里显示另一个文件夹（为空或等于映射的文件夹时回到映射的文件夹）。
+	/// </summary>
+	void NavigateTo(string? folder)
+	{
+		_subFolder = folder == null || PathUtil.AreEqual(folder, Model.FolderPath) ? null : folder;
+		ItemsList.UnselectAll();
+		UpdateTitle();
+		StartWatcher();
+		RefreshItems();
+		_scroller?.ScrollToTop();
+	}
+
+	void NavigateUp()
+	{
+		if (_subFolder is not string from)
+		{
+			return;
+		}
+		NavigateTo(Path.GetDirectoryName(PathUtil.Normalize(from)));
+		// 与资源管理器一致，返回上一级后选中刚才所在的文件夹
+		if (FindItem(from) is { } item)
+		{
+			ItemsList.SelectedItem = item;
+			ItemsList.ScrollIntoView(item);
+		}
+	}
+
+	void BackButton_Click(object sender, RoutedEventArgs e) => NavigateUp();
+
+	/// <summary>
+	/// 取消选择（单击桌面空白处时）。
+	/// </summary>
+	public void ClearSelection() => ItemsList.UnselectAll();
 
 	void OpenFolderInExplorer()
 	{
 		try
 		{
-			Process.Start(new ProcessStartInfo("explorer.exe", $"\"{Model.FolderPath}\"") { UseShellExecute = true })?.Dispose();
+			Process.Start(new ProcessStartInfo("explorer.exe", $"\"{CurrentFolder}\"") { UseShellExecute = true })?.Dispose();
 		}
 		catch (Exception ex)
 		{
-			Log.Warn($"打开文件夹失败：{Model.FolderPath}", ex);
+			Log.Warn($"打开文件夹失败：{CurrentFolder}", ex);
 		}
 	}
 
@@ -1692,7 +1766,7 @@ internal partial class FenceWindow : Window
 	/// <summary>
 	/// 新建的文件或文件夹所在的位置：桌面分区放在桌面文件夹（再归入本分区），映射分区放在映射的文件夹。
 	/// </summary>
-	string TargetFolder => IsDesktopFence ? AppPaths.Desktop : Model.FolderPath;
+	string TargetFolder => IsDesktopFence ? AppPaths.Desktop : CurrentFolder;
 
 	void NewFolder()
 	{
@@ -1825,9 +1899,9 @@ internal partial class FenceWindow : Window
 			// 成员和自定义顺序记的是完整路径，改名后同步更新，位置不变
 			_manager.OnItemRenamed(oldPath, newPath);
 		}
-		else
+		else if (_subFolder == null)
 		{
-			// 自定义顺序按文件名记录，改名后同步更新，位置不变
+			// 自定义顺序按文件名记录（只记映射的文件夹本身），改名后同步更新，位置不变
 			int index = Model.CustomOrder.FindIndex(n => string.Equals(n, item.FileName, StringComparison.OrdinalIgnoreCase));
 			if (index >= 0)
 			{
@@ -1878,6 +1952,10 @@ internal partial class FenceWindow : Window
 		{
 			case Key.Enter:
 				OpenItems(SelectedItems);
+				break;
+			case Key.Back when _subFolder != null:
+			case Key.Left when (modifiers & ModifierKeys.Alt) != 0 && _subFolder != null:
+				NavigateUp();
 				break;
 			case Key.Delete:
 				DeleteItems(SelectedItems, shift);
@@ -2089,7 +2167,8 @@ internal partial class FenceWindow : Window
 		{
 			return _dropFromDesktop && keys.All(k => Model.Members.Contains(k, StringComparer.OrdinalIgnoreCase));
 		}
-		return _dropFiles.Length == keys.Length && keys.All(p => PathUtil.AreEqual(Path.GetDirectoryName(p), Model.FolderPath));
+		// 自定义顺序只记映射的文件夹本身，进入子文件夹后不调整顺序
+		return _subFolder == null && _dropFiles.Length == keys.Length && keys.All(p => PathUtil.AreEqual(Path.GetDirectoryName(p), Model.FolderPath));
 	}
 
 	void TrackReorder(DragEventArgs e)
@@ -2226,6 +2305,11 @@ internal partial class FenceWindow : Window
 		}
 		// 把文件夹拖进它自己（及其子目录）对应的分区不处理
 		if (paths.Any(p => PathUtil.AreEqual(p, folder) || PathUtil.IsUnder(folder, p)))
+		{
+			return DragDropEffects.None;
+		}
+		// 映射分区的子文件夹里原地拖动，不移动也不调整顺序
+		if (!IsDesktopFence && paths.All(p => PathUtil.AreEqual(Path.GetDirectoryName(p), folder)))
 		{
 			return DragDropEffects.None;
 		}

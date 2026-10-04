@@ -682,7 +682,18 @@ internal sealed class FenceManager
 				_drawFrame.ShowAt(rect);
 			};
 			_mouse.DrawFinished += OnDrawFinished;
-			_mouse.BlankPressed += additive => _takeover?.OnBlankPressed(additive);
+			_mouse.BlankPressed += additive =>
+			{
+				_takeover?.OnBlankPressed(additive);
+				// 与资源管理器一致，单击桌面空白处取消选择，分区里选中的图标也一并取消
+				if (!additive)
+				{
+					foreach (var window in _windows)
+					{
+						window.ClearSelection();
+					}
+				}
+			};
 			_mouse.BandUpdated += rect => _takeover?.OnBandUpdated(rect);
 			_mouse.BandFinished += () => _takeover?.OnBandFinished();
 			_mouse.KeyIntercepted += (key, shift) => _takeover?.HandleKey(key, shift);
