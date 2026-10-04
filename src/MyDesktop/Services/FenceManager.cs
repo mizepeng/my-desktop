@@ -129,6 +129,11 @@ internal sealed class FenceManager
 		}
 
 		ConvertLegacyFences();
+		// 程序没运行时改过缩放比例的，先按新比例调整分区再打开
+		if (AdaptLayoutToDpi())
+		{
+			SaveSoon();
+		}
 		foreach (var model in Settings.Fences.ToList())
 		{
 			OpenWindow(model);
@@ -213,6 +218,7 @@ internal sealed class FenceManager
 			FolderPath = portalFolder ?? string.Empty,
 		};
 		var rect = bounds ?? FindFreeSlot(near?.GetBounds());
+		model.LayoutDpi = GetDpiForRect(rect);
 		model.X = rect.Left;
 		model.Y = rect.Top;
 		model.Width = rect.Width;
@@ -947,6 +953,134 @@ internal sealed class FenceManager
 	#endregion
 
 	#region 内部实现
+
+	/// <summary>
+	/// 缩放比例变化后让各分区按新的比例显示：先调整位置和大小，再让窗口按新的 DPI 重新摆放；
+	/// 改大小也没跟上 DPI 的窗口关掉重开。
+	/// </summary>
+	public void RefreshWindowsDpi()
+	{
+		if (AdaptLayoutToDpi())
+		{
+			SaveSoon();
+		}
+		foreach (var window in _windows.ToList())
+		{
+			window.RefreshDpi();
+			if (window.HasStaleDpi())
+			{
+				Log.Warn($"分区「{window.Model.Title}」没跟上缩放比例变化，重新打开窗口");
+				_windows.Remove(window);
+				window.CloseForReal();
+				OpenWindow(window.Model);
+			}
+		}
+		_takeover?.RelayoutSoon();
+	}
+
+	/// <summary>
+	/// 分区所在显示器的缩放比例与保存位置大小时不同（包括程序没运行时改的），调整分区的位置和大小，让里面的图标排布和原来一样：
+	/// 切回以前用过的缩放比例时恢复当时的布局；第一次到某个缩放比例时按新旧 DPI 之比缩放，
+	/// 彼此相邻的分区作为一组整体缩放，贴着的屏幕边保持贴边，放大后屏幕放不下时缩到刚好放下。
+	/// </summary>
+	/// <returns>有分区的配置被改动时返回 true。</returns>
+	bool AdaptLayoutToDpi()
+	{
+		bool changed = false;
+		var toScale = new List<(FenceSettings Model, RECT Old, int OldDpi, int NewDpi)>();
+		foreach (var model in Settings.Fences)
+		{
+			var rect = new RECT(model.X, model.Y, model.X + model.Width, model.Y + model.Height);
+			int dpi = GetDpiForRect(rect);
+			if (model.LayoutDpi == dpi)
+			{
+				continue;
+			}
+			changed = true;
+			int oldDpi = model.LayoutDpi;
+			model.LayoutDpi = dpi;
+			// 旧版本配置没记录缩放比例，按当前的看待
+			if (oldDpi == 0)
+			{
+				continue;
+			}
+			model.BoundsByDpi[oldDpi] = new FenceBounds(model.X, model.Y, model.Width, model.Height);
+			if (model.BoundsByDpi.TryGetValue(dpi, out var saved))
+			{
+				(model.X, model.Y, model.Width, model.Height) = (saved.X, saved.Y, saved.Width, saved.Height);
+			}
+			else
+			{
+				toScale.Add((model, rect, oldDpi, dpi));
+			}
+		}
+		foreach (var group in GroupAdjacent(toScale))
+		{
+			ScaleGroup(group);
+		}
+		return changed;
+	}
+
+	/// <summary>
+	/// 把彼此相邻（间隔不超过吸附间距）的分区分成一组，一组分区整体缩放才不会互相重叠或拉开距离。
+	/// </summary>
+	List<List<(FenceSettings Model, RECT Old, int OldDpi, int NewDpi)>> GroupAdjacent(List<(FenceSettings Model, RECT Old, int OldDpi, int NewDpi)> items)
+	{
+		var groups = new List<List<(FenceSettings Model, RECT Old, int OldDpi, int NewDpi)>>();
+		foreach (var item in items)
+		{
+			int near = (int)Math.Ceiling((Settings.SnapGap + 8) * item.OldDpi / 96.0);
+			var touching = groups.Where(g => g.Any(other => Touches(item.Old, other.Old, near))).ToList();
+			var merged = new List<(FenceSettings Model, RECT Old, int OldDpi, int NewDpi)> { item };
+			foreach (var group in touching)
+			{
+				merged.AddRange(group);
+				groups.Remove(group);
+			}
+			groups.Add(merged);
+		}
+		return groups;
+	}
+
+	static bool Touches(RECT a, RECT b, int near)
+	{
+		return a.Left < b.Right + near && b.Left < a.Right + near && a.Top < b.Bottom + near && b.Top < a.Bottom + near;
+	}
+
+	/// <summary>
+	/// 以整组所贴的屏幕边（不贴边时为中心）为基点按新旧 DPI 之比缩放，再整体挪回工作区内。
+	/// </summary>
+	static void ScaleGroup(List<(FenceSettings Model, RECT Old, int OldDpi, int NewDpi)> group)
+	{
+		var box = group[0].Old;
+		foreach (var (_, old, _, _) in group)
+		{
+			box = new RECT(Math.Min(box.Left, old.Left), Math.Min(box.Top, old.Top), Math.Max(box.Right, old.Right), Math.Max(box.Bottom, old.Bottom));
+		}
+		var (work, _) = GetMonitorWorkArea(MonitorFromRect(ref box, MONITOR_DEFAULTTONEAREST));
+		double factor = (double)group[0].NewDpi / group[0].OldDpi;
+		// 放大后整组超出屏幕的，只放大到刚好放下
+		if (factor > 1)
+		{
+			factor = Math.Max(1, Math.Min(factor, Math.Min((double)work.Width / box.Width, (double)work.Height / box.Height)));
+		}
+		int edge = (int)Math.Ceiling(24 * group[0].OldDpi / 96.0);
+		double anchorX = Math.Abs(box.Left - work.Left) <= edge ? box.Left
+				: Math.Abs(box.Right - work.Right) <= edge ? box.Right : (box.Left + box.Right) / 2.0;
+		double anchorY = Math.Abs(box.Top - work.Top) <= edge ? box.Top
+				: Math.Abs(box.Bottom - work.Bottom) <= edge ? box.Bottom : (box.Top + box.Bottom) / 2.0;
+		int Scale(int value, double anchor) => (int)Math.Round(anchor + (value - anchor) * factor);
+		var scaled = group.Select(item => new RECT(Scale(item.Old.Left, anchorX), Scale(item.Old.Top, anchorY), Scale(item.Old.Right, anchorX), Scale(item.Old.Bottom, anchorY))).ToList();
+		int left = scaled.Min(r => r.Left), top = scaled.Min(r => r.Top), right = scaled.Max(r => r.Right), bottom = scaled.Max(r => r.Bottom);
+		int dx = left < work.Left ? work.Left - left : right > work.Right ? Math.Max(work.Left - left, work.Right - right) : 0;
+		int dy = top < work.Top ? work.Top - top : bottom > work.Bottom ? Math.Max(work.Top - top, work.Bottom - bottom) : 0;
+		for (int i = 0; i < group.Count; i++)
+		{
+			var model = group[i].Model;
+			var rect = scaled[i];
+			(model.X, model.Y, model.Width, model.Height) = (rect.Left + dx, rect.Top + dy, rect.Width, rect.Height);
+		}
+	}
 
 	FenceWindow OpenWindow(FenceSettings model)
 	{

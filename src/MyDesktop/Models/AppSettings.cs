@@ -113,6 +113,11 @@ public sealed class AppSettings
 	public List<OrganizeRule> Rules { get; set; } = OrganizeRule.CreateDefaults();
 }
 
+/// <summary>
+/// 分区在某个缩放比例下的位置与尺寸（屏幕物理像素）。
+/// </summary>
+public sealed record FenceBounds(int X, int Y, int Width, int Height);
+
 public sealed class FenceSettings
 {
 	public Guid Id { get; set; } = Guid.NewGuid();
@@ -144,6 +149,16 @@ public sealed class FenceSettings
 	public int Width { get; set; }
 
 	public int Height { get; set; }
+
+	/// <summary>
+	/// 上面的位置与尺寸对应的显示器 DPI（缩放比例）；为 0 时是旧版本配置，按当前的 DPI 看待。
+	/// </summary>
+	public int LayoutDpi { get; set; }
+
+	/// <summary>
+	/// 在其他缩放比例下的位置与尺寸，切回那个缩放比例时原样恢复。
+	/// </summary>
+	public Dictionary<int, FenceBounds> BoundsByDpi { get; set; } = [];
 
 	public bool RolledUp { get; set; }
 

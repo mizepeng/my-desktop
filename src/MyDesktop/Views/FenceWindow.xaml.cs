@@ -661,6 +661,8 @@ internal partial class FenceWindow : Window
 				ApplyBounds();
 			}
 		}
+		// 用户调整过的位置和大小属于当前所在显示器的缩放比例
+		Model.LayoutDpi = GetDpiForRect(ExpandedRect);
 		_manager.SaveSoon();
 		_manager.OnFenceLayoutChanged();
 	}
@@ -967,6 +969,25 @@ internal partial class FenceWindow : Window
 		{
 			RequestIcon(item);
 		}
+	}
+
+	/// <summary>
+	/// 窗口的 DPI 与所在显示器的不一致：缩放比例变化后分区窗口有时收不到通知，一直停在旧的 DPI。
+	/// </summary>
+	public bool HasStaleDpi() => GetDpiForRect(GetBounds()) != GetDpiForWindow(_hwnd);
+
+	/// <summary>
+	/// 缩放比例变化后按新的 DPI 显示：停在旧 DPI 的窗口改一下大小，系统就会按所在显示器重新判断
+	/// （实测悬停展开一次即恢复）；最后按保存的位置和大小重新摆放，标题栏高度按新比例计算。
+	/// </summary>
+	public void RefreshDpi()
+	{
+		if (HasStaleDpi())
+		{
+			var rect = GetBounds();
+			SetWindowPos(_hwnd, IntPtr.Zero, rect.Left, rect.Top, rect.Width + 1, rect.Height + 1, SWP_NOZORDER | SWP_NOACTIVATE);
+		}
+		ApplyBounds();
 	}
 
 	static SolidColorBrush Frozen(Color color)

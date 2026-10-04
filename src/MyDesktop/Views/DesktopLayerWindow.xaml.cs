@@ -140,7 +140,7 @@ internal partial class DesktopLayerWindow : Window
 	protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
 	{
 		base.OnDpiChanged(oldDpi, newDpi);
-		Dispatcher.InvokeAsync(_takeover.OnDisplayChanged, DispatcherPriority.Background);
+		Dispatcher.InvokeAsync(_takeover.OnDpiChanged, DispatcherPriority.Background);
 	}
 
 	public void CloseForReal()

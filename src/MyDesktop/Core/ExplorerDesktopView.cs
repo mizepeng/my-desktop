@@ -271,7 +271,53 @@ internal sealed class ExplorerDesktopView : IDisposable
 		}
 		var listView = DesktopHost.FindFolderView();
 		var bounds = listView == IntPtr.Zero ? default : NativeMethods.GetWindowRect(listView);
-		return new DesktopSnapshot(autoArrange, spacing, iconSize, bounds, items);
+		return new DesktopSnapshot(autoArrange, CorrectSpacing(spacing, autoArrange, items, listView), iconSize, bounds, items);
+	}
+
+	/// <summary>
+	/// 资源管理器按图标列表窗口自己的 DPI 换算间距，缩放比例变了而这个窗口的 DPI 没跟上时（实测隐藏期间一直停在旧值），
+	/// 报告的间距会按两者之比放大或缩小，图标位置却已按新比例排好。自动排列时以位置为准，用同一列相邻图标的距离校正；
+	/// 算不出时按主显示器的实际 DPI 与图标列表窗口 DPI 之比换算。两者一致时原样返回。
+	/// </summary>
+	static POINT CorrectSpacing(POINT spacing, bool autoArrange, List<DesktopEntry> items, IntPtr listView)
+	{
+		double factor = 1;
+		int rowStep = autoArrange ? RowStep(items) : 0;
+		if (rowStep > 0 && spacing.Y > 0)
+		{
+			factor = (double)rowStep / spacing.Y;
+		}
+		else if (GetDpiForWindow(listView) is uint listDpi and > 0
+				&& GetDpiForMonitor(MonitorFromPoint(new POINT(0, 0), MONITOR_DEFAULTTOPRIMARY), MDT_EFFECTIVE_DPI, out uint dpi, out _) == 0 && dpi > 0)
+		{
+			factor = (double)dpi / listDpi;
+		}
+		if (Math.Abs(factor - 1) < 0.01)
+		{
+			return spacing;
+		}
+		return new POINT((int)Math.Round(spacing.X * factor), (int)Math.Round(spacing.Y * factor));
+	}
+
+	/// <summary>
+	/// 自动排列时同一列里相邻两个图标的纵向距离（取最小的），同一列不足两个图标时返回 0。
+	/// </summary>
+	static int RowStep(List<DesktopEntry> items)
+	{
+		int step = 0;
+		foreach (var column in items.GroupBy(i => i.Position.X))
+		{
+			var rows = column.Select(i => i.Position.Y).Order().ToList();
+			for (int i = 1; i < rows.Count; i++)
+			{
+				int distance = rows[i] - rows[i - 1];
+				if (distance > 0 && (step == 0 || distance < step))
+				{
+					step = distance;
+				}
+			}
+		}
+		return step;
 	}
 
 	/// <summary>

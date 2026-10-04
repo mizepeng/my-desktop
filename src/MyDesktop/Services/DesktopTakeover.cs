@@ -25,6 +25,13 @@ internal sealed class DesktopTakeover : IDisposable
 	/// </summary>
 	static readonly TimeSpan HideDelay = TimeSpan.FromMilliseconds(400);
 
+	/// <summary>
+	/// 缩放比例变化后，最多等资源管理器这么久按新比例重新排列图标；期间每隔一会儿读一次视图看排好没有。
+	/// </summary>
+	static readonly TimeSpan DpiRelayoutTimeout = TimeSpan.FromSeconds(4);
+
+	static readonly TimeSpan DpiRelayoutPoll = TimeSpan.FromMilliseconds(500);
+
 	static readonly TimeSpan RenameWait = TimeSpan.FromSeconds(5);
 
 	/// <summary>
@@ -53,6 +60,7 @@ internal sealed class DesktopTakeover : IDisposable
 	bool _active;
 	bool _layersHidden;
 	bool _disposed;
+	bool _dpiRelayoutPending;
 	// 散放图标格子左上角的屏幕位置（物理像素），拖动后据此算出新位置；_order 是它们的排列顺序（逐列从上到下）
 	Dictionary<string, POINT> _placement = new(StringComparer.OrdinalIgnoreCase);
 	List<string> _order = [];
@@ -98,7 +106,7 @@ internal sealed class DesktopTakeover : IDisposable
 	/// <summary>
 	/// 图标层当前是否应当显示：接管中、没有被「双击桌面隐藏」藏起来、用户也没有在系统里关闭「显示桌面图标」。
 	/// </summary>
-	public bool LayersVisible => _active && !_layersHidden && !DesktopHost.IconsHiddenBySystem();
+	public bool LayersVisible => _active && !_layersHidden && !_dpiRelayoutPending && !DesktopHost.IconsHiddenBySystem();
 
 	public bool IsRenaming => _layers.Any(l => l.IsRenaming);
 
@@ -192,7 +200,8 @@ internal sealed class DesktopTakeover : IDisposable
 		{
 			return;
 		}
-		if (DesktopHost.AreIconsVisible() && !DesktopHost.IconsHiddenBySystem())
+		// 缩放比例变化后正在让资源管理器的图标列表短暂显示、重新排列，这时不要把它藏回去
+		if (DesktopHost.AreIconsVisible() && !DesktopHost.IconsHiddenBySystem() && !_dpiRelayoutPending)
 		{
 			DesktopHost.SetIconsVisible(false);
 			Items.RefreshSoon();
@@ -202,6 +211,59 @@ internal sealed class DesktopTakeover : IDisposable
 		{
 			StartGuard();
 		}
+	}
+
+	/// <summary>
+	/// 缩放比例变化：资源管理器隐藏着的图标列表不会按新比例重新排列（实测间距一直停在旧比例，显示出来才更新），
+	/// 而且它处理缩放变化比图标层晚。先藏起图标层、让它的图标列表显示出来，反复读取视图，
+	/// 等排列变了并且稳定下来（最多等 4 秒）再藏回去、重新接管；几个显示器的图标层同时收到通知时只做一次。
+	/// </summary>
+	public void OnDpiChanged()
+	{
+		if (!_active || _dpiRelayoutPending)
+		{
+			return;
+		}
+		if (DesktopHost.IconsHiddenBySystem())
+		{
+			_manager.RefreshWindowsDpi();
+			OnDisplayChanged();
+			return;
+		}
+		_dpiRelayoutPending = true;
+		var before = Items.Snapshot?.Signature;
+		string? last = null;
+		var started = DateTime.UtcNow;
+		ApplyLayerVisibility(false);
+		DesktopHost.SetIconsVisible(true);
+		var timer = new DispatcherTimer { Interval = DpiRelayoutPoll };
+		timer.Tick += (_, _) =>
+		{
+			var current = Items.Snapshot?.Signature;
+			bool settled = current != null && current != before && current == last;
+			last = current;
+			if (!_disposed && !settled && DateTime.UtcNow - started < DpiRelayoutTimeout)
+			{
+				Items.RefreshSoon();
+				return;
+			}
+			timer.Stop();
+			_dpiRelayoutPending = false;
+			if (_disposed)
+			{
+				return;
+			}
+			Log.Info($"缩放比例变化，资源管理器重新排列图标用时 {(DateTime.UtcNow - started).TotalSeconds:0.0} 秒{(settled ? string.Empty : "（等待超时）")}");
+			if (_active && !DesktopHost.IconsHiddenBySystem())
+			{
+				DesktopHost.SetIconsVisible(false);
+			}
+			// 这时各窗口的缩放通知都已处理完，分区窗口统一按新比例重新摆放
+			_manager.RefreshWindowsDpi();
+			OnDisplayChanged();
+		};
+		timer.Start();
+		Items.RefreshSoon();
 	}
 
 	public void OnDisplayChanged()
@@ -373,6 +435,11 @@ internal sealed class DesktopTakeover : IDisposable
 			var folderView = DesktopHost.FindFolderView();
 			if (eventType == EVENT_OBJECT_SHOW && objectId == OBJID_WINDOW && hwnd == folderView)
 			{
+				// 缩放比例变化后是我们自己让它显示出来重新排列的，排好之前不要藏回去
+				if (_dpiRelayoutPending)
+				{
+					return;
+				}
 				// 资源管理器自己又显示了图标视图（例如重新勾选了「显示桌面图标」），立即重新隐藏
 				if (!DesktopHost.IconsHiddenBySystem())
 				{

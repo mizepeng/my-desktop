@@ -537,6 +537,15 @@ internal static class NativeMethods
 		double scale = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, out uint dpiX, out _) == 0 && dpiX > 0 ? dpiX / 96.0 : 1.0;
 		return (info.rcWork, scale);
 	}
+
+	/// <summary>
+	/// 矩形所在显示器的 DPI，取不到时按 96。
+	/// </summary>
+	public static int GetDpiForRect(RECT rect)
+	{
+		var monitor = MonitorFromRect(ref rect, MONITOR_DEFAULTTONEAREST);
+		return GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, out uint dpi, out _) == 0 && dpi > 0 ? (int)dpi : 96;
+	}
 }
 
 [StructLayout(LayoutKind.Sequential)]
