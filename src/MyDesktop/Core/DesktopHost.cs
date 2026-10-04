@@ -1,4 +1,6 @@
+using System.Runtime.InteropServices;
 using Microsoft.Win32;
+using MyDesktop.Native;
 using static MyDesktop.Native.NativeMethods;
 
 namespace MyDesktop.Core;
@@ -44,8 +46,31 @@ internal static class DesktopHost
 	}
 
 	/// <summary>
+	/// 散放图标层窗口，分区要摆在它们之上。只在界面线程上修改；钩子线程通过 <see cref="IsLayer"/> 读取不可变快照。
+	/// </summary>
+	static volatile LayerState _layers = new([], []);
+
+	sealed record LayerState(HashSet<IntPtr> Windows, RECT[] IconRects);
+
+	/// <summary>
+	/// 登记散放图标层窗口及其上图标的屏幕范围（物理像素），供层级计算和鼠标钩子判断「是否点在桌面空白处」。
+	/// </summary>
+	public static void SetLayers(IEnumerable<IntPtr> windows, IEnumerable<RECT> iconRects)
+	{
+		_layers = new LayerState(windows.Where(h => h != IntPtr.Zero).ToHashSet(), iconRects.ToArray());
+	}
+
+	public static bool IsLayer(IntPtr hwnd) => _layers.Windows.Contains(hwnd);
+
+	/// <summary>
+	/// 该点是否落在散放图标层的某个图标上；图标之外的透明处点击会穿透到桌面。
+	/// </summary>
+	public static bool HitsLayerIcon(POINT point) => _layers.IconRects.Any(r => r.Contains(point));
+
+	/// <summary>
 	/// 计算把窗口放到桌面窗口正上方所需的 hwndInsertAfter；已在该位置或找不到桌面时返回 null。
 	/// 平时桌面位于最底层，分区也就在所有应用窗口之下；Win+D 时桌面被提到最前，分区紧随其上依然可见。
+	/// 散放图标层紧贴桌面，分区再压在图标层之上，与系统桌面上「窗口盖住图标」的关系一致。
 	/// </summary>
 	public static IntPtr? GetInsertAfterAboveDesktop(IntPtr hwnd)
 	{
@@ -54,9 +79,24 @@ internal static class DesktopHost
 		{
 			return null;
 		}
-		// 从桌面往上看，在遇到第一个其他程序的可见窗口之前找到自己，说明已经和其他分区一起紧贴在桌面上方
+		var layers = _layers.Windows;
+		// 紧贴桌面的一串图标层：图标层自己在其中即已就位；分区以其中最上面的一个为底
+		var floor = desktop;
+		for (var above = GetWindow(desktop, GW_HWNDPREV); above != IntPtr.Zero && layers.Contains(above); above = GetWindow(above, GW_HWNDPREV))
+		{
+			if (above == hwnd)
+			{
+				return null;
+			}
+			floor = above;
+		}
+		if (layers.Contains(hwnd))
+		{
+			return GetWindow(desktop, GW_HWNDPREV);
+		}
+		// 从底座往上看，在遇到第一个其他程序的可见窗口之前找到自己，说明已经和其他分区一起紧贴在底座上方
 		uint ownProcess = (uint)Environment.ProcessId;
-		for (var above = GetWindow(desktop, GW_HWNDPREV); above != IntPtr.Zero; above = GetWindow(above, GW_HWNDPREV))
+		for (var above = GetWindow(floor, GW_HWNDPREV); above != IntPtr.Zero; above = GetWindow(above, GW_HWNDPREV))
 		{
 			if (above == hwnd)
 			{
@@ -68,11 +108,33 @@ internal static class DesktopHost
 				break;
 			}
 		}
-		// 插到紧挨桌面的那个窗口之后；桌面已是最顶层时该值为空，即 HWND_TOP。
+		// 插到紧挨底座的那个窗口之后；底座已是最顶层时该值为空，即 HWND_TOP。
 		// 「显示桌面」时紧挨桌面的是任务栏这类置顶窗口，插在其后会让分区临时成为置顶窗口，这是有意为之：
 		// 被提起的桌面仍是普通窗口层的最上层，尽量不干扰 Explorer 对显示桌面状态的判断。
 		// 桌面落回底层后，分区会被插到普通窗口之后，置顶状态随之自动解除。
-		return GetWindow(desktop, GW_HWNDPREV);
+		return GetWindow(floor, GW_HWNDPREV);
+	}
+
+	/// <summary>
+	/// 在 WM_WINDOWPOSCHANGING 中调用：任何层级变化（被点击激活、Show 等）都改写为「紧贴桌面窗口之上」，
+	/// 平时位于所有应用窗口之下，Win+D 桌面被提到最前时依然可见。
+	/// </summary>
+	public static void KeepAboveDesktop(IntPtr hwnd, IntPtr lParam)
+	{
+		var pos = Marshal.PtrToStructure<WINDOWPOS>(lParam);
+		if ((pos.flags & SWP_NOZORDER) != 0)
+		{
+			return;
+		}
+		if (GetInsertAfterAboveDesktop(hwnd) is IntPtr insertAfter)
+		{
+			pos.hwndInsertAfter = insertAfter;
+		}
+		else
+		{
+			pos.flags |= SWP_NOZORDER;
+		}
+		Marshal.StructureToPtr(pos, lParam, false);
 	}
 
 	/// <summary>
@@ -128,15 +190,5 @@ internal static class DesktopHost
 	{
 		using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced");
 		return key?.GetValue("HideIcons") is int value && value != 0;
-	}
-
-	/// <summary>
-	/// 桌面上是否正在重命名图标（存在可见的内联编辑框）。
-	/// </summary>
-	public static bool IsRenamingOnDesktop()
-	{
-		var view = FindFolderView();
-		var edit = view == IntPtr.Zero ? IntPtr.Zero : FindWindowEx(view, IntPtr.Zero, "Edit", null);
-		return edit != IntPtr.Zero && IsWindowVisible(edit);
 	}
 }

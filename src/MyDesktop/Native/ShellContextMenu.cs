@@ -11,6 +11,7 @@ namespace MyDesktop.Native;
 internal static class ShellContextMenu
 {
 	const uint CMF_NORMAL = 0x0000;
+	const uint CMF_DEFAULTONLY = 0x0001;
 	const uint CMF_CANRENAME = 0x0010;
 	const uint CMF_EXTENDEDVERBS = 0x0100;
 	const uint GCS_VERBW = 0x0004;
@@ -57,17 +58,12 @@ internal static class ShellContextMenu
 	/// 显示系统右键菜单。
 	/// </summary>
 	/// <param name="hwnd">菜单宿主窗口，需在其窗口过程中调用 <see cref="TryHandleMenuMessage"/>。</param>
-	/// <param name="paths">同一文件夹下的文件路径。</param>
+	/// <param name="items">要弹出菜单的一组项目。</param>
 	/// <param name="point">屏幕坐标（物理像素）。</param>
 	/// <param name="extraItems">追加在菜单末尾的自定义项。</param>
 	/// <param name="handleVerb">拦截指定动词（如 rename），返回 true 表示已自行处理。</param>
-	public static void Show(IntPtr hwnd, IReadOnlyList<string> paths, POINT point, IReadOnlyList<(string Text, Action Action)> extraItems, Func<string, bool> handleVerb)
+	public static void Show(IntPtr hwnd, ShellItemSet items, POINT point, IReadOnlyList<(string Text, Action Action)> extraItems, Func<string, bool> handleVerb)
 	{
-		using var items = ShellItemSet.Create(paths);
-		if (items == null)
-		{
-			return;
-		}
 		var menuPtr = items.GetUIObject(hwnd, typeof(IContextMenu).GUID);
 		var contextMenu = (IContextMenu)Marshal.GetObjectForIUnknown(menuPtr);
 		var menu = CreatePopupMenu();
@@ -90,8 +86,8 @@ internal static class ShellContextMenu
 			_active3 = contextMenu as IContextMenu3;
 			try
 			{
-				// 宿主不在前台时，点击菜单外部菜单不会消失
-				SetForegroundWindow(hwnd);
+				// 宿主不在前台时，点击菜单外部菜单不会消失（用键盘在桌面上呼出菜单时前台还是资源管理器）
+				ForceForegroundWindow(hwnd);
 				command = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.X, point.Y, hwnd, IntPtr.Zero);
 			}
 			finally
@@ -118,6 +114,70 @@ internal static class ShellContextMenu
 		}
 		finally
 		{
+			DestroyMenu(menu);
+			Marshal.ReleaseComObject(contextMenu);
+			Marshal.Release(menuPtr);
+		}
+	}
+
+	/// <summary>
+	/// 执行默认命令，相当于在资源管理器里双击（用于此电脑、回收站这类不对应文件的系统图标）。
+	/// </summary>
+	public static void InvokeDefault(IntPtr hwnd, ShellItemSet items, POINT point)
+	{
+		var menuPtr = items.GetUIObject(hwnd, typeof(IContextMenu).GUID);
+		var contextMenu = (IContextMenu)Marshal.GetObjectForIUnknown(menuPtr);
+		var menu = CreatePopupMenu();
+		try
+		{
+			Marshal.ThrowExceptionForHR(contextMenu.QueryContextMenu(menu, 0, FirstShellId, LastShellId, CMF_DEFAULTONLY));
+			int command = unchecked((int)GetMenuDefaultItem(menu, 0, 0));
+			if (command >= FirstShellId)
+			{
+				Invoke(contextMenu, hwnd, (uint)(command - FirstShellId), point);
+			}
+		}
+		finally
+		{
+			DestroyMenu(menu);
+			Marshal.ReleaseComObject(contextMenu);
+			Marshal.Release(menuPtr);
+		}
+	}
+
+	/// <summary>
+	/// 按动词执行命令，例如 properties（属性，对应 Alt+Enter）。
+	/// </summary>
+	public static void InvokeVerb(IntPtr hwnd, ShellItemSet items, string verb)
+	{
+		var menuPtr = items.GetUIObject(hwnd, typeof(IContextMenu).GUID);
+		var contextMenu = (IContextMenu)Marshal.GetObjectForIUnknown(menuPtr);
+		var menu = CreatePopupMenu();
+		var verbA = Marshal.StringToHGlobalAnsi(verb);
+		var verbW = Marshal.StringToHGlobalUni(verb);
+		try
+		{
+			// 部分扩展要求先建好菜单才能按动词执行
+			contextMenu.QueryContextMenu(menu, 0, FirstShellId, LastShellId, CMF_NORMAL);
+			var info = new CMINVOKECOMMANDINFOEX
+			{
+				cbSize = Marshal.SizeOf<CMINVOKECOMMANDINFOEX>(),
+				fMask = CMIC_MASK_UNICODE,
+				hwnd = hwnd,
+				lpVerb = verbA,
+				lpVerbW = verbW,
+				nShow = SW_SHOWNORMAL,
+			};
+			int hr = contextMenu.InvokeCommand(ref info);
+			if (hr < 0)
+			{
+				Log.Warn($"执行菜单命令 {verb} 失败：0x{hr:X8}");
+			}
+		}
+		finally
+		{
+			Marshal.FreeHGlobal(verbA);
+			Marshal.FreeHGlobal(verbW);
 			DestroyMenu(menu);
 			Marshal.ReleaseComObject(contextMenu);
 			Marshal.Release(menuPtr);

@@ -2,18 +2,22 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Windows.Media;
+using MyDesktop.Core;
 using MyDesktop.Native;
 
 namespace MyDesktop.Views;
 
 /// <summary>
-/// 分区中的一个文件或文件夹。
+/// 分区或桌面上的一个项目。来自桌面时 FullPath 是完整解析名：文件为完整路径，此电脑等系统图标为 ::{CLSID}。
 /// </summary>
 public sealed class FenceItem : INotifyPropertyChanged
 {
 	ImageSource? _icon;
 	bool _isRenaming;
 	string _renameText = string.Empty;
+	string _displayName = string.Empty;
+	double _x;
+	double _y;
 
 	FenceItem(string fullPath)
 	{
@@ -29,9 +33,22 @@ public sealed class FenceItem : INotifyPropertyChanged
 	public bool IsFolder { get; private set; }
 
 	/// <summary>
+	/// 此电脑、回收站这类不对应文件的系统图标，不能改名、删除或复制。
+	/// </summary>
+	public bool IsVirtual { get; private set; }
+
+	/// <summary>
 	/// Shell 显示名：快捷方式不带 .lnk，并遵循系统「隐藏已知文件扩展名」设置。
 	/// </summary>
-	public string DisplayName { get; private set; } = string.Empty;
+	public string DisplayName
+	{
+		get => _displayName;
+		private set
+		{
+			Set(ref _displayName, value);
+			OnPropertyChanged(nameof(ToolTipText));
+		}
+	}
 
 	public string TypeName { get; private set; } = string.Empty;
 
@@ -57,10 +74,29 @@ public sealed class FenceItem : INotifyPropertyChanged
 		set => Set(ref _renameText, value);
 	}
 
+	/// <summary>
+	/// 在散放图标层上的位置（DIP，相对图标层左上角）。
+	/// </summary>
+	public double X
+	{
+		get => _x;
+		set => Set(ref _x, value);
+	}
+
+	public double Y
+	{
+		get => _y;
+		set => Set(ref _y, value);
+	}
+
 	public string ToolTipText
 	{
 		get
 		{
+			if (IsVirtual)
+			{
+				return DisplayName;
+			}
 			var lines = new List<string> { DisplayName };
 			if (!string.IsNullOrEmpty(TypeName))
 			{
@@ -89,6 +125,38 @@ public sealed class FenceItem : INotifyPropertyChanged
 		item.ReadShellInfo(info);
 		item.Refresh(info);
 		return item;
+	}
+
+	/// <summary>
+	/// 由资源管理器桌面视图中的项目创建，显示名与桌面上的一致。
+	/// </summary>
+	internal static FenceItem Create(DesktopEntry entry)
+	{
+		var item = new FenceItem(entry.Key)
+		{
+			IsFolder = entry.IsFolder,
+			IsVirtual = !entry.IsFileSystem,
+		};
+		if (!item.IsVirtual)
+		{
+			item.TypeName = ReadTypeName(entry.Key);
+		}
+		item.Update(entry);
+		return item;
+	}
+
+	/// <summary>
+	/// 用桌面视图的最新信息更新（显示名会随「隐藏已知文件扩展名」设置变化），返回内容是否发生变化（变化时缩略图需要重新加载）。
+	/// </summary>
+	internal bool Update(DesktopEntry entry)
+	{
+		DisplayName = entry.DisplayName;
+		if (IsVirtual)
+		{
+			return false;
+		}
+		FileSystemInfo info = IsFolder ? new DirectoryInfo(FullPath) : new FileInfo(FullPath);
+		return info.Exists && Refresh(info);
 	}
 
 	/// <summary>
@@ -121,6 +189,14 @@ public sealed class FenceItem : INotifyPropertyChanged
 		{
 			DisplayName = info.Name;
 		}
+	}
+
+	static string ReadTypeName(string path)
+	{
+		var shellInfo = new SHFILEINFO();
+		return NativeMethods.SHGetFileInfo(path, 0, ref shellInfo, (uint)Marshal.SizeOf<SHFILEINFO>(), NativeMethods.SHGFI_TYPENAME) != IntPtr.Zero
+				? shellInfo.szTypeName
+				: string.Empty;
 	}
 
 	static string FormatSize(long bytes)

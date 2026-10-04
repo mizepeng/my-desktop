@@ -25,8 +25,11 @@ internal static class ShellIconLoader
 	const uint SHGSI_ICONLOCATION = 0;
 	const int WorkerCount = 2;
 	const int MaxCacheEntries = 3000;
+	const int MaxRetries = 2;
 
-	sealed record LoadRequest(string Path, int Size, string Key, Action<BitmapSource?> Callback, Dispatcher Dispatcher);
+	static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(1);
+
+	sealed record LoadRequest(string Path, int Size, string Key, Action<BitmapSource?> Callback, Dispatcher Dispatcher, int Attempt = 0);
 
 	static readonly BlockingCollection<LoadRequest> Queue = new();
 	static readonly ConcurrentDictionary<string, BitmapSource> Cache = new(StringComparer.OrdinalIgnoreCase);
@@ -85,6 +88,13 @@ internal static class ShellIconLoader
 			catch (Exception ex)
 			{
 				Log.Warn($"加载图标失败：{request.Path}", ex);
+			}
+			// 偶尔会取不到图标（实测回收站刚由空变满时），稍后重试，不让图标一直空着
+			if (image == null && request.Attempt < MaxRetries)
+			{
+				var retry = request with { Attempt = request.Attempt + 1 };
+				Task.Delay(RetryDelay).ContinueWith(_ => Queue.Add(retry), TaskScheduler.Default);
+				continue;
 			}
 			var result = image;
 			request.Dispatcher.BeginInvoke(() => request.Callback(result));

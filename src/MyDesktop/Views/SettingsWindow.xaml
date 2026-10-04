@@ -141,20 +141,11 @@
 					</Border>
 					<Border Style="{StaticResource Card}">
 						<CheckBox x:Name="ShowHiddenBox" Click="Setting_Changed">
-							<TextBlock Text="在分区中显示隐藏文件" />
+							<StackPanel>
+								<TextBlock Text="在映射分区中显示隐藏文件" />
+								<TextBlock Style="{StaticResource Hint}" Text="桌面上的图标跟随资源管理器「查看 → 隐藏的项目」的设置" />
+							</StackPanel>
 						</CheckBox>
-					</Border>
-
-					<TextBlock Style="{StaticResource SectionTitle}" Text="分区文件存放位置" />
-					<Border Style="{StaticResource Card}">
-						<StackPanel>
-							<TextBlock Margin="0,0,0,10" Style="{StaticResource Hint}" Text="拖入分区的文件会移动到此目录下与分区同名的文件夹中。修改后只影响之后新建的分区。" />
-							<DockPanel>
-								<Button Margin="8,0,0,0" Content="打开" DockPanel.Dock="Right" Click="OpenStorage_Click" />
-								<Button Margin="8,0,0,0" Content="更改…" DockPanel.Dock="Right" Click="ChangeStorage_Click" />
-								<TextBox x:Name="StorageBox" VerticalContentAlignment="Center" IsReadOnly="True" />
-							</DockPanel>
-						</StackPanel>
 					</Border>
 
 					<TextBlock Style="{StaticResource SectionTitle}" Text="分区管理" />
@@ -164,15 +155,6 @@
 							<Button Margin="0,0,8,0" Content="新建文件夹映射分区…" Click="NewPortal_Click" />
 							<Button Content="一键整理桌面…" Click="Organize_Click" />
 						</WrapPanel>
-					</Border>
-					<Border Style="{StaticResource Card}">
-						<DockPanel>
-							<Button VerticalAlignment="Center" Content="全部移回桌面…" DockPanel.Dock="Right" Click="RestoreAll_Click" />
-							<StackPanel Margin="0,0,12,0">
-								<TextBlock Text="把所有分区中的文件移回桌面" />
-								<TextBlock Style="{StaticResource Hint}" Text="不再使用本软件之前，可以用它把文件全部还原到桌面" />
-							</StackPanel>
-						</DockPanel>
 					</Border>
 				</StackPanel>
 
@@ -238,7 +220,7 @@
 				<!-- 整理规则 -->
 				<StackPanel x:Name="RulesPage" Visibility="Collapsed">
 					<TextBlock Style="{StaticResource PageTitle}" Text="整理规则" />
-					<TextBlock Style="{StaticResource Hint}" Text="一键整理时，桌面上的项目按下列规则从上到下匹配，归入同名分区（不存在时自动创建）。扩展名之间用分号分隔。" />
+					<TextBlock Style="{StaticResource Hint}" Text="一键整理时，桌面上的图标按下列规则从上到下匹配，归入同名分区（不存在时自动创建）。只是归类显示，文件仍留在桌面文件夹里。扩展名之间用分号分隔。" />
 
 					<Border Margin="0,16,0,4" Style="{StaticResource Card}">
 						<CheckBox x:Name="AutoOrganizeBox" Click="Setting_Changed">

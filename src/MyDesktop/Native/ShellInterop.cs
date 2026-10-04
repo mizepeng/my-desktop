@@ -41,6 +41,49 @@ internal interface IShellFolder
 }
 
 [ComImport]
+[Guid("000214F2-0000-0000-C000-000000000046")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IEnumIDList
+{
+	[PreserveSig]
+	int Next(uint count, out IntPtr pidl, out uint fetched);
+
+	[PreserveSig]
+	int Skip(uint count);
+
+	[PreserveSig]
+	int Reset();
+
+	[PreserveSig]
+	int Clone(out IntPtr enumerator);
+}
+
+/// <summary>
+/// 读取 Shell 项目的名称（把 STRRET 转成字符串）。
+/// </summary>
+internal static class ShellNames
+{
+	public static string? Get(IShellFolder folder, IntPtr pidl, uint flags)
+	{
+		// STRRET 最大为 4 字节类型 + 260 字节内容，按 8 字节对齐
+		var strret = Marshal.AllocCoTaskMem(272);
+		try
+		{
+			if (folder.GetDisplayNameOf(pidl, flags, strret) != 0)
+			{
+				return null;
+			}
+			var buffer = new StringBuilder(1024);
+			return NativeMethods.StrRetToBuf(strret, pidl, buffer, (uint)buffer.Capacity) == 0 ? buffer.ToString() : null;
+		}
+		finally
+		{
+			Marshal.FreeCoTaskMem(strret);
+		}
+	}
+}
+
+[ComImport]
 [Guid("000214E4-0000-0000-C000-000000000046")]
 [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 internal interface IContextMenu
@@ -333,11 +376,71 @@ internal sealed class ShellItemSet : IDisposable
 	readonly IShellFolder _parent;
 
 	ShellItemSet(List<IntPtr> absolutePidls, IntPtr[] childPidls, IntPtr parentPtr)
+			: this(absolutePidls, childPidls, parentPtr, (IShellFolder)Marshal.GetObjectForIUnknown(parentPtr))
+	{
+	}
+
+	ShellItemSet(List<IntPtr> absolutePidls, IntPtr[] childPidls, IntPtr parentPtr, IShellFolder parent)
 	{
 		_absolutePidls = absolutePidls;
 		_childPidls = childPidls;
 		_parentPtr = parentPtr;
-		_parent = (IShellFolder)Marshal.GetObjectForIUnknown(parentPtr);
+		_parent = parent;
+	}
+
+	/// <summary>
+	/// 为桌面上的一组项目创建集合，键为完整解析名（文件路径，或此电脑等系统图标的 ::{CLSID}）。
+	/// 父对象统一为桌面根，用户桌面、公共桌面的文件和系统图标可以混选；子 PIDL 取自对桌面根的枚举。
+	/// </summary>
+	public static ShellItemSet? CreateDesktop(IEnumerable<string> keys)
+	{
+		var order = keys.ToList();
+		Marshal.ThrowExceptionForHR(NativeMethods.SHGetDesktopFolder(out var desktopPtr));
+		var desktop = (IShellFolder)Marshal.GetObjectForIUnknown(desktopPtr);
+		var found = new Dictionary<string, IntPtr>(StringComparer.OrdinalIgnoreCase);
+		try
+		{
+			uint flags = NativeMethods.SHCONTF_FOLDERS | NativeMethods.SHCONTF_NONFOLDERS | NativeMethods.SHCONTF_INCLUDEHIDDEN | NativeMethods.SHCONTF_INCLUDESUPERHIDDEN;
+			if (desktop.EnumObjects(IntPtr.Zero, flags, out var enumPtr) == 0 && enumPtr != IntPtr.Zero)
+			{
+				var wanted = new HashSet<string>(order, StringComparer.OrdinalIgnoreCase);
+				var enumerator = (IEnumIDList)Marshal.GetObjectForIUnknown(enumPtr);
+				try
+				{
+					while (enumerator.Next(1, out var child, out uint fetched) == 0 && fetched == 1)
+					{
+						var key = ShellNames.Get(desktop, child, NativeMethods.SHGDN_FORPARSING);
+						if (key == null || !wanted.Contains(key) || !found.TryAdd(key, child))
+						{
+							Marshal.FreeCoTaskMem(child);
+						}
+					}
+				}
+				finally
+				{
+					Marshal.ReleaseComObject(enumerator);
+					Marshal.Release(enumPtr);
+				}
+			}
+		}
+		catch
+		{
+			foreach (var child in found.Values)
+			{
+				Marshal.FreeCoTaskMem(child);
+			}
+			Marshal.ReleaseComObject(desktop);
+			Marshal.Release(desktopPtr);
+			throw;
+		}
+		var children = order.Where(found.ContainsKey).Select(k => found[k]).Distinct().ToArray();
+		if (children.Length == 0)
+		{
+			Marshal.ReleaseComObject(desktop);
+			Marshal.Release(desktopPtr);
+			return null;
+		}
+		return new ShellItemSet(children.ToList(), children, desktopPtr, desktop);
 	}
 
 	/// <summary>

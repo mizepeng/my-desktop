@@ -76,7 +76,23 @@ internal static class NativeMethods
 	public const int WMSZ_BOTTOMLEFT = 7;
 	public const int WMSZ_BOTTOMRIGHT = 8;
 
+	public const int WH_KEYBOARD_LL = 13;
 	public const int WH_MOUSE_LL = 14;
+
+	public const int WM_KEYDOWN = 0x0100;
+	public const int WM_SYSKEYDOWN = 0x0104;
+	public const int VK_RETURN = 0x0D;
+	public const int VK_SHIFT = 0x10;
+	public const int VK_CONTROL = 0x11;
+	public const int VK_MENU = 0x12;
+	public const int VK_DELETE = 0x2E;
+	public const int VK_APPS = 0x5D;
+	public const int VK_F2 = 0x71;
+	public const int VK_F10 = 0x79;
+	public const byte VK_NONAME = 0xFC;
+	public const uint KEYEVENTF_KEYUP = 0x0002;
+	public const uint GUI_INMENUMODE = 0x0004;
+	public const uint GUI_POPUPMENUMODE = 0x0010;
 
 	public const int SM_CXDOUBLECLK = 36;
 	public const int SM_CYDOUBLECLK = 37;
@@ -103,7 +119,12 @@ internal static class NativeMethods
 	public const uint GW_HWNDPREV = 3;
 
 	public const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+	public const uint EVENT_SYSTEM_MENUPOPUPEND = 0x0007;
+	public const uint EVENT_OBJECT_CREATE = 0x8000;
+	public const uint EVENT_OBJECT_DESTROY = 0x8001;
+	public const uint EVENT_OBJECT_SHOW = 0x8002;
 	public const uint EVENT_OBJECT_REORDER = 0x8004;
+	public const uint EVENT_OBJECT_FOCUS = 0x8005;
 	public const uint WINEVENT_OUTOFCONTEXT = 0x0000;
 	public const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
 
@@ -135,6 +156,18 @@ internal static class NativeMethods
 
 	public const uint SHGFI_DISPLAYNAME = 0x0200;
 	public const uint SHGFI_TYPENAME = 0x0400;
+
+	public const uint SHGDN_NORMAL = 0x0000;
+	public const uint SHGDN_FORPARSING = 0x8000;
+	public const uint SHCONTF_FOLDERS = 0x0020;
+	public const uint SHCONTF_NONFOLDERS = 0x0040;
+	public const uint SHCONTF_INCLUDEHIDDEN = 0x0080;
+	public const uint SHCONTF_INCLUDESUPERHIDDEN = 0x10000;
+	public const uint SFGAO_STREAM = 0x00400000;
+	public const uint SFGAO_FOLDER = 0x20000000;
+	public const uint SFGAO_FILESYSTEM = 0x40000000;
+
+	public const int LVM_CANCELEDITLABEL = 0x10B3;
 
 	public const int CC_RGBINIT = 0x0001;
 	public const int CC_FULLOPEN = 0x0002;
@@ -185,6 +218,9 @@ internal static class NativeMethods
 	[DllImport("user32.dll", SetLastError = true)]
 	public static extern uint SendInput(uint count, INPUT[] inputs, int size);
 
+	[DllImport("user32.dll")]
+	public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extraInfo);
+
 	[DllImport("dwmapi.dll")]
 	public static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
 
@@ -229,6 +265,15 @@ internal static class NativeMethods
 	[DllImport("user32.dll")]
 	public static extern uint GetDpiForWindow(IntPtr hwnd);
 
+	[DllImport("user32.dll")]
+	public static extern IntPtr GetForegroundWindow();
+
+	[DllImport("user32.dll")]
+	public static extern bool GetGUIThreadInfo(uint threadId, ref GUITHREADINFO info);
+
+	[DllImport("user32.dll")]
+	public static extern short GetAsyncKeyState(int key);
+
 	#endregion
 
 	#region user32：显示器
@@ -245,14 +290,24 @@ internal static class NativeMethods
 	[DllImport("shcore.dll")]
 	public static extern int GetDpiForMonitor(IntPtr monitor, int dpiType, out uint dpiX, out uint dpiY);
 
+	public delegate bool MonitorEnumProc(IntPtr monitor, IntPtr hdc, ref RECT rect, IntPtr data);
+
+	[DllImport("user32.dll")]
+	public static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc callback, IntPtr data);
+
 	#endregion
 
 	#region user32：钩子
 
 	public delegate IntPtr LowLevelMouseProc(int code, IntPtr wParam, IntPtr lParam);
 
+	public delegate IntPtr LowLevelKeyboardProc(int code, IntPtr wParam, IntPtr lParam);
+
 	[DllImport("user32.dll", SetLastError = true)]
 	public static extern IntPtr SetWindowsHookEx(int hookId, LowLevelMouseProc callback, IntPtr module, uint threadId);
+
+	[DllImport("user32.dll", SetLastError = true)]
+	public static extern IntPtr SetWindowsHookEx(int hookId, LowLevelKeyboardProc callback, IntPtr module, uint threadId);
 
 	[DllImport("user32.dll")]
 	public static extern bool UnhookWindowsHookEx(IntPtr hook);
@@ -289,6 +344,9 @@ internal static class NativeMethods
 
 	[DllImport("user32.dll")]
 	public static extern int GetMenuItemCount(IntPtr menu);
+
+	[DllImport("user32.dll")]
+	public static extern uint GetMenuDefaultItem(IntPtr menu, uint byPosition, uint flags);
 
 	[DllImport("user32.dll")]
 	public static extern int TrackPopupMenuEx(IntPtr menu, uint flags, int x, int y, IntPtr hwnd, IntPtr tpmParams);
@@ -349,6 +407,12 @@ internal static class NativeMethods
 	[DllImport("shlwapi.dll", CharSet = CharSet.Unicode)]
 	public static extern int StrCmpLogicalW(string a, string b);
 
+	[DllImport("shell32.dll")]
+	public static extern int SHGetDesktopFolder(out IntPtr folder);
+
+	[DllImport("shlwapi.dll", CharSet = CharSet.Unicode)]
+	public static extern int StrRetToBuf(IntPtr strret, IntPtr pidl, StringBuilder buffer, uint maxLength);
+
 	#endregion
 
 	#region ole32
@@ -403,6 +467,29 @@ internal static class NativeMethods
 	{
 		GetWindowRect(hwnd, out var rect);
 		return rect;
+	}
+
+	/// <summary>
+	/// 把窗口切到前台以接收键盘输入。前台属于其他程序（如资源管理器的桌面）时系统会拒绝切换，
+	/// 先注入一个没有任何作用的按键弹起事件，让本进程成为最近的输入来源，系统才允许切换。
+	/// </summary>
+	public static bool ForceForegroundWindow(IntPtr hwnd)
+	{
+		// 用户触发命令的那次按键弹起事件可能稍后才送达资源管理器，使它重新成为最近的输入接收者，失败时稍等再试
+		for (int attempt = 0; attempt < 5; attempt++)
+		{
+			if (GetForegroundWindow() == hwnd)
+			{
+				return true;
+			}
+			keybd_event(VK_NONAME, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+			if (SetForegroundWindow(hwnd) && GetForegroundWindow() == hwnd)
+			{
+				return true;
+			}
+			Thread.Sleep(30);
+		}
+		return GetForegroundWindow() == hwnd;
 	}
 
 	public static POINT GetCursorPos()
@@ -502,6 +589,30 @@ internal struct MSLLHOOKSTRUCT
 {
 	public POINT pt;
 	public uint mouseData;
+	public uint flags;
+	public uint time;
+	public IntPtr dwExtraInfo;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct GUITHREADINFO
+{
+	public int cbSize;
+	public uint flags;
+	public IntPtr hwndActive;
+	public IntPtr hwndFocus;
+	public IntPtr hwndCapture;
+	public IntPtr hwndMenuOwner;
+	public IntPtr hwndMoveSize;
+	public IntPtr hwndCaret;
+	public RECT rcCaret;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct KBDLLHOOKSTRUCT
+{
+	public uint vkCode;
+	public uint scanCode;
 	public uint flags;
 	public uint time;
 	public IntPtr dwExtraInfo;

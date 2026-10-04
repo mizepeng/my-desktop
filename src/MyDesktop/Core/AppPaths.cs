@@ -17,19 +17,6 @@ internal static class AppPaths
 
 	public static string CommonDesktop => Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
 
-	/// <summary>
-	/// 托管分区的默认存储目录：与桌面文件夹同级（桌面在 OneDrive 中时也随之位于 OneDrive），
-	/// 保证与桌面同盘，拖入分区时的移动是瞬时完成的。
-	/// </summary>
-	public static string DefaultStorageRoot
-	{
-		get
-		{
-			var desktop = PathUtil.Normalize(Desktop);
-			return Path.Combine(Path.GetDirectoryName(desktop) ?? desktop, "桌面分区");
-		}
-	}
-
 	public static void UseDataDir(string directory)
 	{
 		DataDir = Path.GetFullPath(directory);

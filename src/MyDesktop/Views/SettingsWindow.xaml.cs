@@ -4,7 +4,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using Microsoft.Win32;
 using MyDesktop.Core;
 using MyDesktop.Models;
 using MyDesktop.Services;
@@ -15,7 +14,7 @@ internal partial class SettingsWindow : Window
 {
 	static readonly string[] Tips =
 	[
-		"· 把桌面上的文件拖进分区即可收纳，从分区拖回桌面即可还原",
+		"· 把桌面上的图标拖进分区即可收纳，从分区拖回桌面即可还原；文件始终留在桌面文件夹里，退出后桌面保持原样",
 		"· 拖入时按住 Ctrl 为复制，按住 Alt 为创建快捷方式",
 		"· 在分区内拖动图标可以自由调整顺序",
 		"· 在桌面空白处按住右键拖出一个框，松开即在该位置新建分区",
@@ -56,7 +55,6 @@ internal partial class SettingsWindow : Window
 		ShowHiddenBox.IsChecked = Settings.ShowHiddenFiles;
 		AutoOrganizeBox.IsChecked = Settings.AutoOrganize;
 		TextShadowBox.IsChecked = Settings.TextShadow;
-		StorageBox.Text = _manager.StorageRoot;
 		OpacitySlider.Value = Math.Round(Settings.DefaultOpacity * 100);
 		RadiusSlider.Value = Settings.CornerRadius;
 		SnapGapSlider.Value = Settings.SnapGap;
@@ -165,40 +163,6 @@ internal partial class SettingsWindow : Window
 		_loading = false;
 	}
 
-	void ChangeStorage_Click(object sender, RoutedEventArgs e)
-	{
-		var dialog = new OpenFolderDialog { Title = "选择分区文件的存放位置" };
-		if (Directory.Exists(_manager.StorageRoot))
-		{
-			dialog.InitialDirectory = _manager.StorageRoot;
-		}
-		if (dialog.ShowDialog(this) != true)
-		{
-			return;
-		}
-		if (PathUtil.AreEqual(dialog.FolderName, AppPaths.Desktop))
-		{
-			MessageDialog.Show("存放位置", "不能直接使用桌面文件夹，否则分区文件夹会出现在桌面上。", "确定");
-			return;
-		}
-		Settings.StorageRoot = dialog.FolderName;
-		StorageBox.Text = _manager.StorageRoot;
-		_manager.SaveSoon();
-	}
-
-	void OpenStorage_Click(object sender, RoutedEventArgs e)
-	{
-		try
-		{
-			Directory.CreateDirectory(_manager.StorageRoot);
-		}
-		catch (Exception ex)
-		{
-			Log.Warn("创建存放目录失败", ex);
-		}
-		OpenInExplorer(_manager.StorageRoot);
-	}
-
 	void NewFence_Click(object sender, RoutedEventArgs e) => _manager.CreateFence(editTitle: true);
 
 	void NewPortal_Click(object sender, RoutedEventArgs e) => _manager.CreatePortalFence();
@@ -208,8 +172,6 @@ internal partial class SettingsWindow : Window
 		SaveRules();
 		_manager.Organizer.OrganizeInteractive();
 	}
-
-	void RestoreAll_Click(object sender, RoutedEventArgs e) => _manager.RestoreAllFilesToDesktop();
 
 	#endregion
 

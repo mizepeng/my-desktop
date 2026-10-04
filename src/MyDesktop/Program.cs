@@ -14,6 +14,12 @@ internal static class Program
 			DesktopMenuServer.Run();
 			return;
 		}
+		// 接管桌面图标期间的守护进程：主程序被强制结束时恢复资源管理器的桌面图标
+		if (args.Contains(DesktopGuard.Argument, StringComparer.OrdinalIgnoreCase))
+		{
+			DesktopGuard.Run(args);
+			return;
+		}
 		var app = new App();
 		app.InitializeComponent();
 		app.Run();

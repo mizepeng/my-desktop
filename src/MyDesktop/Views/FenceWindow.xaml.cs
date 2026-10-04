@@ -1,8 +1,6 @@
 using System.Collections.ObjectModel;
-using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -12,19 +10,18 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
-using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using MyDesktop.Core;
 using MyDesktop.Models;
 using MyDesktop.Native;
 using MyDesktop.Services;
 using static MyDesktop.Native.NativeMethods;
-using ComIDataObject = System.Runtime.InteropServices.ComTypes.IDataObject;
 
 namespace MyDesktop.Views;
 
 /// <summary>
-/// 桌面上的一个分区窗口：展示一个文件夹的内容，挂在桌面层，支持拖放、右键菜单、卷起、吸附等。
+/// 桌面上的一个分区窗口，挂在桌面层，支持拖放、右键菜单、卷起、吸附等。
+/// 桌面分区只记录成员，展示桌面上被归入它的图标，文件始终留在桌面；映射分区展示任意一个文件夹的内容。
 /// </summary>
 internal partial class FenceWindow : Window
 {
@@ -32,12 +29,9 @@ internal partial class FenceWindow : Window
 	const double ResizeBorderDip = 5;
 	const double SnapDistanceDip = 12;
 	const double FadeMilliseconds = 180;
-	const int ErrorCancelled = 1223;
 
 	static readonly DropShadowEffect TextShadowEffect = CreateShadow();
 	static readonly int[] CustomColors = new int[16];
-	// 多选拖动时数量徽标的底色，与资源管理器一致的系统蓝
-	static readonly SolidColorBrush CountBadgeBrush = new(Color.FromRgb(0x00, 0x78, 0xD4));
 
 	readonly FenceManager _manager;
 	readonly ObservableCollection<FenceItem> _items = [];
@@ -68,12 +62,14 @@ internal partial class FenceWindow : Window
 	bool _rubberBand;
 	HashSet<FenceItem> _rubberBase = [];
 
-	// 拖入
-	string[]? _dropPaths;
+	// 拖入：本程序发起的拖动取其项目标识（系统图标没有文件路径）和其中的文件，外部拖动两者都是文件路径
+	string[]? _dropKeys;
+	string[] _dropFiles = [];
+	bool _dropFromDesktop;
 	bool _dragInside;
 	int _dragVersion;
 	int _insertIndex = -1;
-	IDropTargetHelper? _dropHelper;
+	readonly DropPreview _dropPreview = new();
 
 	public FenceWindow(FenceManager manager, FenceSettings model)
 	{
@@ -103,6 +99,16 @@ internal partial class FenceWindow : Window
 	public FenceSettings Model { get; }
 
 	public IntPtr Handle => _hwnd;
+
+	/// <summary>
+	/// 桌面分区：成员是桌面上的项目，文件留在桌面；否则为映射分区。
+	/// </summary>
+	bool IsDesktopFence => !Model.IsPortal;
+
+	/// <summary>
+	/// 正在重命名其中的项目（自动整理会等改完名再处理）。
+	/// </summary>
+	public bool IsRenaming => _items.Any(i => i.IsRenaming);
 
 	AppSettings Settings => _manager.Settings;
 
@@ -194,6 +200,15 @@ internal partial class FenceWindow : Window
 
 	public RECT GetBounds() => GetWindowRect(_hwnd);
 
+	/// <summary>
+	/// 散放图标排布时要避开的范围（物理像素）：按保存的位置和尺寸，卷起时只算标题栏，不受悬停临时展开影响。
+	/// </summary>
+	public RECT GetLayoutBounds()
+	{
+		int height = Model.RolledUp ? CollapsedHeight() : Model.Height;
+		return new RECT(Model.X, Model.Y, Model.X + Model.Width, Model.Y + height);
+	}
+
 	#endregion
 
 	#region 窗口消息：置底、缩放边框、吸附
@@ -210,7 +225,7 @@ internal partial class FenceWindow : Window
 			case WM_WINDOWPOSCHANGING:
 			{
 				KeepDragResult(lParam);
-				KeepAboveDesktop(hwnd, lParam);
+				DesktopHost.KeepAboveDesktop(hwnd, lParam);
 				break;
 			}
 			case WM_ENTERSIZEMOVE:
@@ -274,28 +289,6 @@ internal partial class FenceWindow : Window
 			}
 		}
 		return IntPtr.Zero;
-	}
-
-	/// <summary>
-	/// 任何层级变化（被点击激活、Show 等）都改写为「紧贴桌面窗口之上」：
-	/// 平时位于所有应用窗口之下，Win+D 桌面被提到最前时依然可见。
-	/// </summary>
-	static void KeepAboveDesktop(IntPtr hwnd, IntPtr lParam)
-	{
-		var pos = Marshal.PtrToStructure<WINDOWPOS>(lParam);
-		if ((pos.flags & SWP_NOZORDER) != 0)
-		{
-			return;
-		}
-		if (DesktopHost.GetInsertAfterAboveDesktop(hwnd) is IntPtr insertAfter)
-		{
-			pos.hwndInsertAfter = insertAfter;
-		}
-		else
-		{
-			pos.flags |= SWP_NOZORDER;
-		}
-		Marshal.StructureToPtr(pos, lParam, false);
 	}
 
 	int HitTestResizeBorder(IntPtr lParam)
@@ -636,6 +629,7 @@ internal partial class FenceWindow : Window
 			Model.Height = rect.Height;
 		}
 		_manager.SaveSoon();
+		_manager.OnFenceLayoutChanged();
 	}
 
 	#endregion
@@ -669,6 +663,7 @@ internal partial class FenceWindow : Window
 		_collapseTimer.Stop();
 		ApplyBounds();
 		_manager.SaveSoon();
+		_manager.OnFenceLayoutChanged();
 	}
 
 	void UpdateRollVisuals()
@@ -718,7 +713,7 @@ internal partial class FenceWindow : Window
 	public void UpdateTitle()
 	{
 		TitleText.Text = Model.Title;
-		TitleText.ToolTip = Model.FolderPath;
+		TitleText.ToolTip = Model.IsPortal ? Model.FolderPath : null;
 		var badges = new List<string>();
 		if (Model.IsPortal)
 		{
@@ -857,25 +852,41 @@ internal partial class FenceWindow : Window
 		{
 			return;
 		}
-		StartWatcher();
+		// 桌面分区的内容来自桌面视图，由管理器在桌面变化时刷新，不需要监视文件夹
+		if (Model.IsPortal)
+		{
+			StartWatcher();
+		}
+		else
+		{
+			StopWatcher();
+		}
 		RefreshItems();
 	}
 
 	/// <summary>
-	/// 文件夹被外部删除或恢复时刷新（由管理器定时调用）。
+	/// 映射的文件夹被外部删除或恢复时刷新（由管理器定时调用）。
 	/// </summary>
 	public void CheckFolder()
 	{
-		if (Directory.Exists(Model.FolderPath) != _folderExisted)
+		if (Model.IsPortal && Directory.Exists(Model.FolderPath) != _folderExisted)
 		{
 			OnFolderChanged();
 		}
 	}
 
+	/// <summary>
+	/// 文件操作之后稍后刷新：桌面分区要等资源管理器更新桌面视图，映射分区直接重读文件夹。
+	/// </summary>
 	public void ScheduleRefresh()
 	{
 		if (_allowClose)
 		{
+			return;
+		}
+		if (IsDesktopFence)
+		{
+			_manager.RefreshDesktopSoon();
 			return;
 		}
 		_refreshTimer.Stop();
@@ -888,61 +899,121 @@ internal partial class FenceWindow : Window
 		{
 			return;
 		}
-		var folder = Model.FolderPath;
-		if (!Model.IsPortal && !Directory.Exists(folder))
-		{
-			// 托管分区的文件夹被外部删掉时自动重建
-			try
-			{
-				Directory.CreateDirectory(folder);
-			}
-			catch (Exception ex)
-			{
-				Log.Warn($"重建分区文件夹失败：{folder}", ex);
-			}
-		}
-		_folderExisted = Directory.Exists(folder);
-		var existing = _items.ToDictionary(i => i.FullPath, StringComparer.OrdinalIgnoreCase);
-		var fresh = new List<FenceItem>();
-		if (_folderExisted)
-		{
-			try
-			{
-				foreach (var info in new DirectoryInfo(folder).EnumerateFileSystemInfos())
-				{
-					if (!Settings.ShowHiddenFiles && (info.Attributes & (FileAttributes.Hidden | FileAttributes.System)) != 0)
-					{
-						continue;
-					}
-					// 仅大小写不同的重命名会命中旧条目，此时按新名称重建
-					if (existing.TryGetValue(info.FullName, out var item) && string.Equals(item.FullPath, info.FullName, StringComparison.Ordinal))
-					{
-						if (item.Refresh(info))
-						{
-							item.IconPixelSize = 0;
-						}
-					}
-					else
-					{
-						item = FenceItem.Create(info);
-					}
-					fresh.Add(item);
-				}
-			}
-			catch (Exception ex)
-			{
-				Log.Warn($"读取分区文件夹失败：{folder}", ex);
-			}
-		}
+		var fresh = IsDesktopFence ? LoadMembers() : LoadFolder();
 		Sort(fresh);
 		SyncItems(fresh);
 		foreach (var item in fresh)
 		{
 			RequestIcon(item);
 		}
-		EmptyHint.Text = _folderExisted ? "拖放文件到这里" : $"文件夹不存在\n{folder}";
+		EmptyHint.Text = IsDesktopFence ? "把桌面图标拖到这里" : _folderExisted ? "拖放文件到这里" : $"文件夹不存在\n{Model.FolderPath}";
 		EmptyHint.Visibility = fresh.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 	}
+
+	/// <summary>
+	/// 桌面分区：按成员列表从桌面视图中取出项目，显示名与桌面上的一致；暂时不在桌面上的成员不显示。
+	/// </summary>
+	List<FenceItem> LoadMembers()
+	{
+		var desktop = _manager.DesktopItems;
+		if (desktop?.Snapshot == null)
+		{
+			// 还没读到桌面视图（资源管理器未就绪），保留现有内容
+			return _items.ToList();
+		}
+		var existing = new Dictionary<string, FenceItem>(StringComparer.OrdinalIgnoreCase);
+		foreach (var item in _items)
+		{
+			existing.TryAdd(item.FullPath, item);
+		}
+		var added = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		var fresh = new List<FenceItem>();
+		foreach (var key in Model.Members)
+		{
+			if (desktop.Find(key) is not DesktopEntry entry || !added.Add(entry.Key))
+			{
+				continue;
+			}
+			// 仅大小写不同的重命名会命中旧条目，此时按新名称重建
+			if (existing.TryGetValue(entry.Key, out var item) && string.Equals(item.FullPath, entry.Key, StringComparison.Ordinal))
+			{
+				if (item.Update(entry))
+				{
+					item.IconPixelSize = 0;
+				}
+			}
+			else
+			{
+				item = FenceItem.Create(entry);
+			}
+			fresh.Add(item);
+		}
+		return fresh;
+	}
+
+	List<FenceItem> LoadFolder()
+	{
+		var folder = Model.FolderPath;
+		_folderExisted = Directory.Exists(folder);
+		var existing = _items.ToDictionary(i => i.FullPath, StringComparer.OrdinalIgnoreCase);
+		var fresh = new List<FenceItem>();
+		if (!_folderExisted)
+		{
+			return fresh;
+		}
+		try
+		{
+			foreach (var info in new DirectoryInfo(folder).EnumerateFileSystemInfos())
+			{
+				if (!Settings.ShowHiddenFiles && (info.Attributes & (FileAttributes.Hidden | FileAttributes.System)) != 0)
+				{
+					continue;
+				}
+				// 仅大小写不同的重命名会命中旧条目，此时按新名称重建
+				if (existing.TryGetValue(info.FullName, out var item) && string.Equals(item.FullPath, info.FullName, StringComparison.Ordinal))
+				{
+					if (item.Refresh(info))
+					{
+						item.IconPixelSize = 0;
+					}
+				}
+				else
+				{
+					item = FenceItem.Create(info);
+				}
+				fresh.Add(item);
+			}
+		}
+		catch (Exception ex)
+		{
+			Log.Warn($"读取分区文件夹失败：{folder}", ex);
+		}
+		return fresh;
+	}
+
+	/// <summary>
+	/// 把桌面项目加入本分区（已从其他分区移出），新成员排在自定义顺序的最后。
+	/// </summary>
+	public void AddMembers(IEnumerable<string> keys)
+	{
+		foreach (var key in keys)
+		{
+			if (!Model.Members.Contains(key, StringComparer.OrdinalIgnoreCase))
+			{
+				Model.Members.Add(key);
+			}
+		}
+		RefreshItems();
+	}
+
+	public FenceItem? FindItem(string key) => _items.FirstOrDefault(i => string.Equals(i.FullPath, key, StringComparison.OrdinalIgnoreCase));
+
+	/// <summary>
+	/// 自定义顺序中记录项目的方式：桌面分区记完整解析名（用户桌面和公共桌面可能有同名文件），映射分区记文件名。
+	/// </summary>
+	string OrderKey(FenceItem item) => IsDesktopFence ? item.FullPath : item.FileName;
+
+	string OrderKey(string key) => IsDesktopFence ? key : Path.GetFileName(key);
 
 	void Sort(List<FenceItem> items)
 	{
@@ -953,7 +1024,7 @@ internal partial class FenceWindow : Window
 			rank.TryAdd(Model.CustomOrder[i], i);
 		}
 		// 自定义顺序里没有的（新加入的）项目排在最后
-		int Rank(FenceItem item) => rank.TryGetValue(item.FileName, out int index) ? index : int.MaxValue;
+		int Rank(FenceItem item) => rank.TryGetValue(OrderKey(item), out int index) ? index : int.MaxValue;
 		Comparison<FenceItem> byField = Model.SortBy switch
 		{
 			SortField.Name => (a, b) => StrCmpLogicalW(a.DisplayName, b.DisplayName),
@@ -1258,102 +1329,9 @@ internal partial class FenceWindow : Window
 			return;
 		}
 		Mouse.Capture(null);
-		try
-		{
-			ShellFileOps.DoDragDrop(_hwnd, items.Select(i => i.FullPath).ToList(), CreateDragImage(anchor, items.Count));
-		}
-		catch (Exception ex)
-		{
-			Log.Warn("拖出文件失败", ex);
-		}
+		var image = ItemOps.CreateDragImage(ItemsList.ItemContainerGenerator.ContainerFromItem(anchor) as ListBoxItem, items.Count, ScaleFactor);
+		ItemOps.DragOut(_hwnd, items, IsDesktopFence, this, image);
 		ScheduleRefresh();
-	}
-
-	/// <summary>
-	/// 按分区中的实际样子（图标 + 名称，不含选中底色）生成拖动预览图，与原图标重合地跟随鼠标；
-	/// 多选时在图标右上角标出数量。生成失败返回 null，由系统生成默认预览图。
-	/// </summary>
-	SHDRAGIMAGE? CreateDragImage(FenceItem anchor, int count)
-	{
-		if (ItemsList.ItemContainerGenerator.ContainerFromItem(anchor) is not ListBoxItem container
-				|| FindDescendant<ContentPresenter>(container) is not ContentPresenter content
-				|| content.ActualWidth <= 0
-				|| content.ActualHeight <= 0)
-		{
-			return null;
-		}
-		double scale = ScaleFactor;
-		var size = new Size(content.ActualWidth, content.ActualHeight);
-		var visual = new DrawingVisual();
-		using (var context = visual.RenderOpen())
-		{
-			var brush = new VisualBrush(content)
-			{
-				Viewbox = new Rect(size),
-				ViewboxUnits = BrushMappingMode.Absolute,
-			};
-			context.DrawRectangle(brush, null, new Rect(size));
-			if (count > 1 && FindDescendant<Image>(content) is Image icon)
-			{
-				DrawCountBadge(context, icon.TransformToAncestor(content).TransformBounds(new Rect(icon.RenderSize)), size, count, scale);
-			}
-		}
-		var image = new RenderTargetBitmap((int)Math.Ceiling(size.Width * scale), (int)Math.Ceiling(size.Height * scale), 96 * scale, 96 * scale, PixelFormats.Pbgra32);
-		image.Render(visual);
-		var bitmap = CreateDragBitmap(image);
-		if (bitmap == IntPtr.Zero)
-		{
-			return null;
-		}
-		var origin = content.PointToScreen(new Point());
-		var cursor = NativeMethods.GetCursorPos();
-		return new SHDRAGIMAGE
-		{
-			sizeDragImage = new SIZE(image.PixelWidth, image.PixelHeight),
-			ptOffset = new POINT(Math.Clamp(cursor.X - (int)Math.Round(origin.X), 0, image.PixelWidth), Math.Clamp(cursor.Y - (int)Math.Round(origin.Y), 0, image.PixelHeight)),
-			hbmpDragImage = bitmap,
-			// 带 alpha 通道的位图不需要透明色
-			crColorKey = 0xFFFFFFFF,
-		};
-	}
-
-	static void DrawCountBadge(DrawingContext context, Rect icon, Size bounds, int count, double scale)
-	{
-		var text = new FormattedText(count.ToString(CultureInfo.InvariantCulture), CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
-				new Typeface(SystemFonts.MessageFontFamily, FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal), 11, Brushes.White, scale);
-		double height = 18;
-		double width = Math.Max(height, text.Width + 10);
-		// 徽标中心落在图标右上角，同时不超出预览图范围
-		double x = Math.Clamp(icon.Right - width / 2, 0, Math.Max(0, bounds.Width - width));
-		double y = Math.Clamp(icon.Top - height / 2, 0, Math.Max(0, bounds.Height - height));
-		context.DrawRoundedRectangle(CountBadgeBrush, null, new Rect(x, y, width, height), height / 2, height / 2);
-		context.DrawText(text, new Point(x + (width - text.Width) / 2, y + (height - text.Height) / 2));
-	}
-
-	/// <summary>
-	/// 转成 32 位自上而下、预乘 alpha 的 DIB，这是拖放预览图要求的格式。
-	/// </summary>
-	static IntPtr CreateDragBitmap(BitmapSource source)
-	{
-		int width = source.PixelWidth;
-		int height = source.PixelHeight;
-		var info = new BITMAPINFO
-		{
-			bmiHeader = new BITMAPINFOHEADER
-			{
-				biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(),
-				biWidth = width,
-				biHeight = -height,
-				biPlanes = 1,
-				biBitCount = 32,
-			},
-		};
-		var bitmap = CreateDIBSection(IntPtr.Zero, ref info, 0, out var bits, IntPtr.Zero, 0);
-		if (bitmap != IntPtr.Zero)
-		{
-			source.CopyPixels(Int32Rect.Empty, bits, width * height * 4, width * 4);
-		}
-		return bitmap;
 	}
 
 	FenceItem? ItemFromSource(object source)
@@ -1373,19 +1351,7 @@ internal partial class FenceWindow : Window
 		}
 	}
 
-	static bool IsInside<T>(object source) where T : DependencyObject
-	{
-		var current = source as DependencyObject;
-		while (current != null)
-		{
-			if (current is T)
-			{
-				return true;
-			}
-			current = current is Visual ? VisualTreeHelper.GetParent(current) : LogicalTreeHelper.GetParent(current);
-		}
-		return false;
-	}
+	static bool IsInside<T>(object source) where T : DependencyObject => ItemOps.IsInside<T>(source);
 
 	#endregion
 
@@ -1487,7 +1453,7 @@ internal partial class FenceWindow : Window
 
 	void ShowFenceMenu(POINT point)
 	{
-		bool folderExists = Directory.Exists(Model.FolderPath);
+		bool folderExists = IsDesktopFence || Directory.Exists(Model.FolderPath);
 		_menuOpen = true;
 		_buttonsTimer.Stop();
 		ShowTitleButtons(true);
@@ -1497,7 +1463,7 @@ internal partial class FenceWindow : Window
 			menu.Add("新建分区", () => _manager.CreateFence(near: this, editTitle: true));
 			menu.Add("新建文件夹映射分区…", () => _manager.CreatePortalFence(this));
 			menu.AddSeparator();
-			menu.Add("粘贴\tCtrl+V", PasteFromClipboard, enabled: folderExists && ClipboardHasFiles());
+			menu.Add("粘贴\tCtrl+V", PasteFromClipboard, enabled: folderExists && ItemOps.ClipboardHasFiles());
 			menu.Add("新建文件夹", NewFolder, enabled: folderExists);
 			menu.Add("刷新\tF5", RefreshItems);
 			menu.AddSeparator();
@@ -1545,9 +1511,9 @@ internal partial class FenceWindow : Window
 			menu.Add("重命名分区", BeginTitleEdit);
 			menu.Add(Model.RolledUp ? "展开分区" : "卷起分区", ToggleRollUp);
 			menu.Add("锁定分区", ToggleLock, isChecked: Model.Locked);
-			menu.Add("在资源管理器中打开", OpenFolderInExplorer, enabled: folderExists);
 			if (Model.IsPortal)
 			{
+				menu.Add("在资源管理器中打开", OpenFolderInExplorer, enabled: folderExists);
 				menu.Add("更换映射文件夹…", () => _manager.ChangePortalFolder(this));
 			}
 			menu.AddSeparator();
@@ -1576,18 +1542,25 @@ internal partial class FenceWindow : Window
 		{
 			var paths = items.Select(i => i.FullPath).ToList();
 			var extras = new List<(string, Action)>();
-			if (!PathUtil.AreEqual(Model.FolderPath, AppPaths.Desktop))
+			if (IsDesktopFence)
+			{
+				extras.Add(("移出分区", () => _manager.AssignToFence(null, paths)));
+			}
+			else
 			{
 				extras.Add(("移回桌面", () => MoveToDesktop(paths)));
 			}
-			ShellContextMenu.Show(_hwnd, paths, point, extras, verb =>
+			ItemOps.ShowContextMenu(_hwnd, items, IsDesktopFence, point, extras, verb =>
 			{
 				// Shell 自己不会处理重命名（需要视图配合），改为在分区内联编辑
 				if (!string.Equals(verb, "rename", StringComparison.OrdinalIgnoreCase))
 				{
 					return false;
 				}
-				BeginRename(items[0]);
+				if (!items[0].IsVirtual)
+				{
+					BeginRename(items[0]);
+				}
 				return true;
 			});
 		}
@@ -1607,7 +1580,7 @@ internal partial class FenceWindow : Window
 		// 切到自定义排序时以当前显示顺序为起点
 		if (field == SortField.Custom && Model.SortBy != SortField.Custom)
 		{
-			Model.CustomOrder = _items.Select(i => i.FileName).ToList();
+			Model.CustomOrder = _items.Select(OrderKey).ToList();
 		}
 		Model.SortBy = field;
 		Model.SortDescending = descending;
@@ -1677,30 +1650,7 @@ internal partial class FenceWindow : Window
 
 	#region 文件操作
 
-	void OpenItems(IEnumerable<FenceItem> items)
-	{
-		foreach (var item in items)
-		{
-			try
-			{
-				var startInfo = new ProcessStartInfo(item.FullPath)
-				{
-					UseShellExecute = true,
-					WorkingDirectory = Path.GetDirectoryName(item.FullPath) ?? string.Empty,
-				};
-				Process.Start(startInfo)?.Dispose();
-			}
-			catch (Win32Exception ex) when (ex.NativeErrorCode == ErrorCancelled)
-			{
-				// 用户在 UAC 等提示中取消
-			}
-			catch (Exception ex)
-			{
-				Log.Warn($"打开失败：{item.FullPath}", ex);
-				MessageDialog.Show("打开失败", $"无法打开「{item.DisplayName}」：\n{ex.Message}", "确定");
-			}
-		}
-	}
+	void OpenItems(IEnumerable<FenceItem> items) => ItemOps.Open(_hwnd, items, IsDesktopFence);
 
 	void OpenFolderInExplorer()
 	{
@@ -1722,17 +1672,18 @@ internal partial class FenceWindow : Window
 
 	void DeleteItems(List<FenceItem> items, bool permanent)
 	{
-		if (items.Count == 0)
-		{
-			return;
-		}
-		ShellFileOps.Delete(_hwnd, items.Select(i => i.FullPath), !permanent);
+		ItemOps.Delete(_hwnd, items, permanent);
 		ScheduleRefresh();
 	}
 
+	/// <summary>
+	/// 新建的文件或文件夹所在的位置：桌面分区放在桌面文件夹（再归入本分区），映射分区放在映射的文件夹。
+	/// </summary>
+	string TargetFolder => IsDesktopFence ? AppPaths.Desktop : Model.FolderPath;
+
 	void NewFolder()
 	{
-		var path = PathUtil.UniquePath(Model.FolderPath, "新建文件夹");
+		var path = PathUtil.UniquePath(TargetFolder, "新建文件夹");
 		try
 		{
 			Directory.CreateDirectory(path);
@@ -1740,6 +1691,13 @@ internal partial class FenceWindow : Window
 		catch (Exception ex)
 		{
 			MessageDialog.Show("新建文件夹", $"创建失败：{ex.Message}", "确定");
+			return;
+		}
+		if (IsDesktopFence)
+		{
+			// 要等资源管理器把新文件夹加进桌面视图后才能改名
+			_manager.AssignToFence(this, [path]);
+			_manager.RequestRename(path);
 			return;
 		}
 		RefreshItems();
@@ -1750,66 +1708,16 @@ internal partial class FenceWindow : Window
 		}
 	}
 
-	void CopyToClipboard(List<FenceItem> items, bool cut)
-	{
-		if (items.Count == 0)
-		{
-			return;
-		}
-		try
-		{
-			var files = new StringCollection();
-			files.AddRange(items.Select(i => i.FullPath).ToArray());
-			var data = new DataObject();
-			data.SetFileDropList(files);
-			// 资源管理器的约定：剪切为 DROPEFFECT_MOVE(2)，复制为 COPY|LINK(5)
-			data.SetData("Preferred DropEffect", new MemoryStream(BitConverter.GetBytes(cut ? 2 : 5)));
-			Clipboard.SetDataObject(data, true);
-		}
-		catch (Exception ex)
-		{
-			Log.Warn("写入剪贴板失败", ex);
-		}
-	}
+	void CopyToClipboard(List<FenceItem> items, bool cut) => ItemOps.CopyToClipboard(items, cut);
 
 	void PasteFromClipboard()
 	{
-		try
+		var pasted = ItemOps.Paste(_hwnd, TargetFolder);
+		if (IsDesktopFence && pasted.Count > 0)
 		{
-			if (!Clipboard.ContainsFileDropList())
-			{
-				return;
-			}
-			var files = Clipboard.GetFileDropList().Cast<string>().ToArray();
-			bool cut = Clipboard.GetData("Preferred DropEffect") is MemoryStream stream
-					&& stream.Length >= 4
-					&& (BitConverter.ToInt32(stream.ToArray(), 0) & 2) != 0;
-			if (!cut)
-			{
-				ShellFileOps.Copy(_hwnd, files, Model.FolderPath);
-			}
-			else if (ShellFileOps.Move(_hwnd, files, Model.FolderPath))
-			{
-				Clipboard.Clear();
-			}
-		}
-		catch (Exception ex)
-		{
-			Log.Warn("粘贴失败", ex);
+			_manager.AssignToFence(this, pasted);
 		}
 		ScheduleRefresh();
-	}
-
-	static bool ClipboardHasFiles()
-	{
-		try
-		{
-			return Clipboard.ContainsFileDropList();
-		}
-		catch (Exception)
-		{
-			return false;
-		}
 	}
 
 	#endregion
@@ -1818,6 +1726,10 @@ internal partial class FenceWindow : Window
 
 	public void BeginRename(FenceItem item)
 	{
+		if (item.IsVirtual)
+		{
+			return;
+		}
 		CommitAllRenames();
 		ActivateForInput();
 		ItemsList.UnselectAll();
@@ -1890,31 +1802,23 @@ internal partial class FenceWindow : Window
 			return;
 		}
 		item.IsRenaming = false;
-		var newName = item.RenameText.Trim();
-		if (newName.Length == 0 || newName == item.DisplayName)
+		var oldPath = item.FullPath;
+		if (ItemOps.Rename(_hwnd, item, item.RenameText) is not string newPath)
 		{
 			return;
 		}
-		var target = newName;
-		var extension = Path.GetExtension(item.FileName);
-		// 显示名省略了扩展名（快捷方式，或系统设置为隐藏已知扩展名）时保留原扩展名
-		if (!item.IsFolder && extension.Length > 0 && !item.DisplayName.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+		if (IsDesktopFence)
 		{
-			target += extension;
+			// 成员和自定义顺序记的是完整路径，改名后同步更新，位置不变
+			_manager.OnItemRenamed(oldPath, newPath);
 		}
-		if (target.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+		else
 		{
-			MessageDialog.Show("重命名", "文件名不能包含下列任何字符：\n\\ / : * ? \" < > |", "确定");
-			return;
-		}
-		var directory = Path.GetDirectoryName(item.FullPath);
-		if (directory != null)
-		{
-			int index = Model.CustomOrder.FindIndex(n => string.Equals(n, item.FileName, StringComparison.OrdinalIgnoreCase));
 			// 自定义顺序按文件名记录，改名后同步更新，位置不变
-			if (ShellFileOps.Rename(_hwnd, item.FullPath, Path.Combine(directory, target)) && index >= 0)
+			int index = Model.CustomOrder.FindIndex(n => string.Equals(n, item.FileName, StringComparison.OrdinalIgnoreCase));
+			if (index >= 0)
 			{
-				Model.CustomOrder[index] = target;
+				Model.CustomOrder[index] = Path.GetFileName(newPath);
 				_manager.SaveSoon();
 			}
 		}
@@ -1926,41 +1830,9 @@ internal partial class FenceWindow : Window
 		return ItemsList.ItemContainerGenerator.ContainerFromItem(item) is ListBoxItem container ? FindChild<TextBox>(container, "RenameBox") : null;
 	}
 
-	static T? FindDescendant<T>(DependencyObject parent) where T : DependencyObject
-	{
-		for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
-		{
-			var child = VisualTreeHelper.GetChild(parent, i);
-			if (child is T match)
-			{
-				return match;
-			}
-			var nested = FindDescendant<T>(child);
-			if (nested != null)
-			{
-				return nested;
-			}
-		}
-		return null;
-	}
+	static T? FindDescendant<T>(DependencyObject parent) where T : DependencyObject => ItemOps.FindDescendant<T>(parent);
 
-	static T? FindChild<T>(DependencyObject parent, string name) where T : FrameworkElement
-	{
-		for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
-		{
-			var child = VisualTreeHelper.GetChild(parent, i);
-			if (child is T match && match.Name == name)
-			{
-				return match;
-			}
-			var nested = FindChild<T>(child, name);
-			if (nested != null)
-			{
-				return nested;
-			}
-		}
-		return null;
-	}
+	static T? FindChild<T>(DependencyObject parent, string name) where T : FrameworkElement => ItemOps.FindChild<T>(parent, name);
 
 	/// <summary>
 	/// 分区平时不抢焦点，需要键盘输入（重命名）时才主动激活。
@@ -1969,6 +1841,7 @@ internal partial class FenceWindow : Window
 	{
 		if (!IsActive)
 		{
+			NativeMethods.ForceForegroundWindow(_hwnd);
 			Activate();
 		}
 	}
@@ -2038,7 +1911,10 @@ internal partial class FenceWindow : Window
 		if (firstEnter)
 		{
 			_dragInside = true;
-			_dropPaths = GetDropPaths(e.Data);
+			var drag = DesktopDrag.Current;
+			_dropKeys = drag?.Keys.ToArray() ?? GetDropPaths(e.Data);
+			_dropFiles = drag?.Files.ToArray() ?? _dropKeys ?? [];
+			_dropFromDesktop = drag?.FromDesktop == true;
 			SetDropHighlight(true);
 			if (Model.RolledUp && !_tempExpanded)
 			{
@@ -2050,11 +1926,11 @@ internal partial class FenceWindow : Window
 		TrackReorder(e);
 		if (firstEnter)
 		{
-			HelperDragEnter(e);
+			_dropPreview.Enter(_hwnd, e);
 		}
 		else
 		{
-			HelperDragOver(e);
+			_dropPreview.Over(e);
 		}
 		e.Handled = true;
 	}
@@ -2065,7 +1941,7 @@ internal partial class FenceWindow : Window
 		_dragVersion++;
 		e.Effects = ComputeDropEffect(e);
 		TrackReorder(e);
-		HelperDragOver(e);
+		_dropPreview.Over(e);
 		e.Handled = true;
 	}
 
@@ -2089,22 +1965,31 @@ internal partial class FenceWindow : Window
 		base.OnDrop(e);
 		_dragVersion++;
 		var effect = ComputeDropEffect(e);
-		var paths = _dropPaths;
+		var keys = _dropKeys;
+		var paths = _dropFiles;
+		bool fromDesktop = _dropFromDesktop;
 		bool reorder = IsReorderDrag();
 		int insertIndex = _insertIndex;
-		HelperDrop(e, effect);
+		_dropPreview.Drop(e, effect);
 		EndDragInside(false);
 		e.Handled = true;
-		if (reorder && paths != null)
+		if (reorder && keys != null)
 		{
 			// 同一分区内拖动只调整顺序，不动文件；回报 None，拖放源无需做任何事
 			e.Effects = DragDropEffects.None;
-			ApplyReorder(paths, insertIndex);
+			ApplyReorder(keys, insertIndex);
 			return;
 		}
-		if (paths == null || effect == DragDropEffects.None)
+		if (keys == null || effect == DragDropEffects.None)
 		{
 			e.Effects = DragDropEffects.None;
+			return;
+		}
+		if (IsDesktopFence && fromDesktop)
+		{
+			// 桌面上的图标拖进桌面分区只改归属，文件不动
+			e.Effects = DragDropEffects.None;
+			_manager.AssignToFence(this, keys);
 			return;
 		}
 		// 移动由本程序完成，回报 None 让拖放源不再自行删除源文件（防止非优化移动造成误删）
@@ -2123,13 +2008,15 @@ internal partial class FenceWindow : Window
 	void EndDragInside(bool notifyHelper)
 	{
 		_dragInside = false;
-		_dropPaths = null;
+		_dropKeys = null;
+		_dropFiles = [];
+		_dropFromDesktop = false;
 		_insertIndex = -1;
 		InsertMarker.Visibility = Visibility.Collapsed;
 		SetDropHighlight(false);
 		if (notifyHelper)
 		{
-			HelperDragLeave();
+			_dropPreview.Leave();
 		}
 		if (_tempExpanded)
 		{
@@ -2138,11 +2025,19 @@ internal partial class FenceWindow : Window
 	}
 
 	/// <summary>
-	/// 拖动的全是本分区里的文件：视为调整顺序。
+	/// 拖动的全是本分区里的项目：视为调整顺序。
 	/// </summary>
 	bool IsReorderDrag()
 	{
-		return _dropPaths is { Length: > 0 } paths && paths.All(p => PathUtil.AreEqual(Path.GetDirectoryName(p), Model.FolderPath));
+		if (_dropKeys is not { Length: > 0 } keys)
+		{
+			return false;
+		}
+		if (IsDesktopFence)
+		{
+			return _dropFromDesktop && keys.All(k => Model.Members.Contains(k, StringComparer.OrdinalIgnoreCase));
+		}
+		return _dropFiles.Length == keys.Length && keys.All(p => PathUtil.AreEqual(Path.GetDirectoryName(p), Model.FolderPath));
 	}
 
 	void TrackReorder(DragEventArgs e)
@@ -2235,10 +2130,10 @@ internal partial class FenceWindow : Window
 		}
 	}
 
-	void ApplyReorder(string[] paths, int insertIndex)
+	void ApplyReorder(string[] keys, int insertIndex)
 	{
-		var moving = new HashSet<string>(paths.Select(Path.GetFileName).OfType<string>(), StringComparer.OrdinalIgnoreCase);
-		var order = _items.Select(i => i.FileName).ToList();
+		var moving = new HashSet<string>(keys.Select(OrderKey), StringComparer.OrdinalIgnoreCase);
+		var order = _items.Select(OrderKey).ToList();
 		if (insertIndex < 0 || insertIndex > order.Count)
 		{
 			insertIndex = order.Count;
@@ -2255,82 +2150,51 @@ internal partial class FenceWindow : Window
 	}
 
 	/// <summary>
-	/// 默认动作与资源管理器一致：同盘或来自桌面/其他分区时移动，跨盘复制；Ctrl 复制、Shift 移动、Alt 创建快捷方式。
+	/// 在同一分区内拖动是调整顺序；桌面上的图标拖进桌面分区只改归属；
+	/// 其他文件按资源管理器的规则（同盘或来自桌面/其他分区时移动，跨盘复制；Ctrl 复制、Shift 移动、Alt 创建快捷方式）
+	/// 放进映射的文件夹，桌面分区则放到桌面文件夹再归入本分区。
 	/// </summary>
 	DragDropEffects ComputeDropEffect(DragEventArgs e)
 	{
-		var paths = _dropPaths;
-		var folder = Model.FolderPath;
-		if (paths == null || paths.Length == 0 || !Directory.Exists(folder))
+		var keys = _dropKeys;
+		if (keys == null || keys.Length == 0)
 		{
 			return DragDropEffects.None;
 		}
-		// 在同一分区内拖动是调整顺序
-		if (IsReorderDrag())
+		if (IsReorderDrag() || (IsDesktopFence && _dropFromDesktop))
 		{
 			return (e.AllowedEffects & DragDropEffects.Move) != 0 ? DragDropEffects.Move : DragDropEffects.None;
+		}
+		var folder = TargetFolder;
+		// 系统图标没有文件可以移动或复制
+		var paths = _dropFiles;
+		if (paths.Length == 0 || !Directory.Exists(folder))
+		{
+			return DragDropEffects.None;
 		}
 		// 把文件夹拖进它自己（及其子目录）对应的分区不处理
 		if (paths.Any(p => PathUtil.AreEqual(p, folder) || PathUtil.IsUnder(folder, p)))
 		{
 			return DragDropEffects.None;
 		}
-		var keys = e.KeyStates;
-		bool ctrl = keys.HasFlag(DragDropKeyStates.ControlKey);
-		bool shift = keys.HasFlag(DragDropKeyStates.ShiftKey);
-		bool alt = keys.HasFlag(DragDropKeyStates.AltKey);
-		DragDropEffects wanted;
-		if (alt || (ctrl && shift))
-		{
-			wanted = DragDropEffects.Link;
-		}
-		else if (ctrl)
-		{
-			wanted = DragDropEffects.Copy;
-		}
-		else if (shift)
-		{
-			wanted = DragDropEffects.Move;
-		}
-		else
-		{
-			wanted = _manager.PrefersMove(paths, folder) ? DragDropEffects.Move : DragDropEffects.Copy;
-		}
-		if ((e.AllowedEffects & wanted) != 0)
-		{
-			return wanted;
-		}
-		foreach (var fallback in new[] { DragDropEffects.Move, DragDropEffects.Copy, DragDropEffects.Link })
-		{
-			if ((e.AllowedEffects & fallback) != 0)
-			{
-				return fallback;
-			}
-		}
-		return DragDropEffects.None;
+		return ItemOps.ChooseDropEffect(e, _manager.PrefersMove(paths, folder));
 	}
 
 	void PerformDrop(string[] paths, DragDropEffects effect)
 	{
-		try
+		var folder = TargetFolder;
+		if (IsDesktopFence)
 		{
-			if (effect == DragDropEffects.Move)
-			{
-				ShellFileOps.Move(_hwnd, paths, Model.FolderPath);
-			}
-			else if (effect == DragDropEffects.Copy)
-			{
-				ShellFileOps.Copy(_hwnd, paths, Model.FolderPath);
-			}
-			else if (effect == DragDropEffects.Link)
-			{
-				ShellFileOps.CreateShortcuts(paths, Model.FolderPath);
-			}
+			// 先登记预期的新路径，资源管理器更新视图时新图标直接出现在本分区；桌面上已有同名项目的不登记，免得把它拉进来
+			var expected = paths.Select(p => Path.Combine(folder, Path.GetFileName(p.TrimEnd('\\'))))
+					.Where(p => !File.Exists(p) && !Directory.Exists(p))
+					.ToList();
+			_manager.AssignToFence(this, expected);
 		}
-		catch (Exception ex)
+		var created = ItemOps.Transfer(_hwnd, paths, folder, effect);
+		if (IsDesktopFence && effect == DragDropEffects.Link)
 		{
-			Log.Error("拖放文件失败", ex);
-			MessageDialog.Show("拖放失败", ex.Message, "确定");
+			_manager.AssignToFence(this, created);
 		}
 		ScheduleRefresh();
 	}
@@ -2345,49 +2209,6 @@ internal partial class FenceWindow : Window
 		{
 			return null;
 		}
-	}
-
-	/// <summary>
-	/// 以下 Helper 方法驱动系统的拖放预览图（与资源管理器一样显示文件缩略图和"移动到 xx"提示）。
-	/// </summary>
-	void HelperDragEnter(DragEventArgs e)
-	{
-		try
-		{
-			_dropHelper ??= (IDropTargetHelper)new DragDropHelper();
-			if (e.Data is ComIDataObject data)
-			{
-				var point = NativeMethods.GetCursorPos();
-				_dropHelper.DragEnter(_hwnd, data, ref point, (int)e.Effects);
-			}
-		}
-		catch (Exception ex)
-		{
-			Log.Warn("初始化拖放预览失败", ex);
-			_dropHelper = null;
-		}
-	}
-
-	void HelperDragOver(DragEventArgs e)
-	{
-		if (_dropHelper == null)
-		{
-			return;
-		}
-		var point = NativeMethods.GetCursorPos();
-		_dropHelper.DragOver(ref point, (int)e.Effects);
-	}
-
-	void HelperDragLeave() => _dropHelper?.DragLeave();
-
-	void HelperDrop(DragEventArgs e, DragDropEffects effect)
-	{
-		if (_dropHelper == null || e.Data is not ComIDataObject data)
-		{
-			return;
-		}
-		var point = NativeMethods.GetCursorPos();
-		_dropHelper.Drop(data, ref point, (int)effect);
 	}
 
 	#endregion

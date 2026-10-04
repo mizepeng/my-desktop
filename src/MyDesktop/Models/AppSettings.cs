@@ -41,11 +41,6 @@ public enum HideTarget
 /// </summary>
 public sealed class AppSettings
 {
-	/// <summary>
-	/// 托管分区的文件存放根目录；为空时使用默认位置（与桌面同级的「桌面分区」目录）。
-	/// </summary>
-	public string? StorageRoot { get; set; }
-
 	public bool DoubleClickToHide { get; set; } = true;
 
 	/// <summary>
@@ -77,10 +72,13 @@ public sealed class AppSettings
 	/// </summary>
 	public bool DesktopContextMenu { get; set; } = true;
 
+	/// <summary>
+	/// 映射分区显示隐藏文件；桌面分区和散放图标跟随资源管理器的「隐藏的项目」设置。
+	/// </summary>
 	public bool ShowHiddenFiles { get; set; }
 
 	/// <summary>
-	/// 桌面上新出现的文件按整理规则自动移入分区。
+	/// 桌面上新出现的文件按整理规则自动归入分区。
 	/// </summary>
 	public bool AutoOrganize { get; set; }
 
@@ -105,12 +103,20 @@ public sealed class FenceSettings
 
 	public string Title { get; set; } = "新建分区";
 
+	/// <summary>
+	/// 映射分区所映射的文件夹；桌面分区为空（旧版本的托管分区在启动时转换）。
+	/// </summary>
 	public string FolderPath { get; set; } = string.Empty;
 
 	/// <summary>
-	/// 映射分区：直接展示任意已有文件夹；否则为托管分区，文件夹由本程序在存储目录下创建。
+	/// 映射分区：直接展示任意已有文件夹；否则为桌面分区，展示归入它的桌面图标，文件始终留在桌面。
 	/// </summary>
 	public bool IsPortal { get; set; }
+
+	/// <summary>
+	/// 桌面分区的成员：桌面项目的完整解析名（文件为完整路径，此电脑等系统图标为 ::{CLSID}）。
+	/// </summary>
+	public List<string> Members { get; set; } = [];
 
 	/// <summary>
 	/// 位置与尺寸均为屏幕物理像素；Height 为展开状态下的高度。
@@ -143,7 +149,7 @@ public sealed class FenceSettings
 	public bool SortDescending { get; set; }
 
 	/// <summary>
-	/// 自定义排序时的文件名顺序；不在列表中的新文件按名称排在最后。
+	/// 自定义排序时的顺序：桌面分区记完整解析名，映射分区记文件名；不在列表中的新项目排在最后。
 	/// </summary>
 	public List<string> CustomOrder { get; set; } = [];
 }

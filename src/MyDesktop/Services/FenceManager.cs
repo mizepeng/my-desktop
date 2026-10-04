@@ -11,12 +11,17 @@ using static MyDesktop.Native.NativeMethods;
 namespace MyDesktop.Services;
 
 /// <summary>
-/// 管理全部分区窗口与全局功能：托盘菜单、显示/隐藏、桌面双击、布局保存、Explorer 重启恢复。
+/// 管理全部分区窗口与全局功能：托盘菜单、显示/隐藏、桌面双击、布局保存、Explorer 重启恢复，以及桌面分区的成员归属。
 /// </summary>
 internal sealed class FenceManager
 {
 	const double DefaultWidthDip = 340;
 	const double DefaultHeightDip = 240;
+
+	/// <summary>
+	/// 成员对应的文件消失这么久之后才移出分区：改名时旧路径会短暂消失，要等改名通知把成员换成新路径。
+	/// </summary>
+	static readonly TimeSpan MissingMemberGrace = TimeSpan.FromSeconds(10);
 
 	static readonly HashSet<string> GeneratedFiles = new(StringComparer.OrdinalIgnoreCase) { "desktop.ini", "Thumbs.db" };
 
@@ -36,6 +41,8 @@ internal sealed class FenceManager
 	DesktopMouseWatcher? _mouse;
 	DrawFrameWindow? _drawFrame;
 	SettingsWindow? _settingsWindow;
+	DesktopTakeover? _takeover;
+	readonly Dictionary<string, DateTime> _missingMembers = new(StringComparer.OrdinalIgnoreCase);
 	// 是否处于隐藏状态（双击切换）；下面两个是按「双击桌面隐藏」的对象实际生效的结果
 	bool _hidden;
 	bool _iconsHidden;
@@ -76,7 +83,15 @@ internal sealed class FenceManager
 
 	public bool FencesHidden => _fencesHidden;
 
-	public string StorageRoot => string.IsNullOrWhiteSpace(Settings.StorageRoot) ? AppPaths.DefaultStorageRoot : Settings.StorageRoot;
+	/// <summary>
+	/// 桌面上的全部项目（资源管理器桌面视图）；启动前为 null。
+	/// </summary>
+	public DesktopItems? DesktopItems => _takeover?.Items;
+
+	/// <summary>
+	/// 正在重命名分区或桌面上的项目（自动整理会等改完名再处理）。
+	/// </summary>
+	public bool IsRenaming => _takeover?.IsRenaming == true || _windows.Any(w => w.IsRenaming);
 
 	public bool AllLocked => _windows.Count > 0 && _windows.All(w => w.Model.Locked);
 
@@ -96,7 +111,11 @@ internal sealed class FenceManager
 			}
 		};
 		_tray.TaskbarCreated += OnExplorerRestarted;
-		_tray.DisplayChanged += () => _dispatcher.InvokeAsync(EnsureAllOnScreen, DispatcherPriority.Background);
+		_tray.DisplayChanged += () => _dispatcher.InvokeAsync(() =>
+		{
+			EnsureAllOnScreen();
+			_takeover?.OnDisplayChanged();
+		}, DispatcherPriority.Background);
 		_tray.ThemeChanged += SystemTheme.ApplyToMenus;
 
 		// 上次异常退出时桌面图标可能停留在隐藏状态，启动时先恢复
@@ -105,11 +124,14 @@ internal sealed class FenceManager
 			DesktopHost.SetIconsVisible(true);
 		}
 
+		ConvertLegacyFences();
 		foreach (var model in Settings.Fences.ToList())
 		{
 			OpenWindow(model);
 		}
 		EnsureAllOnScreen();
+		// 读到资源管理器的桌面视图后即接管桌面图标（隐藏系统图标、由图标层画出散放图标）
+		_takeover = new DesktopTakeover(this);
 		ApplyMouseHookSettings();
 		Organizer.ApplyWatchSetting();
 		WatchElevationSettings();
@@ -153,6 +175,8 @@ internal sealed class FenceManager
 		_mouse?.Dispose();
 		_drawFrame?.Close();
 		Organizer.Dispose();
+		// 退出接管时恢复资源管理器的桌面图标
+		_takeover?.Dispose();
 		if (_iconsHidden && !DesktopHost.IconsHiddenBySystem())
 		{
 			DesktopHost.SetIconsVisible(true);
@@ -181,7 +205,7 @@ internal sealed class FenceManager
 		{
 			Title = title,
 			IsPortal = portalFolder != null,
-			FolderPath = portalFolder ?? CreateManagedFolder(title),
+			FolderPath = portalFolder ?? string.Empty,
 		};
 		var rect = bounds ?? FindFreeSlot(near?.GetBounds());
 		model.X = rect.Left;
@@ -191,6 +215,7 @@ internal sealed class FenceManager
 		Settings.Fences.Add(model);
 		var window = OpenWindow(model);
 		SaveSoon();
+		_takeover?.RelayoutSoon();
 		if (editTitle)
 		{
 			window.BeginTitleEdit();
@@ -201,7 +226,7 @@ internal sealed class FenceManager
 	public void CreatePortalFence(FenceWindow? near = null)
 	{
 		var folder = PickFolder("选择要映射到分区的文件夹", null);
-		if (folder == null)
+		if (folder == null || !CheckPortalFolder("新建映射分区", folder))
 		{
 			return;
 		}
@@ -217,7 +242,7 @@ internal sealed class FenceManager
 	public void ChangePortalFolder(FenceWindow window)
 	{
 		var folder = PickFolder("选择要映射的文件夹", window.Model.FolderPath);
-		if (folder == null || PathUtil.AreEqual(folder, window.Model.FolderPath))
+		if (folder == null || PathUtil.AreEqual(folder, window.Model.FolderPath) || !CheckPortalFolder("更换映射文件夹", folder))
 		{
 			return;
 		}
@@ -231,87 +256,22 @@ internal sealed class FenceManager
 		SaveSoon();
 	}
 
-	/// <summary>
-	/// 重命名分区；托管分区同时尝试重命名其文件夹，方便在资源管理器中对应查找。
-	/// </summary>
 	public void RenameFence(FenceWindow window, string title)
 	{
-		var model = window.Model;
-		model.Title = title;
-		if (!model.IsPortal && Directory.Exists(model.FolderPath))
-		{
-			var parent = Path.GetDirectoryName(PathUtil.Normalize(model.FolderPath));
-			var target = parent == null ? null : Path.Combine(parent, PathUtil.SanitizeFileName(title));
-			if (target != null && !Directory.Exists(target) && !File.Exists(target) && !IsFolderUsed(target, model))
-			{
-				window.StopWatcher();
-				try
-				{
-					Directory.Move(model.FolderPath, target);
-					model.FolderPath = target;
-				}
-				catch (Exception ex)
-				{
-					// 文件夹内有文件被占用时会失败，保留原文件夹名即可
-					Log.Warn($"重命名分区文件夹失败：{model.FolderPath}", ex);
-				}
-			}
-		}
+		window.Model.Title = title;
 		window.UpdateTitle();
-		window.OnFolderChanged();
 		SaveSoon();
 	}
 
 	public void DeleteFence(FenceWindow window)
 	{
 		var model = window.Model;
-		if (model.IsPortal)
+		var message = model.IsPortal
+				? $"确定删除映射分区「{model.Title}」吗？\n\n只删除分区本身，被映射的文件夹及其中的文件不受影响。"
+				: $"确定删除分区「{model.Title}」吗？\n\n分区中的图标会回到桌面上，文件不受影响。";
+		if (MessageDialog.Show("删除分区", message, "删除", "取消") != 0)
 		{
-			var message = $"确定删除映射分区「{model.Title}」吗？\n\n只删除分区本身，被映射的文件夹及其中的文件不受影响。";
-			if (MessageDialog.Show("删除分区", message, "删除", "取消") != 0)
-			{
-				return;
-			}
-		}
-		else
-		{
-			List<string> entries = [];
-			if (Directory.Exists(model.FolderPath))
-			{
-				// 读不出内容时不能当作空文件夹处理，否则可能误删里面的文件
-				if (ListEntries(model.FolderPath) is not { } listed)
-				{
-					MessageDialog.Show("删除分区", $"无法读取分区文件夹的内容，为避免误删文件，已取消删除。\n\n{model.FolderPath}", "确定");
-					return;
-				}
-				entries = listed;
-			}
-			if (entries.Count > 0)
-			{
-				var message = $"分区「{model.Title}」中还有 {entries.Count} 个项目，要如何处理？\n\n选择保留时，文件会留在：\n{model.FolderPath}";
-				int choice = MessageDialog.Show("删除分区", message, "移回桌面并删除", "保留文件，仅删除分区", "取消");
-				if (choice == 0)
-				{
-					if (!ShellFileOps.Move(window.Handle, entries, AppPaths.Desktop, renameOnCollision: true))
-					{
-						MessageDialog.Show("删除分区", "部分文件没有移回桌面，分区已保留。", "确定");
-						return;
-					}
-					TryDeleteEmptyFolder(model.FolderPath);
-				}
-				else if (choice != 1)
-				{
-					return;
-				}
-			}
-			else
-			{
-				if (MessageDialog.Show("删除分区", $"确定删除分区「{model.Title}」吗？", "删除", "取消") != 0)
-				{
-					return;
-				}
-				TryDeleteEmptyFolder(model.FolderPath);
-			}
+			return;
 		}
 		_windows.Remove(window);
 		Settings.Fences.Remove(model);
@@ -321,6 +281,7 @@ internal sealed class FenceManager
 		}
 		window.CloseForReal();
 		SaveSoon();
+		_takeover?.RelayoutSoon();
 	}
 
 	/// <summary>
@@ -336,34 +297,192 @@ internal sealed class FenceManager
 		_dispatcher.InvokeAsync(() => OpenWindow(window.Model), DispatcherPriority.Background);
 	}
 
-	public void RestoreAllFilesToDesktop()
-	{
-		var managed = _windows.Where(w => !w.Model.IsPortal).ToList();
-		var entries = managed.SelectMany(w => ListEntries(w.Model.FolderPath) ?? []).ToList();
-		if (entries.Count == 0)
-		{
-			MessageDialog.Show("移回桌面", "分区中没有需要移回桌面的文件。", "确定");
-			return;
-		}
-		var message = $"将把 {managed.Count} 个分区中的 {entries.Count} 个项目全部移回桌面（重名时自动改名），分区本身保留。\n\n文件夹映射分区不受影响。";
-		if (MessageDialog.Show("移回桌面", message, "全部移回桌面", "取消") != 0)
-		{
-			return;
-		}
-		ShellFileOps.Move(OwnerHandle(), entries, AppPaths.Desktop, renameOnCollision: true);
-	}
-
 	/// <summary>
-	/// 整理规则对应的分区：优先按记录的分区 Id，其次按同名托管分区，都没有就新建。
+	/// 整理规则对应的分区：优先按记录的分区 Id，其次按同名桌面分区，都没有就新建。
 	/// </summary>
 	public FenceWindow GetOrCreateRuleFence(OrganizeRule rule, bool reveal)
 	{
-		var window = (rule.FenceId is Guid id ? _windows.FirstOrDefault(w => w.Model.Id == id) : null)
+		var window = (rule.FenceId is Guid id ? _windows.FirstOrDefault(w => w.Model.Id == id && !w.Model.IsPortal) : null)
 				?? _windows.FirstOrDefault(w => !w.Model.IsPortal && w.Model.Title == rule.Name)
 				?? CreateFence(UniqueTitle(rule.Name), reveal: reveal);
 		rule.FenceId = window.Model.Id;
 		SaveSoon();
 		return window;
+	}
+
+	#endregion
+
+	#region 桌面分区成员
+
+	/// <summary>
+	/// 所有桌面分区的成员，不在其中的桌面项目由散放图标层显示。
+	/// </summary>
+	public HashSet<string> FencedKeys()
+	{
+		var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		foreach (var model in Settings.Fences.Where(f => !f.IsPortal))
+		{
+			keys.UnionWith(model.Members);
+		}
+		return keys;
+	}
+
+	/// <summary>
+	/// 把桌面项目归入某个桌面分区（同一项目只属于一个分区）；target 为 null 时移出分区、回到桌面上。只改记录，不动文件。
+	/// </summary>
+	public void AssignToFence(FenceWindow? target, IEnumerable<string> keys)
+	{
+		var list = keys.ToList();
+		if (list.Count == 0)
+		{
+			return;
+		}
+		var set = list.ToHashSet(StringComparer.OrdinalIgnoreCase);
+		foreach (var window in _windows.Where(w => !w.Model.IsPortal && w != target))
+		{
+			int removed = window.Model.Members.RemoveAll(set.Contains);
+			window.Model.CustomOrder.RemoveAll(set.Contains);
+			if (removed > 0)
+			{
+				window.RefreshItems();
+			}
+		}
+		target?.AddMembers(list);
+		SaveSoon();
+		_takeover?.RelayoutSoon();
+	}
+
+	/// <summary>
+	/// 桌面上的文件改名后，分区成员与自定义顺序跟着换成新路径，图标留在原分区的原位置。
+	/// </summary>
+	public void OnItemRenamed(string oldPath, string newPath)
+	{
+		foreach (var model in Settings.Fences.Where(f => !f.IsPortal))
+		{
+			int index = model.Members.FindIndex(k => string.Equals(k, oldPath, StringComparison.OrdinalIgnoreCase));
+			if (index < 0)
+			{
+				continue;
+			}
+			model.Members[index] = newPath;
+			int order = model.CustomOrder.FindIndex(k => string.Equals(k, oldPath, StringComparison.OrdinalIgnoreCase));
+			if (order >= 0)
+			{
+				model.CustomOrder[order] = newPath;
+			}
+			SaveSoon();
+		}
+	}
+
+	/// <summary>
+	/// 桌面视图变化：刷新桌面分区，并清理文件已被删除的成员。
+	/// </summary>
+	public void OnDesktopItemsChanged()
+	{
+		PruneMembers();
+		foreach (var window in _windows.Where(w => !w.Model.IsPortal))
+		{
+			window.RefreshItems();
+		}
+	}
+
+	/// <summary>
+	/// 文件被删除或移走的成员在宽限期后移出分区，免得以后桌面上出现同名文件时被自动拉进分区。
+	/// 系统图标（此电脑等）只是可能被设置为不显示，一律保留。
+	/// </summary>
+	void PruneMembers()
+	{
+		var snapshot = _takeover?.Items.Snapshot;
+		if (snapshot == null)
+		{
+			return;
+		}
+		var now = DateTime.Now;
+		bool changed = false;
+		foreach (var model in Settings.Fences.Where(f => !f.IsPortal))
+		{
+			changed |= model.Members.RemoveAll(key =>
+			{
+				if (snapshot.ByKey.ContainsKey(key) || !Path.IsPathFullyQualified(key) || File.Exists(key) || Directory.Exists(key))
+				{
+					_missingMembers.Remove(key);
+					return false;
+				}
+				if (!_missingMembers.TryGetValue(key, out var since))
+				{
+					_missingMembers[key] = now;
+					return false;
+				}
+				return now - since > MissingMemberGrace;
+			}) > 0;
+		}
+		if (changed)
+		{
+			SaveSoon();
+		}
+	}
+
+	public bool TryBeginRenameInFence(string key)
+	{
+		foreach (var window in _windows)
+		{
+			if (window.FindItem(key) is FenceItem item && !item.IsVirtual)
+			{
+				window.BeginRename(item);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/// <summary>
+	/// 等项目出现在桌面视图中后开始改名（刚新建的项目要等资源管理器更新视图）。
+	/// </summary>
+	public void RequestRename(string key) => _takeover?.RequestRename(key);
+
+	public void RefreshDesktopSoon() => _takeover?.Items.RefreshSoon();
+
+	/// <summary>
+	/// 散放图标排布时要避开的分区范围。
+	/// </summary>
+	public List<RECT> FenceLayoutBounds() => _windows.Select(w => w.GetLayoutBounds()).ToList();
+
+	/// <summary>
+	/// 分区移动、缩放或卷起后，散放图标重新避让。
+	/// </summary>
+	public void OnFenceLayoutChanged() => _takeover?.RelayoutSoon();
+
+	/// <summary>
+	/// 旧版本的托管分区把文件移进了「桌面分区」下的文件夹。现在文件留在桌面，不再需要这些文件夹：
+	/// 文件夹里还有东西的转成映射分区（文件原地不动，照常显示），空的转成桌面分区并删除空文件夹。整个过程不移动任何文件。
+	/// </summary>
+	void ConvertLegacyFences()
+	{
+		var legacy = Settings.Fences.Where(f => !f.IsPortal && !string.IsNullOrWhiteSpace(f.FolderPath)).ToList();
+		foreach (var model in legacy)
+		{
+			var folder = model.FolderPath;
+			// 读不出内容时按有内容处理，不能删
+			var entries = Directory.Exists(folder) ? ListEntries(folder) : [];
+			if (entries == null || entries.Count > 0)
+			{
+				model.IsPortal = true;
+				Log.Info($"旧托管分区「{model.Title}」转为映射分区：{folder}");
+				continue;
+			}
+			model.FolderPath = string.Empty;
+			TryDeleteEmptyFolder(folder);
+			// 存放这些文件夹的根目录（默认是与桌面同级的「桌面分区」）也已用不上，空了就一并删除
+			if (Path.GetDirectoryName(PathUtil.Normalize(folder)) is string root)
+			{
+				TryDeleteEmptyFolder(root);
+			}
+			Log.Info($"旧托管分区「{model.Title}」为空，转为桌面分区");
+		}
+		if (legacy.Count > 0)
+		{
+			SaveSoon();
+		}
 	}
 
 	#endregion
@@ -403,11 +522,15 @@ internal sealed class FenceManager
 
 	void SetHidden(bool iconsHidden, bool fencesHidden)
 	{
-		// 先切换桌面图标（异步，立即生效），再让分区淡入淡出，两者同时开始
+		// 先切换桌面图标（接管时淡入淡出图标层，否则直接显示/隐藏资源管理器的图标），再让分区淡入淡出，两者同时开始
 		if (_iconsHidden != iconsHidden)
 		{
 			_iconsHidden = iconsHidden;
-			if (!DesktopHost.IconsHiddenBySystem())
+			if (_takeover?.IsActive == true)
+			{
+				_takeover.SetLayersHidden(iconsHidden);
+			}
+			else if (!DesktopHost.IconsHiddenBySystem())
 			{
 				DesktopHost.SetIconsVisible(!iconsHidden);
 			}
@@ -472,7 +595,7 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 「双击桌面隐藏」与「右键画框新建分区」共用一个鼠标钩子，两者都关闭时卸载钩子。
+	/// 「双击桌面隐藏」「右键画框新建分区」和接管桌面图标后的框选、键盘保护共用一套钩子，都用不上时卸载。
 	/// </summary>
 	public void ApplyMouseHookSettings()
 	{
@@ -481,7 +604,8 @@ internal sealed class FenceManager
 		{
 			ToggleHidden();
 		}
-		if (!Settings.DoubleClickToHide && !Settings.DrawToCreate)
+		bool takeover = _takeover?.IsActive == true;
+		if (!Settings.DoubleClickToHide && !Settings.DrawToCreate && !takeover)
 		{
 			_mouse?.Stop();
 			return;
@@ -496,9 +620,14 @@ internal sealed class FenceManager
 				_drawFrame.ShowAt(rect);
 			};
 			_mouse.DrawFinished += OnDrawFinished;
+			_mouse.BlankPressed += additive => _takeover?.OnBlankPressed(additive);
+			_mouse.BandUpdated += rect => _takeover?.OnBandUpdated(rect);
+			_mouse.BandFinished += () => _takeover?.OnBandFinished();
+			_mouse.KeyIntercepted += key => _takeover?.HandleKey(key);
 		}
 		_mouse.DoubleClickEnabled = Settings.DoubleClickToHide;
 		_mouse.DrawEnabled = Settings.DrawToCreate;
+		_mouse.TakeoverEnabled = takeover;
 		_mouse.Start();
 	}
 
@@ -544,6 +673,7 @@ internal sealed class FenceManager
 		{
 			window.ReloadIcons();
 		}
+		_takeover?.ReloadIcons();
 	}
 
 	public void RefreshAllAppearance()
@@ -587,7 +717,7 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 拖入分区时的默认动作：来自桌面或其他分区、或同一磁盘时移动，跨磁盘时复制（与资源管理器一致）。
+	/// 拖入分区时的默认动作：来自桌面或映射分区、或同一磁盘时移动，跨磁盘时复制（与资源管理器一致）。
 	/// </summary>
 	public bool PrefersMove(IEnumerable<string> paths, string targetFolder)
 	{
@@ -600,7 +730,7 @@ internal sealed class FenceManager
 			}
 			bool fromDesktopOrFence = PathUtil.AreEqual(directory, AppPaths.Desktop)
 					|| PathUtil.AreEqual(directory, AppPaths.CommonDesktop)
-					|| _windows.Any(w => PathUtil.AreEqual(w.Model.FolderPath, directory));
+					|| _windows.Any(w => w.Model.IsPortal && PathUtil.AreEqual(w.Model.FolderPath, directory));
 			if (!fromDesktopOrFence && !PathUtil.SameVolume(path, targetFolder))
 			{
 				return false;
@@ -628,6 +758,7 @@ internal sealed class FenceManager
 			model.Y = Math.Clamp(model.Y, work.Top, Math.Max(work.Top, work.Bottom - 40));
 			window.ApplyBounds();
 			SaveSoon();
+			_takeover?.RelayoutSoon();
 		}
 	}
 
@@ -705,7 +836,7 @@ internal sealed class FenceManager
 	void ShowWelcome()
 	{
 		var message = "MyDesktop 用分区把桌面上的图标分门别类地收纳起来。\n\n"
-				+ $"要现在按文件类型一键整理桌面吗？整理会把桌面上的文件移动到各分区对应的文件夹（位于「{StorageRoot}」），随时可以拖回桌面。\n\n"
+				+ "要现在按文件类型一键整理桌面吗？整理只是把图标归入各个分区，文件仍留在桌面文件夹里，不会被移动；随时可以把图标拖回桌面。\n\n"
 				+ "小提示：双击桌面空白处可以隐藏/显示所有图标和分区；右键托盘图标可以新建分区或打开设置。";
 		int choice = MessageDialog.Show("欢迎使用 MyDesktop", message, "一键整理桌面", "先创建一个空分区", "稍后");
 		if (choice == 0)
@@ -728,17 +859,6 @@ internal sealed class FenceManager
 
 	FenceWindow OpenWindow(FenceSettings model)
 	{
-		if (!model.IsPortal)
-		{
-			if (string.IsNullOrWhiteSpace(model.FolderPath))
-			{
-				model.FolderPath = CreateManagedFolder(model.Title);
-			}
-			else
-			{
-				TryCreateDirectory(model.FolderPath);
-			}
-		}
 		var window = new FenceWindow(this, model);
 		_windows.Add(window);
 		window.ShowOnDesktop();
@@ -790,6 +910,8 @@ internal sealed class FenceManager
 
 	void KeepFencesAboveDesktop()
 	{
+		// 先摆好紧贴桌面的散放图标层，分区再压在它们之上
+		_takeover?.KeepLayersAboveDesktop();
 		foreach (var window in _windows)
 		{
 			if (window.IsVisible && DesktopHost.GetInsertAfterAboveDesktop(window.Handle) != null)
@@ -807,7 +929,8 @@ internal sealed class FenceManager
 		}
 		// 兜底校正层级（Explorer 重启、桌面图标视图被挪到 WorkerW 等情况）
 		KeepFencesAboveDesktop();
-		if (_iconsHidden && DesktopHost.AreIconsVisible())
+		_takeover?.Watchdog();
+		if (_takeover?.IsActive != true && _iconsHidden && DesktopHost.AreIconsVisible())
 		{
 			DesktopHost.SetIconsVisible(false);
 		}
@@ -815,6 +938,7 @@ internal sealed class FenceManager
 		{
 			window.CheckFolder();
 		}
+		PruneMembers();
 	}
 
 	void OnExplorerRestarted()
@@ -829,23 +953,22 @@ internal sealed class FenceManager
 		timer.Start();
 	}
 
-	string CreateManagedFolder(string title)
-	{
-		var root = StorageRoot;
-		var name = PathUtil.SanitizeFileName(title);
-		var path = Path.Combine(root, name);
-		// 磁盘上已存在的同名文件夹不是本程序为该分区创建的，不能接管（删除分区时会被搬空并删除）
-		for (int i = 2; IsFolderUsed(path, null) || Directory.Exists(path) || File.Exists(path); i++)
-		{
-			path = Path.Combine(root, $"{name} ({i})");
-		}
-		TryCreateDirectory(path);
-		return path;
-	}
-
 	bool IsFolderUsed(string folder, FenceSettings? except)
 	{
-		return Settings.Fences.Any(f => f != except && PathUtil.AreEqual(f.FolderPath, folder));
+		return Settings.Fences.Any(f => f != except && f.IsPortal && PathUtil.AreEqual(f.FolderPath, folder));
+	}
+
+	/// <summary>
+	/// 桌面文件夹本身的图标已由桌面分区和散放图标层显示，再映射一次会重复出现。
+	/// </summary>
+	static bool CheckPortalFolder(string title, string folder)
+	{
+		if (!PathUtil.AreEqual(folder, AppPaths.Desktop) && !PathUtil.AreEqual(folder, AppPaths.CommonDesktop))
+		{
+			return true;
+		}
+		MessageDialog.Show(title, "桌面上的图标请直接拖进普通分区收纳，不需要映射桌面文件夹。", "确定");
+		return false;
 	}
 
 	string UniqueTitle(string baseName)
@@ -890,11 +1013,6 @@ internal sealed class FenceManager
 		return new RECT(cx, cy, cx + width, cy + height);
 	}
 
-	IntPtr OwnerHandle()
-	{
-		return _settingsWindow != null ? new WindowInteropHelper(_settingsWindow).Handle : IntPtr.Zero;
-	}
-
 	static string? PickFolder(string title, string? initialDirectory)
 	{
 		var dialog = new OpenFolderDialog { Title = title };
@@ -926,7 +1044,7 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 只删除真正空的分区文件夹：里面最多只有 desktop.ini、Thumbs.db 这类系统生成的文件，
+	/// 只删除真正空的旧分区文件夹：里面最多只有 desktop.ini、Thumbs.db 这类系统生成的文件，
 	/// 并且非递归删除，还有任何其他内容时一律保留。
 	/// </summary>
 	static void TryDeleteEmptyFolder(string folder)
@@ -952,18 +1070,6 @@ internal sealed class FenceManager
 		catch (Exception ex)
 		{
 			Log.Warn($"删除分区文件夹失败，已保留：{folder}", ex);
-		}
-	}
-
-	static void TryCreateDirectory(string path)
-	{
-		try
-		{
-			Directory.CreateDirectory(path);
-		}
-		catch (Exception ex)
-		{
-			Log.Warn($"创建文件夹失败：{path}", ex);
 		}
 	}
 

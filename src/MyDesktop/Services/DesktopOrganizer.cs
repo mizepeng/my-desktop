@@ -1,13 +1,13 @@
 using System.Windows.Threading;
 using MyDesktop.Core;
 using MyDesktop.Models;
-using MyDesktop.Native;
 using MyDesktop.Views;
 
 namespace MyDesktop.Services;
 
 /// <summary>
-/// 桌面整理：一键按规则把桌面文件归入分区；可选监视桌面，把新出现的文件自动归类。
+/// 桌面整理：一键按规则把桌面图标归入分区；可选监视桌面，把新出现的文件自动归类。
+/// 只记录归属，文件始终留在桌面文件夹里，整理瞬间完成，也不受跨盘、大文件影响。
 /// </summary>
 internal sealed class DesktopOrganizer : IDisposable
 {
@@ -17,7 +17,7 @@ internal sealed class DesktopOrganizer : IDisposable
 	};
 
 	/// <summary>
-	/// 只自动整理这段时间内新建的项目：从分区拖回桌面的旧文件（同盘移动会保留创建时间）不会被反复移走。
+	/// 只自动整理这段时间内新建的项目：从别处移到桌面的旧文件（同盘移动会保留创建时间）不会被归类。
 	/// </summary>
 	static readonly TimeSpan NewItemWindow = TimeSpan.FromMinutes(10);
 
@@ -52,13 +52,13 @@ internal sealed class DesktopOrganizer : IDisposable
 		var plan = BuildPlan(EnumerateDesktop());
 		if (plan.Count == 0)
 		{
-			MessageDialog.Show("一键整理桌面", "桌面上没有需要整理的文件。", "确定");
+			MessageDialog.Show("一键整理桌面", "桌面上没有需要整理的图标。", "确定");
 			return;
 		}
 		int total = plan.Sum(g => g.Paths.Count);
 		var summary = string.Join("\n", plan.Select(g => $"    · {g.Rule.Name}：{g.Paths.Count} 个"));
-		var message = $"将把桌面上的 {total} 个项目整理到 {plan.Count} 个分区：\n\n{summary}\n\n"
-				+ $"文件会移动到「{_manager.StorageRoot}」下对应的文件夹，随时可以拖回桌面。";
+		var message = $"将把桌面上的 {total} 个图标归入 {plan.Count} 个分区：\n\n{summary}\n\n"
+				+ "只是归类显示，文件仍留在桌面文件夹里，不会被移动；随时可以把图标拖回桌面。";
 		if (MessageDialog.Show("一键整理桌面", message, "开始整理", "取消") != 0)
 		{
 			return;
@@ -128,23 +128,25 @@ internal sealed class DesktopOrganizer : IDisposable
 			_pending.Clear();
 			return;
 		}
-		// 用户正在桌面上重命名（比如刚新建的文件夹），等改完名再处理
-		if (DesktopHost.IsRenamingOnDesktop())
+		// 用户正在重命名（比如刚新建的文件夹），等改完名再处理
+		if (_manager.IsRenaming)
 		{
 			_timer.Start();
 			return;
 		}
+		// 已有归属的（比如直接拖进了某个分区）不再自动归类
+		var fenced = _manager.FencedKeys();
 		var ready = new List<string>();
 		foreach (var (path, item) in _pending.ToList())
 		{
 			var info = GetInfo(path);
-			if (info == null || !IsCandidate(info) || !IsNewItem(info))
+			if (info == null || fenced.Contains(path) || !IsCandidate(info) || !IsNewItem(info))
 			{
 				_pending.Remove(path);
 				_downloaded.Remove(path);
 				continue;
 			}
-			// 下载、解压仍在进行时内容会继续变化：连续两次检查内容一致且文件未被占用才移动
+			// 下载、解压仍在进行时内容会继续变化：连续两次检查内容一致且文件未被占用才归类
 			var signature = Signature(info);
 			bool stable = signature != null && signature == item.Signature && !(info is FileInfo file && IsLocked(file));
 			item.Signature = signature;
@@ -181,20 +183,7 @@ internal sealed class DesktopOrganizer : IDisposable
 	{
 		foreach (var (rule, paths) in plan)
 		{
-			var fence = _manager.GetOrCreateRuleFence(rule, reveal: !silent);
-			var folder = fence.Model.FolderPath;
-			try
-			{
-				// 托管文件夹可能刚被外部删除，移动前确保存在
-				Directory.CreateDirectory(folder);
-			}
-			catch (Exception ex)
-			{
-				Log.Warn($"无法创建分区文件夹，跳过整理：{folder}", ex);
-				continue;
-			}
-			ShellFileOps.Move(silent ? IntPtr.Zero : fence.Handle, paths, folder, renameOnCollision: true, silent: silent);
-			fence.ScheduleRefresh();
+			_manager.AssignToFence(_manager.GetOrCreateRuleFence(rule, reveal: !silent), paths);
 		}
 	}
 
@@ -250,28 +239,30 @@ internal sealed class DesktopOrganizer : IDisposable
 		return rules.Where(groups.ContainsKey).Select(r => (r, groups[r])).ToList();
 	}
 
+	/// <summary>
+	/// 桌面上还没进分区的文件和文件夹（含公共桌面上的），取自资源管理器的桌面视图；此电脑等系统图标不参与整理。
+	/// </summary>
 	List<string> EnumerateDesktop()
 	{
-		var result = new List<string>();
-		try
+		var snapshot = _manager.DesktopItems?.Snapshot;
+		if (snapshot == null)
 		{
-			foreach (var info in new DirectoryInfo(AppPaths.Desktop).EnumerateFileSystemInfos())
-			{
-				if (IsCandidate(info))
-				{
-					result.Add(info.FullName);
-				}
-			}
+			return [];
 		}
-		catch (Exception ex)
+		var fenced = _manager.FencedKeys();
+		var result = new List<string>();
+		foreach (var entry in snapshot.Items)
 		{
-			Log.Warn("枚举桌面文件失败", ex);
+			if (entry.IsFileSystem && !fenced.Contains(entry.Key) && GetInfo(entry.Key) is { } info && IsCandidate(info))
+			{
+				result.Add(entry.Key);
+			}
 		}
 		return result;
 	}
 
 	/// <summary>
-	/// 可被整理的桌面项目：排除隐藏/系统文件、下载中的临时文件，以及本程序自己的目录和分区文件夹。
+	/// 可被整理的桌面项目：排除隐藏/系统文件、下载中的临时文件，以及本程序自己的目录和映射分区的文件夹。
 	/// </summary>
 	bool IsCandidate(FileSystemInfo info)
 	{
@@ -284,11 +275,11 @@ internal sealed class DesktopOrganizer : IDisposable
 			return false;
 		}
 		var path = info.FullName;
-		if (ContainsOrEquals(path, _manager.StorageRoot) || ContainsOrEquals(path, AppPaths.DataDir))
+		if (ContainsOrEquals(path, AppPaths.DataDir))
 		{
 			return false;
 		}
-		return !_manager.Windows.Any(w => ContainsOrEquals(path, w.Model.FolderPath));
+		return !_manager.Windows.Any(w => w.Model.IsPortal && ContainsOrEquals(path, w.Model.FolderPath));
 	}
 
 	static bool ContainsOrEquals(string folder, string path) => PathUtil.AreEqual(folder, path) || PathUtil.IsUnder(path, folder);

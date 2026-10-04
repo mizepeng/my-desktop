@@ -49,10 +49,11 @@ internal static class ShellFileOps
 	}
 
 	/// <summary>
-	/// 在目标文件夹中为每个路径创建快捷方式（命名沿用资源管理器的「xxx - 快捷方式」）。
+	/// 在目标文件夹中为每个路径创建快捷方式（命名沿用资源管理器的「xxx - 快捷方式」），返回创建出的快捷方式路径。
 	/// </summary>
-	public static void CreateShortcuts(IEnumerable<string> targets, string folder)
+	public static List<string> CreateShortcuts(IEnumerable<string> targets, string folder)
 	{
+		var created = new List<string>();
 		foreach (var target in targets)
 		{
 			var trimmed = target.TrimEnd('\\');
@@ -72,28 +73,25 @@ internal static class ShellFileOps
 					link.SetWorkingDirectory(workingDirectory);
 				}
 				((IPersistFile)link).Save(linkPath, true);
+				created.Add(linkPath);
 			}
 			finally
 			{
 				Marshal.ReleaseComObject(link);
 			}
 		}
+		return created;
 	}
 
 	/// <summary>
 	/// 以 Shell 数据对象发起拖放，拖到资源管理器、桌面或其他程序时行为与资源管理器一致。
 	/// </summary>
 	/// <param name="image">拖动预览图，位图的所有权随之转移；为 null 时由系统按大图标生成默认预览图。</param>
-	public static void DoDragDrop(IntPtr hwnd, IReadOnlyList<string> paths, SHDRAGIMAGE? image)
+	public static void DoDragDrop(IntPtr hwnd, ShellItemSet items, SHDRAGIMAGE? image)
 	{
 		var bitmap = image?.hbmpDragImage ?? IntPtr.Zero;
 		try
 		{
-			using var items = ShellItemSet.Create(paths);
-			if (items == null)
-			{
-				return;
-			}
 			var dataObject = items.GetUIObject(hwnd, IID_IDataObject);
 			try
 			{
