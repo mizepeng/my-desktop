@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
@@ -130,23 +131,57 @@ public partial class App : Application
 
 	/// <summary>
 	/// 安装程序升级、卸载前调用（--command exit）：让正在运行的实例正常退出并恢复桌面图标，
-	/// 等它释放单实例互斥体再返回，最多等 20 秒；没有实例在运行时直接返回，不启动程序。
+	/// 等它释放单实例互斥体（最多 20 秒），再等本会话里其余的 MyDesktop 进程结束；不启动程序。
 	/// </summary>
 	void ExitRunningInstance()
 	{
-		if (AcquireSingleInstance())
-		{
-			return;
-		}
+		// 广播给所有实例，用 --data 启动的实例也一并正常退出，安装程序才能替换文件
 		AppCommands.Broadcast(AppCommand.Exit);
-		try
+		if (!AcquireSingleInstance())
 		{
-			_ownsMutex = _mutex!.WaitOne(TimeSpan.FromSeconds(20));
+			try
+			{
+				_ownsMutex = _mutex!.WaitOne(TimeSpan.FromSeconds(20));
+			}
+			catch (AbandonedMutexException)
+			{
+				// 对方没释放互斥体就结束了（如被强制结束），同样算已退出，此时本进程已取得互斥体
+				_ownsMutex = true;
+			}
 		}
-		catch (AbandonedMutexException)
+		WaitForOtherProcesses();
+	}
+
+	/// <summary>
+	/// 等本会话里其余的 MyDesktop 进程结束：主程序释放互斥体后还要收尾，守护进程随它结束；
+	/// 右键菜单服务进程要在主程序消失几秒后才退出，到时还在的直接结束，免得安装程序报告文件被占用。
+	/// </summary>
+	static void WaitForOtherProcesses()
+	{
+		using var self = Process.GetCurrentProcess();
+		var deadline = DateTime.UtcNow.AddSeconds(3);
+		foreach (var process in Process.GetProcessesByName(self.ProcessName))
 		{
-			// 对方没释放互斥体就结束了（如被强制结束），同样算已退出，此时本进程已取得互斥体
-			_ownsMutex = true;
+			using (process)
+			{
+				try
+				{
+					if (process.Id == self.Id || process.SessionId != self.SessionId)
+					{
+						continue;
+					}
+					var remaining = deadline - DateTime.UtcNow;
+					if (remaining <= TimeSpan.Zero || !process.WaitForExit(remaining))
+					{
+						process.Kill();
+						process.WaitForExit(TimeSpan.FromSeconds(2));
+					}
+				}
+				catch (Exception)
+				{
+					// 进程已经退出，或没有权限访问
+				}
+			}
 		}
 	}
 
