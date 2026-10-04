@@ -55,7 +55,7 @@ public sealed class AppSettings
 	/// <summary>
 	/// 吸附到相邻分区时两者之间的间距（DIP），0 表示紧贴。
 	/// </summary>
-	public double SnapGap { get; set; } = 6;
+	public double SnapGap { get; set; } = 0;
 
 	/// <summary>
 	/// 调整分区大小时按图标的整行、整列吸附。

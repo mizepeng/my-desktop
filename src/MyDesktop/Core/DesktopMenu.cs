@@ -71,8 +71,9 @@ internal static class DesktopMenu
 		}
 		// 子项按名称排序显示，用数字前缀固定顺序
 		AddItem(shell, "1NewFence", "新建分区", AppCommand.NewFence, exe, 0);
-		AddItem(shell, "2Organize", "一键整理桌面…", AppCommand.Organize, exe, 0);
-		AddItem(shell, "3Settings", "设置…", AppCommand.ShowSettings, exe, SeparatorBefore);
+		AddItem(shell, "2NewPortalFence", "新建文件夹映射分区…", AppCommand.NewPortalFence, exe, 0);
+		AddItem(shell, "3Organize", "一键整理桌面…", AppCommand.Organize, exe, 0);
+		AddItem(shell, "4Settings", "设置…", AppCommand.ShowSettings, exe, SeparatorBefore);
 	}
 
 	static void AddItem(RegistryKey shell, string key, string text, AppCommand command, string exe, int flags)

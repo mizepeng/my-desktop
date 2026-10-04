@@ -206,6 +206,7 @@ internal static class DesktopMenuServer
 			return Enumerate(
 			[
 				new ActionCommand("新建分区", AppCommand.NewFence, false),
+				new ActionCommand("新建文件夹映射分区…", AppCommand.NewPortalFence, false),
 				new ActionCommand("一键整理桌面…", AppCommand.Organize, false),
 				new DoubleClickMenu(known ? target : null, doubleClickEnabled),
 				new ActionCommand("设置…", AppCommand.ShowSettings, true),

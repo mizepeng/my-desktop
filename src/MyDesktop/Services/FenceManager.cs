@@ -227,7 +227,7 @@ internal sealed class FenceManager
 		return window;
 	}
 
-	public void CreatePortalFence(FenceWindow? near = null)
+	public void CreatePortalFence(FenceWindow? near = null, RECT? bounds = null)
 	{
 		var folder = PickFolder("选择要映射到分区的文件夹", null);
 		if (folder == null || !CheckPortalFolder("新建映射分区", folder))
@@ -240,7 +240,7 @@ internal sealed class FenceManager
 			return;
 		}
 		var name = Path.GetFileName(PathUtil.Normalize(folder));
-		CreateFence(UniqueTitle(string.IsNullOrEmpty(name) ? folder : name), folder, near);
+		CreateFence(UniqueTitle(string.IsNullOrEmpty(name) ? folder : name), folder, near, bounds: bounds);
 	}
 
 	public void ChangePortalFolder(FenceWindow window)
@@ -619,7 +619,9 @@ internal sealed class FenceManager
 		Action action = command switch
 		{
 			AppCommand.ShowSettings => ShowSettings,
-			AppCommand.NewFence => () => CreateFenceAtCursor(),
+			AppCommand.NewFence => () => CreateFence(editTitle: true, bounds: BoundsAtCursor()),
+			// 先按菜单弹出处的鼠标位置定好范围，选文件夹期间鼠标会移走
+			AppCommand.NewPortalFence => () => CreatePortalFence(bounds: BoundsAtCursor()),
 			AppCommand.Organize => Organizer.OrganizeInteractive,
 			AppCommand.ToggleHidden => ToggleHidden,
 			AppCommand.DoubleClickHidesAll => () => SetDoubleClickTarget(HideTarget.All),
@@ -631,9 +633,9 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 在鼠标位置新建分区（桌面右键菜单「新建分区」）。
+	/// 以鼠标位置为左上角的默认大小分区范围，桌面右键菜单新建分区时用。
 	/// </summary>
-	FenceWindow CreateFenceAtCursor()
+	RECT BoundsAtCursor()
 	{
 		var cursor = NativeMethods.GetCursorPos();
 		var (work, scale) = GetMonitorWorkArea(MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST));
@@ -641,7 +643,7 @@ internal sealed class FenceManager
 		int height = (int)(DefaultHeightDip * scale);
 		int left = Math.Clamp(cursor.X, work.Left, Math.Max(work.Left, work.Right - width));
 		int top = Math.Clamp(cursor.Y, work.Top, Math.Max(work.Top, work.Bottom - height));
-		return CreateFence(editTitle: true, bounds: new RECT(left, top, left + width, top + height));
+		return new RECT(left, top, left + width, top + height);
 	}
 
 	public void SetAllLocked(bool locked)

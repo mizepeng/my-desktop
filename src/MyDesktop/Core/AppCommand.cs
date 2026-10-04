@@ -17,6 +17,7 @@ internal enum AppCommand
 	DoubleClickHidesFences = 6,
 	// 安装程序升级、卸载前让正在运行的实例正常退出
 	Exit = 7,
+	NewPortalFence = 8,
 }
 
 internal static class AppCommands
@@ -62,6 +63,7 @@ internal static class AppCommands
 			AppCommand.DoubleClickHidesIcons => "double-click-icons",
 			AppCommand.DoubleClickHidesFences => "double-click-fences",
 			AppCommand.Exit => "exit",
+			AppCommand.NewPortalFence => "new-portal-fence",
 		};
 	}
 
