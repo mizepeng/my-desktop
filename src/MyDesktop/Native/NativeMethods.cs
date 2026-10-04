@@ -209,6 +209,11 @@ internal static class NativeMethods
 	[DllImport("user32.dll")]
 	public static extern bool PostMessage(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam);
 
+	public const uint SMTO_ABORTIFHUNG = 0x0002;
+
+	[DllImport("user32.dll")]
+	public static extern IntPtr SendMessageTimeout(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
+
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
 	public static extern int RegisterWindowMessage(string name);
 

@@ -490,14 +490,20 @@ internal partial class FenceWindow : Window
 		{
 			return (widths, heights);
 		}
+		_scroller ??= FindDescendant<ScrollViewer>(ItemsList);
+		if (_scroller == null)
+		{
+			return (widths, heights);
+		}
 		double scale = ScaleFactor;
 		var rect = GetBounds();
 		var (work, _) = GetMonitorWorkArea(MonitorFromRect(ref rect, MONITOR_DEFAULTTONEAREST));
-		// 窗口外框：上下左右边框 + 标题栏 + 列表内边距；竖向滚动条出现时还要加上它占的宽度
-		_scroller ??= FindDescendant<ScrollViewer>(ItemsList);
-		double scrollBar = _scroller?.ComputedVerticalScrollBarVisibility == Visibility.Visible ? 10 : 0;
-		double chromeWidth = 2 + ItemsList.Padding.Left + ItemsList.Padding.Right + scrollBar;
-		double chromeHeight = 2 + TitleBarDip + ItemsList.Padding.Top + ItemsList.Padding.Bottom;
+		// 窗口外框（边框、标题栏、列表内边距、出现时的竖向滚动条）按当前实际布局量出：
+		// 非整数缩放下边框会被取整得更宽，按固定数值算会少零点几像素，刚好装下时也会冒出滚动条
+		double chromeWidth = ActualWidth - _scroller.ViewportWidth;
+		double chromeHeight = ActualHeight - _scroller.ViewportHeight;
+		// 向上取整，窗口宁可多一点也不能比内容小（减去的小量用于抵消浮点误差）
+		int ToPixels(double dip) => (int)Math.Ceiling(dip * scale - 0.01);
 
 		var slots = containers.Select(c =>
 		{
@@ -511,7 +517,7 @@ internal partial class FenceWindow : Window
 		{
 			rowBottoms.Add(bottom);
 		}
-		heights.AddRange(rowBottoms.Select(b => (int)Math.Round((chromeHeight + b) * scale)));
+		heights.AddRange(rowBottoms.Select(b => ToPixels(chromeHeight + b)));
 
 		// 列表视图只有一列，不按列吸附
 		if (Model.View == FenceView.Icons)
@@ -519,7 +525,7 @@ internal partial class FenceWindow : Window
 			double columnWidth = slots[0].Width;
 			for (int n = 1; (chromeWidth + n * columnWidth) * scale <= work.Width; n++)
 			{
-				widths.Add((int)Math.Round((chromeWidth + n * columnWidth) * scale));
+				widths.Add(ToPixels(chromeWidth + n * columnWidth));
 			}
 		}
 		return (widths, heights);
@@ -821,7 +827,7 @@ internal partial class FenceWindow : Window
 		animation.Completed += (_, _) =>
 		{
 			// 淡出过程中可能又被要求显示
-			if (_manager.IsHidden)
+			if (_manager.FencesHidden)
 			{
 				Hide();
 			}

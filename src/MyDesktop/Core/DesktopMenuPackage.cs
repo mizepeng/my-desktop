@@ -12,7 +12,9 @@ internal static class DesktopMenuPackage
 {
 	const string PackageName = "MyDesktop.DesktopMenu";
 
-	static string PackagePath => Path.Combine(AppContext.BaseDirectory, PackageName + ".msix");
+	static string AppDirectory => Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory);
+
+	static string PackagePath => Path.Combine(AppDirectory, PackageName + ".msix");
 
 	/// <summary>
 	/// 记录已注册的「exe 目录 | 包文件时间」，两者都没变时不重复注册。包按用户注册，记录放在与数据目录无关的位置。
@@ -26,14 +28,14 @@ internal static class DesktopMenuPackage
 		{
 			return false;
 		}
-		var marker = $"{AppContext.BaseDirectory}|{File.GetLastWriteTimeUtc(PackagePath).Ticks}";
+		var marker = $"{AppDirectory}|{File.GetLastWriteTimeUtc(PackagePath).Ticks}";
 		if (File.Exists(MarkerPath) && File.ReadAllText(MarkerPath) == marker)
 		{
 			return true;
 		}
 		// 先移除旧注册：同版本的包换了外部位置（exe 挪了目录）时 Add-AppxPackage 不会更新
 		var script = $"Get-AppxPackage -Name {PackageName} | Remove-AppxPackage; "
-				+ $"Add-AppxPackage -Path {Quote(PackagePath)} -ExternalLocation {Quote(AppContext.BaseDirectory)}";
+				+ $"Add-AppxPackage -Path {Quote(PackagePath)} -ExternalLocation {Quote(AppDirectory)}";
 		if (!RunPowerShell(script, out var error))
 		{
 			Log.Warn($"注册桌面右键菜单扩展包失败：{error}");

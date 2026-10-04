@@ -36,7 +36,10 @@ internal sealed class FenceManager
 	DesktopMouseWatcher? _mouse;
 	DrawFrameWindow? _drawFrame;
 	SettingsWindow? _settingsWindow;
+	// 是否处于隐藏状态（双击切换）；下面两个是按「双击桌面隐藏」的对象实际生效的结果
 	bool _hidden;
+	bool _iconsHidden;
+	bool _fencesHidden;
 	bool _shutdown;
 
 	public FenceManager(AppSettings settings)
@@ -71,7 +74,7 @@ internal sealed class FenceManager
 
 	public IReadOnlyList<FenceWindow> Windows => _windows;
 
-	public bool IsHidden => _hidden;
+	public bool FencesHidden => _fencesHidden;
 
 	public string StorageRoot => string.IsNullOrWhiteSpace(Settings.StorageRoot) ? AppPaths.DefaultStorageRoot : Settings.StorageRoot;
 
@@ -79,7 +82,10 @@ internal sealed class FenceManager
 
 	public void Start(bool firstRun)
 	{
-		_tray = new TrayIcon("MyDesktop 桌面分区", AppCommands.MessageName);
+		_tray = new TrayIcon("MyDesktop 桌面分区", AppCommands.MessageName, AppCommands.StateMessageName)
+		{
+			StateProvider = () => AppCommands.EncodeState(Settings.DoubleClickTarget, Settings.DoubleClickToHide),
+		};
 		_tray.LeftClick += ShowSettings;
 		_tray.RightClick += ShowTrayMenu;
 		_tray.CommandReceived += code =>
@@ -147,7 +153,7 @@ internal sealed class FenceManager
 		_mouse?.Dispose();
 		_drawFrame?.Close();
 		Organizer.Dispose();
-		if (_hidden && !DesktopHost.IconsHiddenBySystem())
+		if (_iconsHidden && !DesktopHost.IconsHiddenBySystem())
 		{
 			DesktopHost.SetIconsVisible(true);
 		}
@@ -165,9 +171,10 @@ internal sealed class FenceManager
 	public FenceWindow CreateFence(string? title = null, string? portalFolder = null, FenceWindow? near = null, bool editTitle = false, bool reveal = true,
 			RECT? bounds = null)
 	{
-		if (reveal)
+		// 新建的分区要让用户看到，分区正被隐藏时退出隐藏状态
+		if (reveal && _fencesHidden)
 		{
-			SetHidden(false);
+			ToggleHidden();
 		}
 		title ??= UniqueTitle("新建分区");
 		var model = new FenceSettings
@@ -363,27 +370,61 @@ internal sealed class FenceManager
 
 	#region 全局状态
 
-	public void SetHidden(bool hidden)
+	/// <summary>
+	/// 双击桌面空白处：在隐藏与显示之间切换，隐藏的对象由「双击桌面隐藏」决定。
+	/// </summary>
+	public void ToggleHidden()
 	{
-		if (_hidden == hidden)
+		_hidden = !_hidden;
+		ApplyHidden();
+	}
+
+	/// <summary>
+	/// 更换「双击桌面隐藏」的对象；正处于隐藏状态时立即按新对象生效，不会留下无法恢复的隐藏。
+	/// </summary>
+	public void SetDoubleClickTarget(HideTarget target)
+	{
+		Settings.DoubleClickTarget = target;
+		SaveSoon();
+		ApplyHidden();
+		_settingsWindow?.RefreshDoubleClickTarget();
+	}
+
+	void ApplyHidden()
+	{
+		var (icons, fences) = Settings.DoubleClickTarget switch
 		{
-			return;
-		}
-		_hidden = hidden;
+			HideTarget.All => (true, true),
+			HideTarget.Icons => (true, false),
+			HideTarget.Fences => (false, true),
+		};
+		SetHidden(_hidden && icons, _hidden && fences);
+	}
+
+	void SetHidden(bool iconsHidden, bool fencesHidden)
+	{
 		// 先切换桌面图标（异步，立即生效），再让分区淡入淡出，两者同时开始
-		if (!DesktopHost.IconsHiddenBySystem())
+		if (_iconsHidden != iconsHidden)
 		{
-			DesktopHost.SetIconsVisible(!hidden);
-		}
-		foreach (var window in _windows)
-		{
-			if (hidden)
+			_iconsHidden = iconsHidden;
+			if (!DesktopHost.IconsHiddenBySystem())
 			{
-				window.FadeOut();
+				DesktopHost.SetIconsVisible(!iconsHidden);
 			}
-			else
+		}
+		if (_fencesHidden != fencesHidden)
+		{
+			_fencesHidden = fencesHidden;
+			foreach (var window in _windows)
 			{
-				window.FadeIn();
+				if (fencesHidden)
+				{
+					window.FadeOut();
+				}
+				else
+				{
+					window.FadeIn();
+				}
 			}
 		}
 	}
@@ -398,7 +439,10 @@ internal sealed class FenceManager
 			AppCommand.ShowSettings => ShowSettings,
 			AppCommand.NewFence => () => CreateFenceAtCursor(),
 			AppCommand.Organize => Organizer.OrganizeInteractive,
-			AppCommand.ToggleHidden => () => SetHidden(!_hidden),
+			AppCommand.ToggleHidden => ToggleHidden,
+			AppCommand.DoubleClickHidesAll => () => SetDoubleClickTarget(HideTarget.All),
+			AppCommand.DoubleClickHidesIcons => () => SetDoubleClickTarget(HideTarget.Icons),
+			AppCommand.DoubleClickHidesFences => () => SetDoubleClickTarget(HideTarget.Fences),
 		};
 		action();
 	}
@@ -432,6 +476,11 @@ internal sealed class FenceManager
 	/// </summary>
 	public void ApplyMouseHookSettings()
 	{
+		// 双击是唯一的显示/隐藏入口，关掉它时先恢复显示，免得图标或分区一直藏着
+		if (!Settings.DoubleClickToHide && _hidden)
+		{
+			ToggleHidden();
+		}
 		if (!Settings.DoubleClickToHide && !Settings.DrawToCreate)
 		{
 			_mouse?.Stop();
@@ -440,7 +489,7 @@ internal sealed class FenceManager
 		if (_mouse == null)
 		{
 			_mouse = new DesktopMouseWatcher(_dispatcher);
-			_mouse.DoubleClicked += () => SetHidden(!_hidden);
+			_mouse.DoubleClicked += ToggleHidden;
 			_mouse.DrawUpdated += rect =>
 			{
 				_drawFrame ??= new DrawFrameWindow();
@@ -637,7 +686,13 @@ internal sealed class FenceManager
 		menu.Add("新建文件夹映射分区…", () => CreatePortalFence());
 		menu.Add("一键整理桌面…", Organizer.OrganizeInteractive);
 		menu.AddSeparator();
-		menu.Add(_hidden ? "显示桌面图标和分区" : "隐藏桌面图标和分区", () => SetHidden(!_hidden));
+		menu.AddSubMenu("双击桌面隐藏", sub =>
+		{
+			foreach (var target in Enum.GetValues<HideTarget>())
+			{
+				sub.Add(target.DisplayName(), () => SetDoubleClickTarget(target), isChecked: Settings.DoubleClickTarget == target, radio: true);
+			}
+		}, enabled: Settings.DoubleClickToHide);
 		menu.Add("锁定所有分区", () => SetAllLocked(!allLocked), isChecked: allLocked, enabled: _windows.Count > 0);
 		menu.AddSeparator();
 		menu.Add("设置…", ShowSettings, isDefault: true);
@@ -687,7 +742,7 @@ internal sealed class FenceManager
 		var window = new FenceWindow(this, model);
 		_windows.Add(window);
 		window.ShowOnDesktop();
-		if (_hidden)
+		if (_fencesHidden)
 		{
 			window.Hide();
 		}
@@ -752,7 +807,7 @@ internal sealed class FenceManager
 		}
 		// 兜底校正层级（Explorer 重启、桌面图标视图被挪到 WorkerW 等情况）
 		KeepFencesAboveDesktop();
-		if (_hidden && DesktopHost.AreIconsVisible())
+		if (_iconsHidden && DesktopHost.AreIconsVisible())
 		{
 			DesktopHost.SetIconsVisible(false);
 		}

@@ -62,6 +62,16 @@ public static class Appearance
 		};
 	}
 
+	public static string DisplayName(this HideTarget target)
+	{
+		return target switch
+		{
+			HideTarget.All => "图标和分区",
+			HideTarget.Icons => "只有桌面图标",
+			HideTarget.Fences => "只有分区",
+		};
+	}
+
 	public static Color ParseColor(string? text, Color fallback)
 	{
 		return TryParseColor(text, out var color) ? color : fallback;

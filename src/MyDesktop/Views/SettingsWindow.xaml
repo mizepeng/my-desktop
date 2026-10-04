@@ -74,12 +74,20 @@
 						</CheckBox>
 					</Border>
 					<Border Style="{StaticResource Card}">
-						<CheckBox x:Name="DoubleClickBox" Click="Setting_Changed">
-							<StackPanel>
-								<TextBlock Text="双击桌面空白处隐藏/显示图标和分区" />
-								<TextBlock Style="{StaticResource Hint}" Text="再次双击即可恢复" />
-							</StackPanel>
-						</CheckBox>
+						<DockPanel>
+							<ComboBox x:Name="DoubleClickTargetBox"
+									Width="150"
+									VerticalAlignment="Center"
+									DockPanel.Dock="Right"
+									IsEnabled="{Binding IsChecked, ElementName=DoubleClickBox}"
+									SelectionChanged="DoubleClickTargetBox_SelectionChanged" />
+							<CheckBox x:Name="DoubleClickBox" Click="Setting_Changed">
+								<StackPanel>
+									<TextBlock Text="双击桌面空白处隐藏/显示" />
+									<TextBlock Style="{StaticResource Hint}" Text="再次双击即可恢复；隐藏哪些也可以在托盘菜单和桌面右键菜单里选" />
+								</StackPanel>
+							</CheckBox>
+						</DockPanel>
 					</Border>
 					<Border Style="{StaticResource Card}">
 						<CheckBox x:Name="DrawToCreateBox" Click="Setting_Changed">

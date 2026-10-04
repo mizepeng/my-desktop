@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using MyDesktop.Models;
 using MyDesktop.Native;
 using static MyDesktop.Native.NativeMethods;
 
@@ -19,13 +20,24 @@ internal static class DesktopMenuServer
 	public static readonly Guid Clsid = new("54873389-EF3D-41F1-8659-877D58CE2CBD");
 
 	/// <summary>
-	/// 主程序托盘窗口的标题，用来判断 MyDesktop 是否在运行。
+	/// 主程序托盘窗口的标题，用来判断 MyDesktop 是否在运行、向它查询状态。
 	/// </summary>
 	public const string MainWindowTitle = "MyDesktopTrayHost";
 
 	// 启动后至少保留这么久，供触发本次启动的那个菜单使用
 	static readonly TimeSpan GracePeriod = TimeSpan.FromSeconds(30);
 	static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
+	const uint StateQueryTimeoutMs = 300;
+
+	const int E_NOTIMPL = unchecked((int)0x80004001);
+	const uint ECS_ENABLED = 0x0;
+	const uint ECS_DISABLED = 0x1;
+	const uint ECS_HIDDEN = 0x2;
+	const uint ECS_CHECKED = 0x8;
+	const uint ECS_RADIOCHECK = 0x10;
+	const uint ECF_DEFAULT = 0x0;
+	const uint ECF_HASSUBCOMMANDS = 0x1;
+	const uint ECF_SEPARATORBEFORE = 0x20;
 
 	public static void Run()
 	{
@@ -35,7 +47,7 @@ internal static class DesktopMenuServer
 		thread.Join();
 	}
 
-	public static bool IsMainInstanceRunning() => FindWindowEx(IntPtr.Zero, IntPtr.Zero, null, MainWindowTitle) != IntPtr.Zero;
+	static IntPtr FindMainWindow() => FindWindowEx(IntPtr.Zero, IntPtr.Zero, null, MainWindowTitle);
 
 	static void Serve()
 	{
@@ -47,11 +59,25 @@ internal static class DesktopMenuServer
 			return;
 		}
 		Thread.Sleep(GracePeriod);
-		while (IsMainInstanceRunning())
+		while (FindMainWindow() != IntPtr.Zero)
 		{
 			Thread.Sleep(PollInterval);
 		}
 		CoRevokeClassObject(cookie);
+	}
+
+	/// <summary>
+	/// 向主程序查询「双击桌面隐藏」的状态；主程序没在运行或没及时响应时返回 false。
+	/// </summary>
+	static bool TryQueryState(out HideTarget target, out bool doubleClickEnabled)
+	{
+		target = HideTarget.All;
+		doubleClickEnabled = false;
+		var window = FindMainWindow();
+		return window != IntPtr.Zero
+				&& SendMessageTimeout(window, RegisterWindowMessage(AppCommands.StateMessageName), IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG,
+						StateQueryTimeoutMs, out var result) != IntPtr.Zero
+				&& AppCommands.TryDecodeState((int)result, out target, out doubleClickEnabled);
 	}
 
 	[ComVisible(true)]
@@ -82,28 +108,22 @@ internal static class DesktopMenuServer
 	}
 
 	/// <summary>
-	/// 桌面右键菜单里的「MyDesktop」子菜单，只在桌面空白处右键、且 MyDesktop 正在运行时显示。
+	/// 菜单项的公共实现：标题固定，默认无图标、可用、无子菜单，点击不做事。
 	/// </summary>
 	[ComVisible(true)]
 	[ClassInterface(ClassInterfaceType.None)]
-	sealed class RootCommand : IExplorerCommand
+	abstract class MenuCommand(string title) : IExplorerCommand
 	{
-		const int E_NOTIMPL = unchecked((int)0x80004001);
-		const uint ECS_ENABLED = 0;
-		const uint ECS_HIDDEN = 2;
-		const uint ECF_HASSUBCOMMANDS = 0x1;
-		const uint SIGDN_FILESYSPATH = 0x80058000;
-
 		public int GetTitle(IntPtr items, out IntPtr name)
 		{
-			name = Marshal.StringToCoTaskMemUni("MyDesktop");
+			name = Marshal.StringToCoTaskMemUni(title);
 			return 0;
 		}
 
-		public int GetIcon(IntPtr items, out IntPtr icon)
+		public virtual int GetIcon(IntPtr items, out IntPtr icon)
 		{
-			icon = Marshal.StringToCoTaskMemUni($"{Environment.ProcessPath},0");
-			return 0;
+			icon = IntPtr.Zero;
+			return E_NOTIMPL;
 		}
 
 		public int GetToolTip(IntPtr items, out IntPtr infoTip)
@@ -112,38 +132,84 @@ internal static class DesktopMenuServer
 			return E_NOTIMPL;
 		}
 
-		public int GetCanonicalName(out Guid name)
+		public virtual int GetCanonicalName(out Guid name)
+		{
+			name = Guid.Empty;
+			return E_NOTIMPL;
+		}
+
+		public virtual int GetState(IntPtr items, bool okToBeSlow, out uint state)
+		{
+			state = ECS_ENABLED;
+			return 0;
+		}
+
+		public virtual int Invoke(IntPtr items, IntPtr bindContext) => 0;
+
+		public virtual int GetFlags(out uint flags)
+		{
+			flags = ECF_DEFAULT;
+			return 0;
+		}
+
+		public virtual int EnumSubCommands(out IntPtr enumerator)
+		{
+			enumerator = IntPtr.Zero;
+			return E_NOTIMPL;
+		}
+
+		protected static int Enumerate(IExplorerCommand[] commands, out IntPtr enumerator)
+		{
+			enumerator = Marshal.GetComInterfaceForObject(new CommandEnumerator(commands), typeof(IEnumExplorerCommand));
+			return 0;
+		}
+	}
+
+	/// <summary>
+	/// 桌面右键菜单里的「MyDesktop」子菜单，只在桌面空白处右键、且 MyDesktop 正在运行时显示。
+	/// </summary>
+	[ComVisible(true)]
+	[ClassInterface(ClassInterfaceType.None)]
+	sealed class RootCommand() : MenuCommand("MyDesktop")
+	{
+		const uint SIGDN_FILESYSPATH = 0x80058000;
+
+		public override int GetIcon(IntPtr items, out IntPtr icon)
+		{
+			icon = Marshal.StringToCoTaskMemUni($"{Environment.ProcessPath},0");
+			return 0;
+		}
+
+		public override int GetCanonicalName(out Guid name)
 		{
 			name = Clsid;
 			return 0;
 		}
 
-		public int GetState(IntPtr items, bool okToBeSlow, out uint state)
+		public override int GetState(IntPtr items, bool okToBeSlow, out uint state)
 		{
 			// 扩展注册在「目录背景」上，文件夹空白处右键也会询问，这里只放行桌面
-			state = IsDesktop(items) && IsMainInstanceRunning() ? ECS_ENABLED : ECS_HIDDEN;
+			state = IsDesktop(items) && FindMainWindow() != IntPtr.Zero ? ECS_ENABLED : ECS_HIDDEN;
 			return 0;
 		}
 
-		public int Invoke(IntPtr items, IntPtr bindContext) => 0;
-
-		public int GetFlags(out uint flags)
+		public override int GetFlags(out uint flags)
 		{
 			flags = ECF_HASSUBCOMMANDS;
 			return 0;
 		}
 
-		public int EnumSubCommands(out IntPtr enumerator)
+		public override int EnumSubCommands(out IntPtr enumerator)
 		{
-			IExplorerCommand[] commands =
+			// 子菜单生成时取一次主程序状态，用来勾选「双击桌面隐藏」的当前选项
+			bool known = TryQueryState(out var target, out bool doubleClickEnabled);
+			return Enumerate(
 			[
-				new SubCommand("新建分区", AppCommand.NewFence, false),
-				new SubCommand("一键整理桌面…", AppCommand.Organize, false),
-				new SubCommand("隐藏/显示桌面图标和分区", AppCommand.ToggleHidden, false),
-				new SubCommand("设置…", AppCommand.ShowSettings, true),
-			];
-			enumerator = Marshal.GetComInterfaceForObject(new CommandEnumerator(commands), typeof(IEnumExplorerCommand));
-			return 0;
+				new ActionCommand("新建分区", AppCommand.NewFence, false),
+				new ActionCommand("一键整理桌面…", AppCommand.Organize, false),
+				new DoubleClickMenu(known ? target : null, doubleClickEnabled),
+				new ActionCommand("设置…", AppCommand.ShowSettings, true),
+			], out enumerator);
 		}
 
 		static bool IsDesktop(IntPtr items)
@@ -184,66 +250,68 @@ internal static class DesktopMenuServer
 	}
 
 	/// <summary>
-	/// 子菜单中的一项，点击后把命令广播给正在运行的 MyDesktop。
+	/// 点击后把命令广播给正在运行的 MyDesktop。
 	/// </summary>
 	[ComVisible(true)]
 	[ClassInterface(ClassInterfaceType.None)]
-	sealed class SubCommand(string title, AppCommand command, bool separatorBefore) : IExplorerCommand
+	sealed class ActionCommand(string title, AppCommand command, bool separatorBefore) : MenuCommand(title)
 	{
-		const int E_NOTIMPL = unchecked((int)0x80004001);
-		const uint ECS_ENABLED = 0;
-		const uint ECF_DEFAULT = 0;
-		const uint ECF_SEPARATORBEFORE = 0x20;
-
-		public int GetTitle(IntPtr items, out IntPtr name)
-		{
-			name = Marshal.StringToCoTaskMemUni(title);
-			return 0;
-		}
-
-		public int GetIcon(IntPtr items, out IntPtr icon)
-		{
-			icon = IntPtr.Zero;
-			return E_NOTIMPL;
-		}
-
-		public int GetToolTip(IntPtr items, out IntPtr infoTip)
-		{
-			infoTip = IntPtr.Zero;
-			return E_NOTIMPL;
-		}
-
-		public int GetCanonicalName(out Guid name)
-		{
-			name = Guid.Empty;
-			return E_NOTIMPL;
-		}
-
-		/// <summary>
-		/// 子项拿不到右键位置（参数为空），显示与否已由父菜单决定。
-		/// </summary>
-		public int GetState(IntPtr items, bool okToBeSlow, out uint state)
-		{
-			state = ECS_ENABLED;
-			return 0;
-		}
-
-		public int Invoke(IntPtr items, IntPtr bindContext)
+		public override int Invoke(IntPtr items, IntPtr bindContext)
 		{
 			AppCommands.Broadcast(command);
 			return 0;
 		}
 
-		public int GetFlags(out uint flags)
+		public override int GetFlags(out uint flags)
 		{
 			flags = separatorBefore ? ECF_SEPARATORBEFORE : ECF_DEFAULT;
 			return 0;
 		}
+	}
 
-		public int EnumSubCommands(out IntPtr enumerator)
+	/// <summary>
+	/// 「双击桌面隐藏」三选一子菜单；没有启用双击隐藏（或查询不到状态）时置灰。
+	/// </summary>
+	[ComVisible(true)]
+	[ClassInterface(ClassInterfaceType.None)]
+	sealed class DoubleClickMenu(HideTarget? current, bool enabled) : MenuCommand("双击桌面隐藏")
+	{
+		public override int GetState(IntPtr items, bool okToBeSlow, out uint state)
 		{
-			enumerator = IntPtr.Zero;
-			return E_NOTIMPL;
+			state = enabled ? ECS_ENABLED : ECS_DISABLED;
+			return 0;
+		}
+
+		public override int GetFlags(out uint flags)
+		{
+			flags = ECF_HASSUBCOMMANDS | ECF_SEPARATORBEFORE;
+			return 0;
+		}
+
+		public override int EnumSubCommands(out IntPtr enumerator)
+		{
+			var choices = Enum.GetValues<HideTarget>().Select(t => (IExplorerCommand)new ChoiceCommand(t, t == current)).ToArray();
+			return Enumerate(choices, out enumerator);
+		}
+	}
+
+	[ComVisible(true)]
+	[ClassInterface(ClassInterfaceType.None)]
+	sealed class ChoiceCommand(HideTarget target, bool selected) : MenuCommand(target.DisplayName())
+	{
+		/// <summary>
+		/// Explorer 把带单选标记的项一律画成选中，所以只给当前选项加标记。
+		/// </summary>
+		public override int GetState(IntPtr items, bool okToBeSlow, out uint state)
+		{
+			state = selected ? ECS_RADIOCHECK | ECS_CHECKED : ECS_ENABLED;
+			return 0;
+		}
+
+		public override int Invoke(IntPtr items, IntPtr bindContext)
+		{
+			AppCommands.Broadcast(AppCommands.ForDoubleClickTarget(target));
+			return 0;
 		}
 	}
 
@@ -252,7 +320,6 @@ internal static class DesktopMenuServer
 	sealed class CommandEnumerator(IExplorerCommand[] commands) : IEnumExplorerCommand
 	{
 		const int S_FALSE = 1;
-		const int E_NOTIMPL = unchecked((int)0x80004001);
 		int _index;
 
 		public int Next(uint count, IntPtr output, IntPtr fetched)

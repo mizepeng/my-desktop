@@ -22,7 +22,7 @@ internal partial class SettingsWindow : Window
 		"· 拖动标题栏移动分区、拖动边缘调整大小（会按整行整列吸附），双击标题栏卷起/展开",
 		"· 右键分区空白处或点击标题栏的「⋯」打开分区菜单，可修改颜色、排序、视图等",
 		"· 右键文件弹出系统右键菜单；F2 重命名，Delete 删除到回收站",
-		"· 双击桌面空白处可以一键隐藏/显示所有图标和分区",
+		"· 双击桌面空白处可以一键隐藏/显示图标和分区；隐藏哪些可以在这里、托盘菜单或桌面右键菜单里选",
 		"· 桌面空白处的右键菜单里有 MyDesktop 子菜单",
 	];
 
@@ -46,6 +46,8 @@ internal partial class SettingsWindow : Window
 		_loading = true;
 		AutoStartBox.IsChecked = AutoStart.IsEnabled();
 		DoubleClickBox.IsChecked = Settings.DoubleClickToHide;
+		DoubleClickTargetBox.ItemsSource = Enum.GetValues<HideTarget>().Select(t => t.DisplayName()).ToList();
+		DoubleClickTargetBox.SelectedIndex = (int)Settings.DoubleClickTarget;
 		DrawToCreateBox.IsChecked = Settings.DrawToCreate;
 		DesktopMenuBox.IsChecked = Settings.DesktopContextMenu;
 		ExpandOnHoverBox.IsChecked = Settings.ExpandOnHover;
@@ -142,6 +144,25 @@ internal partial class SettingsWindow : Window
 			_manager.RefreshAllAppearance();
 		}
 		_manager.SaveSoon();
+	}
+
+	void DoubleClickTargetBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+	{
+		if (_loading || DoubleClickTargetBox.SelectedIndex < 0)
+		{
+			return;
+		}
+		_manager.SetDoubleClickTarget((HideTarget)DoubleClickTargetBox.SelectedIndex);
+	}
+
+	/// <summary>
+	/// 在托盘菜单或桌面右键菜单里改了「双击桌面隐藏」时同步下拉框。
+	/// </summary>
+	public void RefreshDoubleClickTarget()
+	{
+		_loading = true;
+		DoubleClickTargetBox.SelectedIndex = (int)Settings.DoubleClickTarget;
+		_loading = false;
 	}
 
 	void ChangeStorage_Click(object sender, RoutedEventArgs e)

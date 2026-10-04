@@ -27,6 +27,16 @@ public enum FenceView
 }
 
 /// <summary>
+/// 隐藏/显示的对象。
+/// </summary>
+public enum HideTarget
+{
+	All,
+	Icons,
+	Fences,
+}
+
+/// <summary>
 /// 全局设置与全部分区布局，序列化为数据目录下的 settings.json。
 /// </summary>
 public sealed class AppSettings
@@ -37,6 +47,11 @@ public sealed class AppSettings
 	public string? StorageRoot { get; set; }
 
 	public bool DoubleClickToHide { get; set; } = true;
+
+	/// <summary>
+	/// 双击桌面空白处时隐藏/显示的对象，默认图标和分区一起。
+	/// </summary>
+	public HideTarget DoubleClickTarget { get; set; } = HideTarget.All;
 
 	public bool ExpandOnHover { get; set; } = true;
 
