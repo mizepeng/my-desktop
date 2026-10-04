@@ -1,0 +1,42 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## 项目概况
+MyDesktop：Windows 11 桌面分区整理工具（对标 Fences），.NET 10 + WPF，单个项目 `src/MyDesktop`，没有第三方依赖。没有测试项目和 lint 配置，验证靠编译加实机运行。README 面向最终用户，开发说明写在脚本开头：`installer/MyDesktop.iss`、`src/MyDesktop/ShellExtension/Pack-DesktopMenu.ps1`。
+## 常用命令
+```bash
+dotnet build src/MyDesktop/MyDesktop.csproj
+dotnet publish src/MyDesktop/MyDesktop.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish
+"$LOCALAPPDATA/Programs/Inno Setup 6/ISCC.exe" installer/MyDesktop.iss
+```
+- 编译偶尔报找不到 `obj\...\*.g.cs` 或 `App.baml`：VS Code 的 C# 扩展在后台同时编译、抢了中间文件，重试即可。
+- 安装包：ISCC 读取 `publish` 里的 exe 和扩展包，生成 `publish\MyDesktop-Setup-<版本>.exe`，之后 `publish` 里只需保留安装包。版本号只改 csproj 的 `<Version>`，exe、扩展包、安装包文件名都跟着它。
+- 桌面右键菜单扩展包（msix）在编译时生成并签名，需要当前用户证书存储里有 `CN=MyDesktop` 的代码签名证书，没有时跳过并给出提示；创建、导出、信任证书的命令见 `Pack-DesktopMenu.ps1` 开头。公钥 `installer/MyDesktop.cer` 随仓库提交，安装程序把它导入「受信任人」。
+- 独立测试实例：`MyDesktop.exe --data <目录>`，配置和日志都放在该目录。测试实例同样会接管桌面图标，会和正在运行的正式实例冲突，测试前先退出正式实例；不要在真实桌面上跑一键整理。
+- 正式实例的配置与日志：`%APPDATA%\MyDesktop\settings.json`、`app.log`。
+## 架构
+### 接管模式
+- 运行时隐藏资源管理器的桌面图标列表（`SHELLDLL_DefView` 下的 `SysListView32`），全部图标由本程序绘制：归入分区的画在分区窗口（`Views/FenceWindow`），其余「散放图标」画在每个显示器一个的透明图标层（`Views/DesktopLayerWindow`）。退出时恢复系统图标；主程序被强制结束时由守护进程 `MyDesktop.exe --guard <pid>` 恢复。
+- 文件始终留在桌面文件夹：桌面分区只记成员（`FenceSettings.Members`，文件为完整路径，此电脑等系统图标为 `::{CLSID}`）；映射分区直接显示任意文件夹。一键整理、自动整理（`Services/DesktopOrganizer`）也只改成员，不移动文件。
+- `Core/ExplorerDesktopView`：在独立的 STA 线程上跨进程读写资源管理器的桌面视图（IShellWindows → IShellBrowser → IFolderView2），产出快照（位置、间距、自动排列、图标大小）。散放图标的排列与位置以它为准，拖动后用 `SelectAndPositionItems` 写回；资源管理器无响应时不会拖住界面。
+- `Services/DesktopTakeover` 统筹接管：图标层、隐藏与恢复、看门狗（资源管理器重启后重新接管）、守护进程、缩放变化处理，以及改名接手（系统「新建」后在隐藏列表里开始的改名，通过 WinEvent 发现后取消，改在图标层上进行）。`Services/DesktopItems` 管快照刷新和桌面文件夹监视。
+- `Core/DesktopMouseWatcher`：低级鼠标、键盘钩子。负责双击桌面空白处隐藏、按住右键画框新建分区、空白处框选；桌面在前台时拦下 Delete、F2、Ctrl+A 等按键和首字母定位，转给图标层，防止作用到隐藏列表里看不见的文件（按着 Win 键时一律放行）。
+- `Core/DesktopHost`：窗口层级。图标层紧贴桌面窗口之上，分区在图标层之上，靠在 `WM_WINDOWPOSCHANGING` 中改写层级维持。
+- `Services/FenceManager`：分区窗口的生命周期、托盘菜单、命令分发、按缩放比例记忆分区布局（`LayoutDpi`、`BoundsByDpi`）。命令定义在 `Core/AppCommand`：再次启动程序时用 `--command <名称>` 广播给正在运行的实例，`exit` 供安装程序在升级、卸载前让实例正常退出。
+- `Views/ItemOps` 汇集分区和图标层共用的项目操作（打开、删除、剪贴板、改名、拖放）。
+### 桌面右键菜单
+签名的外部位置稀疏包 `MyDesktop.DesktopMenu`（`ShellExtension/AppxManifest.xml`）加进程外 COM：系统以包身份按需启动 `MyDesktop.exe --shell-extension`（`Core/DesktopMenuServer`，实现 IExplorerCommand）。程序启动时注册扩展包（`Core/DesktopMenuPackage`，注册记录在 `%LOCALAPPDATA%\MyDesktop\desktop-menu-package.txt`），注册失败时退回写当前用户注册表的静态菜单（`Core/DesktopMenu`）。
+### 安装包
+`installer/MyDesktop.iss`（Inno Setup 6，中文界面用 `installer/ChineseSimplified.isl`）：缺少 .NET 10 桌面运行时时下载固定版本并校验 SHA-256；安装、卸载前先让正在运行的实例正常退出；卸载时注销扩展包、删除证书和开机自启，保留用户配置。
+## 实测得出的约束（改相关代码前先看）
+- 分区窗口绝不能把 owner 或 parent 设成资源管理器的窗口：跨进程窗口关系会共享输入队列，右键菜单等场景下两个进程互相等待而死锁。
+- 拖动吸附要按鼠标相对拖动起点的绝对位移计算；系统按「上次结果 + 鼠标增量」推算位置，直接改写会把窗口粘住。
+- 「用户文件夹」、OneDrive 等系统图标的解析名是真实路径（如 `C:\Users\xxx`）。只有父目录是用户桌面或公共桌面的项目才能按文件删除、改名、移动，否则会作用到整个目录。
+- 资源管理器隐藏着的图标列表不随缩放比例变化更新自己的 DPI，IFolderView 报告的间距会按新旧 DPI 之比失真，图标位置却已按新比例排好，读取时要校正（`ExplorerDesktopView.CorrectSpacing`）；分区窗口在缩放变化后也可能停在旧 DPI（`FenceManager.RefreshWindowsDpi`）。
+- 关闭自动排列时，IFolderView 报告的位置是图标图像左边缘、比图标顶端高约 2 DIP 处；自动排列时报告的是格子左上角，两种模式要分别换算（`DesktopTakeover.ToCell`、`ToPosition`）。
+- 系统图像列表对象在本进程里不应答 IImageList 的 QueryInterface，角标按虚表直接调用（`Native/ShellIconLoader`）。
+## 代码约定
+- 遵循 `.editorconfig`：tab 缩进；含中文的 `.ps1` 必须是 UTF-8 带 BOM（Windows PowerShell 5.1 按系统代码页读取无 BOM 的脚本）。
+- csproj 把 CS8509（switch 表达式没有覆盖全部枚举值）设为错误：对枚举优先用 switch 表达式列全所有值，不写 default。
+- 注释、日志和界面文字都用中文。
