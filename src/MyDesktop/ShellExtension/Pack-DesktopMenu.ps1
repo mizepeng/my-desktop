@@ -5,9 +5,13 @@
 	签名证书取当前用户证书存储中主题为 CN=MyDesktop、带私钥且未过期的证书；找不到时跳过并提示，不影响编译。
 	打包与签名调用 Windows 自带的 AppxPackaging 与 SignerSignEx2，不依赖 Windows SDK（makeappx / signtool）。
 
-	首次在一台电脑上编译前创建签名证书（只需一次，私钥留在本机，不需要管理员权限）：
+	签名证书已有，公钥即 installer\MyDesktop.cer；程序的自动更新只认这张证书签名的安装包，不要另建新证书。
+	换电脑开发时，在原电脑导出带私钥的 PFX，到新电脑导入（不需要管理员权限；PFX 和密码要妥善保管，不能放进仓库）：
+		Export-PfxCertificate -Cert (Get-ChildItem Cert:\CurrentUser\My | Where-Object Subject -eq 'CN=MyDesktop' | Select-Object -First 1) -FilePath MyDesktop-codesign.pfx -Password (Read-Host -AsSecureString 'PFX 密码')
+		Import-PfxCertificate -FilePath MyDesktop-codesign.pfx -CertStoreLocation Cert:\CurrentUser\My -Exportable -Password (Read-Host -AsSecureString 'PFX 密码')
+	只有私钥彻底丢失时才新建证书，并导出公钥覆盖 installer\MyDesktop.cer（随仓库提交，安装包会带上它，由安装程序替用户信任）；
+	此后已安装的程序会拒绝新的安装包，用户要手动安装一次：
 		New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=MyDesktop' -CertStoreLocation Cert:\CurrentUser\My -KeyLength 2048 -HashAlgorithm SHA256 -NotAfter (Get-Date).AddYears(10)
-	导出公钥覆盖 installer\MyDesktop.cer（随仓库提交，安装包会带上它，由安装程序替用户信任）：
 		Export-Certificate -Cert (Get-ChildItem Cert:\CurrentUser\My | Where-Object Subject -eq 'CN=MyDesktop' | Select-Object -First 1) -FilePath installer\MyDesktop.cer
 	不经安装包、直接运行编译结果时，以管理员身份信任一次证书，程序启动时才能注册扩展包：
 		Import-Certificate -FilePath installer\MyDesktop.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
@@ -26,7 +30,7 @@ $cert = Get-ChildItem Cert:\CurrentUser\My |
 		Sort-Object NotAfter -Descending |
 		Select-Object -First 1
 if (-not $cert) {
-	Write-Warning "未找到 $publisher 代码签名证书，跳过生成桌面右键菜单扩展包（创建方法见本脚本开头的说明）"
+	Write-Warning "未找到 $publisher 代码签名证书，跳过生成桌面右键菜单扩展包（导入方法见本脚本开头的说明）"
 	exit 0
 }
 

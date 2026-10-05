@@ -3,7 +3,7 @@
 	打发行版安装包：发布程序、编译安装包、用 MyDesktop 证书给安装包签名，publish 目录只留下安装包。
 .DESCRIPTION
 	在仓库根目录运行：powershell -ExecutionPolicy Bypass -File installer\Build-Installer.ps1
-	签名证书取当前用户证书存储中主题为 CN=MyDesktop、带私钥且未过期的代码签名证书（创建方法见 src\MyDesktop\ShellExtension\Pack-DesktopMenu.ps1）。
+	签名证书取当前用户证书存储中主题为 CN=MyDesktop、带私钥且未过期的代码签名证书（换电脑时的导入方法见 src\MyDesktop\ShellExtension\Pack-DesktopMenu.ps1）。
 	程序的自动更新只接受这张证书签名的安装包，发行版附件必须用本脚本生成。
 #>
 $ErrorActionPreference = 'Stop'
