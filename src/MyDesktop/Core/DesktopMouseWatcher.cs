@@ -64,7 +64,7 @@ sealed class RectUpdateCoalescer(Dispatcher dispatcher, Action<RECT> handler)
 
 /// <summary>
 /// 低级鼠标钩子：检测「双击桌面空白处」以及「在桌面上按住右键拖动画框」；
-/// 接管桌面图标后还负责在空白处拖动框选，以及用低级键盘钩子拦下删除、改名等按键。
+/// 接管桌面图标后还负责在空白处拖动框选（左键；没开右键画框时右键也和资源管理器一样框选），以及用低级键盘钩子拦下删除、改名等按键。
 /// 钩子运行在独立线程上，界面线程偶尔忙碌也不会拖慢全系统的鼠标响应。
 /// </summary>
 internal sealed class DesktopMouseWatcher : IDisposable
@@ -92,6 +92,7 @@ internal sealed class DesktopMouseWatcher : IDisposable
 	POINT _lastPoint;
 	bool _rightDown;
 	bool _drawing;
+	bool _rightBanding;
 	POINT _rightStart;
 	bool _leftDown;
 	bool _banding;
@@ -136,6 +137,12 @@ internal sealed class DesktopMouseWatcher : IDisposable
 	/// 框选结束，在界面线程上触发；与选框更新同一优先级排队，不会跑到最后一次更新前面。
 	/// </summary>
 	public event Action? BandFinished;
+
+	/// <summary>
+	/// 右键框选结束（参数为松开右键的位置），在界面线程上触发：与资源管理器一样，框住了图标就弹出它们的右键菜单，
+	/// 没框住就调用 ReplayRightClickLater 弹出桌面右键菜单。
+	/// </summary>
+	public event Action<POINT>? BandMenuRequested;
 
 	/// <summary>
 	/// 桌面在前台时被拦下的按键命令（参数二表示是否按着 Shift），在界面线程上触发。
@@ -392,11 +399,12 @@ internal sealed class DesktopMouseWatcher : IDisposable
 				}
 				return false;
 			case WM_RBUTTONDOWN:
-				// 先扣下右键按下：若随后拖动就画框，若只是单击则原样重放，桌面右键菜单照常弹出
-				if (_drawEnabled && !injected && IsOverDesktop(info.pt))
+				// 先扣下右键按下：若随后拖动，开着右键画框时画框新建分区，否则（接管桌面图标时）框选图标；若只是单击则原样重放，桌面右键菜单照常弹出
+				if ((_drawEnabled || _takeoverEnabled) && !injected && IsOverDesktop(info.pt))
 				{
 					_rightDown = true;
 					_drawing = false;
+					_rightBanding = false;
 					_rightStart = info.pt;
 					return true;
 				}
@@ -404,7 +412,14 @@ internal sealed class DesktopMouseWatcher : IDisposable
 			case WM_MOUSEMOVE:
 				if (_rightDown)
 				{
-					TrackDraw(info.pt);
+					if (_drawEnabled)
+					{
+						TrackDraw(info.pt);
+					}
+					else
+					{
+						TrackRightBand(info.pt);
+					}
 				}
 				if (_leftDown)
 				{
@@ -473,6 +488,23 @@ internal sealed class DesktopMouseWatcher : IDisposable
 		_bandUpdates.Post(Normalize(_leftStart, point));
 	}
 
+	/// <summary>
+	/// 没开右键画框时，右键拖动与资源管理器一样框选图标：开始拖动时先取消原来的选择。
+	/// </summary>
+	void TrackRightBand(POINT point)
+	{
+		if (!_rightBanding)
+		{
+			if (Math.Abs(point.X - _rightStart.X) < GetSystemMetrics(SM_CXDRAG) && Math.Abs(point.Y - _rightStart.Y) < GetSystemMetrics(SM_CYDRAG))
+			{
+				return;
+			}
+			_rightBanding = true;
+			_uiDispatcher.BeginInvoke(() => BlankPressed?.Invoke(false));
+		}
+		_bandUpdates.Post(Normalize(_rightStart, point));
+	}
+
 	void TrackDraw(POINT point)
 	{
 		if (!_drawing)
@@ -488,6 +520,16 @@ internal sealed class DesktopMouseWatcher : IDisposable
 
 	void FinishRightButton(POINT point)
 	{
+		if (_rightBanding)
+		{
+			_rightBanding = false;
+			_uiDispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+			{
+				BandFinished?.Invoke();
+				BandMenuRequested?.Invoke(point);
+			});
+			return;
+		}
 		var rect = Normalize(_rightStart, point);
 		bool drew = _drawing;
 		_drawing = false;
@@ -501,9 +543,14 @@ internal sealed class DesktopMouseWatcher : IDisposable
 		{
 			_uiDispatcher.BeginInvoke(DispatcherPriority.Input, () => DrawFinished?.Invoke(default));
 		}
-		// 不能在钩子回调里直接注入输入，放到钩子线程稍后执行
-		_hookDispatcher?.BeginInvoke(ReplayRightClick);
+		ReplayRightClickLater();
 	}
+
+	/// <summary>
+	/// 在鼠标当前位置重放一次右键单击，资源管理器照常弹出桌面右键菜单。
+	/// 不能在钩子回调里直接注入输入，放到钩子线程稍后执行。
+	/// </summary>
+	public void ReplayRightClickLater() => _hookDispatcher?.BeginInvoke(ReplayRightClick);
 
 	static void ReplayRightClick()
 	{

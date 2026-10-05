@@ -731,6 +731,13 @@ internal sealed class FenceManager
 			};
 			_mouse.BandUpdated += rect => _takeover?.OnBandUpdated(rect);
 			_mouse.BandFinished += () => _takeover?.OnBandFinished();
+			_mouse.BandMenuRequested += point =>
+			{
+				if (_takeover?.ShowMenuForBand(point) != true)
+				{
+					_mouse?.ReplayRightClickLater();
+				}
+			};
 			_mouse.KeyIntercepted += (key, shift) => _takeover?.HandleKey(key, shift);
 			_mouse.CharIntercepted += character => _takeover?.TypeAhead(character.ToString());
 		}

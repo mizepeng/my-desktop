@@ -46,10 +46,11 @@ internal sealed class Updater
 		_timer = new DispatcherTimer { Interval = StartupDelay };
 		_timer.Tick += (_, _) =>
 		{
-			// 第一次在启动 1 分钟后，之后每小时看一次距上次检查是否已满一天
+			// 每次启动 1 分钟后都检查一次；之后每小时看一次距上次检查是否已满一天
+			bool startup = _timer.Interval == StartupDelay;
 			_timer.Interval = TimeSpan.FromHours(1);
 			var last = _manager.Settings.LastUpdateCheck;
-			if (_manager.Settings.AutoCheckUpdates && (last == null || DateTime.Now - last.Value >= CheckInterval))
+			if (_manager.Settings.AutoCheckUpdates && (startup || last == null || DateTime.Now - last.Value >= CheckInterval))
 			{
 				_ = CheckAsync(false);
 			}

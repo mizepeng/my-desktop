@@ -94,7 +94,7 @@
 						<CheckBox x:Name="DrawToCreateBox" Click="Setting_Changed">
 							<StackPanel>
 								<TextBlock Text="在桌面上按住右键拖动画框新建分区" />
-								<TextBlock Style="{StaticResource Hint}" Text="普通右键单击不受影响，桌面右键菜单照常弹出" />
+								<TextBlock Style="{StaticResource Hint}" Text="普通右键单击不受影响，桌面右键菜单照常弹出；关闭时右键拖动和系统一样框选图标" />
 							</StackPanel>
 						</CheckBox>
 					</Border>

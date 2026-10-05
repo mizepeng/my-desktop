@@ -766,6 +766,21 @@ internal sealed class DesktopTakeover : IDisposable
 	}
 
 	/// <summary>
+	/// 右键框选松开后，与资源管理器一样在鼠标处弹出框住的图标的右键菜单；没框住图标时返回 false，由调用方弹出桌面右键菜单。
+	/// </summary>
+	public bool ShowMenuForBand(POINT point)
+	{
+		var selected = _layers.SelectMany(l => l.SelectedItems).ToList();
+		var layer = _layers.FirstOrDefault(l => l.SelectedItems.Count > 0);
+		if (layer == null)
+		{
+			return false;
+		}
+		layer.ShowItemMenu(selected, point);
+		return true;
+	}
+
+	/// <summary>
 	/// 按键命令：来自获得焦点的图标层，或桌面在前台时被键盘钩子拦下的按键。
 	/// </summary>
 	/// <param name="shift">是否按着 Shift（方向键追加选择）。</param>

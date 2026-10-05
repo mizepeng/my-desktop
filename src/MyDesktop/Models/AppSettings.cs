@@ -89,7 +89,7 @@ public sealed class AppSettings
 	public bool AutoCheckUpdates { get; set; } = true;
 
 	/// <summary>
-	/// 上次检查新版本的时间（手动检查也算），自动检查据此每天只查一次（跨重启）。
+	/// 上次检查新版本的时间（手动检查也算）；程序一直开着时，自动检查据此每天查一次。
 	/// </summary>
 	public DateTime? LastUpdateCheck { get; set; }
 
