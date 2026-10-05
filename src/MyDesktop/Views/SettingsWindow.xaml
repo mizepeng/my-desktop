@@ -53,6 +53,7 @@
 				<ListBoxItem Content="常规" IsSelected="True" />
 				<ListBoxItem Content="外观" />
 				<ListBoxItem Content="整理规则" />
+				<ListBoxItem Content="备份" />
 				<ListBoxItem Content="关于" />
 			</ListBox>
 		</DockPanel>
@@ -278,6 +279,36 @@
 					</WrapPanel>
 				</StackPanel>
 
+				<!-- 备份 -->
+				<StackPanel x:Name="BackupPage" Visibility="Collapsed">
+					<TextBlock Style="{StaticResource PageTitle}" Text="备份" />
+					<TextBlock Style="{StaticResource Hint}" Text="备份包含全部分区（位置、成员、外观）和所有设置。一键整理、删除分区、恢复配置之前会自动备份一份，只保留最近 30 份。恢复后程序会重新启动。" />
+					<WrapPanel Margin="0,16,0,0">
+						<Button Margin="0,0,8,0" Content="立即备份" Click="BackupNow_Click" />
+						<Button Margin="0,0,8,0" Content="导出当前配置…" Click="ExportSettings_Click" />
+						<Button Content="从文件恢复…" Click="ImportSettings_Click" />
+					</WrapPanel>
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="备份列表" />
+					<TextBlock x:Name="NoBackupText" Style="{StaticResource Hint}" Text="还没有备份" />
+					<ItemsControl x:Name="BackupList">
+						<ItemsControl.ItemTemplate>
+							<DataTemplate>
+								<Border Style="{StaticResource Card}">
+									<DockPanel>
+										<Button Margin="8,0,0,0" VerticalAlignment="Center" Content="&#xE74D;" DockPanel.Dock="Right" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" ToolTip="删除这份备份" Click="DeleteBackup_Click" />
+										<Button VerticalAlignment="Center" Content="恢复" DockPanel.Dock="Right" Click="RestoreBackup_Click" />
+										<StackPanel Margin="0,0,12,0">
+											<TextBlock Text="{Binding TimeText}" />
+											<TextBlock Style="{StaticResource Hint}" Text="{Binding ReasonText}" />
+										</StackPanel>
+									</DockPanel>
+								</Border>
+							</DataTemplate>
+						</ItemsControl.ItemTemplate>
+					</ItemsControl>
+				</StackPanel>
+
 				<!-- 关于 -->
 				<StackPanel x:Name="AboutPage" Visibility="Collapsed">
 					<TextBlock Style="{StaticResource PageTitle}" Text="关于" />
@@ -316,6 +347,17 @@
 							<StackPanel Margin="0,0,12,0">
 								<TextBlock Text="配置与日志目录" />
 								<TextBlock x:Name="DataDirText" Style="{StaticResource Hint}" />
+							</StackPanel>
+						</DockPanel>
+					</Border>
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="反馈" />
+					<Border Style="{StaticResource Card}">
+						<DockPanel>
+							<Button VerticalAlignment="Center" Content="反馈问题" DockPanel.Dock="Right" Click="Feedback_Click" />
+							<StackPanel Margin="0,0,12,0">
+								<TextBlock Text="遇到问题或有建议" />
+								<TextBlock Style="{StaticResource Hint}" Text="在 GitHub 上提交；报告问题时附上上面目录里的 app.log，更容易查清原因" />
 							</StackPanel>
 						</DockPanel>
 					</Border>

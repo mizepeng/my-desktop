@@ -1,0 +1,45 @@
+name: 问题反馈
+description: 报告 MyDesktop 的错误或异常表现
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: MyDesktop 版本
+      description: 在「设置 → 关于」里可以看到
+      placeholder: 例如 1.0.2
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      description: 按 Win+R，输入 winver 回车查看
+      placeholder: 例如 Windows 11 24H2（26100.1742）
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 发生了什么，你期望的是什么样
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1.
+        2.
+        3.
+  - type: textarea
+    id: displays
+    attributes:
+      label: 显示器与缩放
+      description: 和分区位置、图标间距、多显示器有关的问题，请写上显示器数量、分辨率和缩放比例
+  - type: textarea
+    id: log
+    attributes:
+      label: 日志
+      description: 在「设置 → 关于 → 配置与日志目录」点「打开」，把其中的 app.log 拖到这里。日志里可能有桌面上的文件名，上传前可以先看一眼

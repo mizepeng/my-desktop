@@ -4,12 +4,18 @@ using System.Text;
 using System.Windows;
 using System.Windows.Threading;
 using MyDesktop.Core;
+using MyDesktop.Models;
 using MyDesktop.Services;
 
 namespace MyDesktop;
 
 public partial class App : Application
 {
+	/// <summary>
+	/// 恢复配置后重新启动时带上：等原来的进程退出后再启动，不当作重复运行。
+	/// </summary>
+	const string RestartArgument = "--restart";
+
 	Mutex? _mutex;
 	bool _ownsMutex;
 
@@ -28,7 +34,8 @@ public partial class App : Application
 			Shutdown();
 			return;
 		}
-		if (!AcquireSingleInstance())
+		bool restart = e.Args.Contains(RestartArgument, StringComparer.OrdinalIgnoreCase);
+		if (!AcquireSingleInstance(restart ? TimeSpan.FromSeconds(20) : TimeSpan.Zero))
 		{
 			// 已有实例在运行：把命令（默认打开设置）转交给它
 			AppCommands.Broadcast(command ?? AppCommand.ShowSettings);
@@ -46,6 +53,31 @@ public partial class App : Application
 	public void ExitApp()
 	{
 		Manager?.Shutdown();
+		Shutdown();
+	}
+
+	/// <summary>
+	/// 换成另一份配置并重新启动：先正常退出（保存当前配置、恢复桌面图标），再写入新配置，由新进程等本进程退出后接着启动。
+	/// </summary>
+	internal void RestartWithSettings(AppSettings settings)
+	{
+		Manager?.Shutdown();
+		try
+		{
+			SettingsStore.Save(settings);
+			var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false };
+			start.ArgumentList.Add(RestartArgument);
+			if (AppPaths.IsCustomDataDir)
+			{
+				start.ArgumentList.Add("--data");
+				start.ArgumentList.Add(AppPaths.DataDir);
+			}
+			Process.Start(start)?.Dispose();
+		}
+		catch (Exception ex)
+		{
+			Log.Error("恢复配置后重新启动失败", ex);
+		}
 		Shutdown();
 	}
 
@@ -120,12 +152,24 @@ public partial class App : Application
 	}
 
 	/// <summary>
-	/// 按数据目录区分实例，便于用 --data 另起一个互不干扰的测试实例。
+	/// 按数据目录区分实例，便于用 --data 另起一个互不干扰的测试实例；已有实例在运行时最多等它 wait 这么久。
 	/// </summary>
-	bool AcquireSingleInstance()
+	bool AcquireSingleInstance(TimeSpan wait)
 	{
 		var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(AppPaths.DataDir.ToUpperInvariant())))[..16];
 		_mutex = new Mutex(true, $"Local\\MyDesktop-{hash}", out _ownsMutex);
+		if (!_ownsMutex && wait > TimeSpan.Zero)
+		{
+			try
+			{
+				_ownsMutex = _mutex.WaitOne(wait);
+			}
+			catch (AbandonedMutexException)
+			{
+				// 对方没释放互斥体就结束了（如被强制结束），同样算已退出，此时本进程已取得互斥体
+				_ownsMutex = true;
+			}
+		}
 		return _ownsMutex;
 	}
 
@@ -137,18 +181,7 @@ public partial class App : Application
 	{
 		// 广播给所有实例，用 --data 启动的实例也一并正常退出，安装程序才能替换文件
 		AppCommands.Broadcast(AppCommand.Exit);
-		if (!AcquireSingleInstance())
-		{
-			try
-			{
-				_ownsMutex = _mutex!.WaitOne(TimeSpan.FromSeconds(20));
-			}
-			catch (AbandonedMutexException)
-			{
-				// 对方没释放互斥体就结束了（如被强制结束），同样算已退出，此时本进程已取得互斥体
-				_ownsMutex = true;
-			}
-		}
+		AcquireSingleInstance(TimeSpan.FromSeconds(20));
 		WaitForOtherProcesses();
 	}
 

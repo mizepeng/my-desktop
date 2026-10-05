@@ -54,4 +54,35 @@ internal static class SettingsStore
 		File.WriteAllText(temp, JsonSerializer.Serialize(settings, Options));
 		File.Move(temp, file, true);
 	}
+
+	/// <summary>
+	/// 把配置写到指定文件（备份、导出用）。
+	/// </summary>
+	public static void SaveTo(AppSettings settings, string file)
+	{
+		File.WriteAllText(file, JsonSerializer.Serialize(settings, Options));
+	}
+
+	/// <summary>
+	/// 读取备份或导出的配置文件；不是 MyDesktop 的配置文件时抛出异常，免得误选的文件把配置清空。
+	/// </summary>
+	public static AppSettings ReadFrom(string file)
+	{
+		var text = File.ReadAllText(file);
+		try
+		{
+			using (var document = JsonDocument.Parse(text))
+			{
+				if (document.RootElement.ValueKind != JsonValueKind.Object || !document.RootElement.TryGetProperty(nameof(AppSettings.Fences), out _))
+				{
+					throw new InvalidDataException("这不是 MyDesktop 的配置文件");
+				}
+			}
+			return JsonSerializer.Deserialize<AppSettings>(text, Options) ?? throw new InvalidDataException("这不是 MyDesktop 的配置文件");
+		}
+		catch (JsonException ex)
+		{
+			throw new InvalidDataException("这不是 MyDesktop 的配置文件，或者文件已损坏", ex);
+		}
+	}
 }

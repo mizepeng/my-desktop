@@ -63,6 +63,7 @@ internal sealed class DesktopOrganizer : IDisposable
 		{
 			return;
 		}
+		SettingsBackup.Create(_manager.Settings, BackupReason.Organize);
 		Execute(plan, false);
 	}
 

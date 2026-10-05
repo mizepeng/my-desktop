@@ -123,6 +123,11 @@ public sealed class AppSettings
 
 	public IconSizeMode DefaultIconSize { get; set; } = IconSizeMode.Medium;
 
+	/// <summary>
+	/// 各分区现在的位置与尺寸所属的显示器组合（见 FenceManager.CurrentDisplayKey）；为空时是旧版本配置，按当前组合看待。
+	/// </summary>
+	public string? DisplayKey { get; set; }
+
 	public List<FenceSettings> Fences { get; set; } = [];
 
 	public List<OrganizeRule> Rules { get; set; } = OrganizeRule.CreateDefaults();
@@ -132,6 +137,11 @@ public sealed class AppSettings
 /// 分区在某个缩放比例下的位置与尺寸（屏幕物理像素）。
 /// </summary>
 public sealed record FenceBounds(int X, int Y, int Width, int Height);
+
+/// <summary>
+/// 分区在某个显示器组合下的布局：位置与尺寸（屏幕物理像素）、它们对应的 DPI，以及标题栏所在的一侧。
+/// </summary>
+public sealed record FenceLayout(int X, int Y, int Width, int Height, int Dpi, RollEdge RollEdge);
 
 public sealed class FenceSettings
 {
@@ -174,6 +184,11 @@ public sealed class FenceSettings
 	/// 在其他缩放比例下的位置与尺寸，切回那个缩放比例时原样恢复。
 	/// </summary>
 	public Dictionary<int, FenceBounds> BoundsByDpi { get; set; } = [];
+
+	/// <summary>
+	/// 在其他显示器组合下的布局，切回那个组合（如重新接上外接显示器）时原样恢复。
+	/// </summary>
+	public Dictionary<string, FenceLayout> LayoutByDisplay { get; set; } = [];
 
 	public bool RolledUp { get; set; }
 

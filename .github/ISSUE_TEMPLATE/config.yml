@@ -1,0 +1,2 @@
+# 只允许用上面的模板提交，免得缺少版本、日志等信息
+blank_issues_enabled: false

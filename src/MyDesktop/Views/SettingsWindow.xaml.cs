@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using Microsoft.Win32;
 using MyDesktop.Core;
 using MyDesktop.Models;
 using MyDesktop.Services;
@@ -12,6 +13,11 @@ namespace MyDesktop.Views;
 
 internal partial class SettingsWindow : Window
 {
+	/// <summary>
+	/// GitHub 上新建 Issue 的页面，先选「问题反馈」或「功能建议」模板。
+	/// </summary>
+	const string IssuesPage = "https://github.com/mizepeng/my-desktop/issues/new/choose";
+
 	static readonly string[] Tips =
 	[
 		"· 把桌面上的图标拖进分区即可收纳，从分区拖回桌面即可还原；文件始终留在桌面文件夹里，退出后桌面保持原样",
@@ -85,10 +91,15 @@ internal partial class SettingsWindow : Window
 		{
 			return;
 		}
-		var pages = new[] { GeneralPage, AppearancePage, RulesPage, AboutPage };
+		var pages = new[] { GeneralPage, AppearancePage, RulesPage, BackupPage, AboutPage };
 		for (int i = 0; i < pages.Length; i++)
 		{
 			pages[i].Visibility = i == NavList.SelectedIndex ? Visibility.Visible : Visibility.Collapsed;
+		}
+		// 设置窗口开着时也可能自动备份（如删除分区），每次切过来都重新列出
+		if (BackupPage.Visibility == Visibility.Visible)
+		{
+			LoadBackups();
 		}
 	}
 
@@ -370,9 +381,93 @@ internal partial class SettingsWindow : Window
 
 	#endregion
 
+	#region 备份
+
+	void LoadBackups()
+	{
+		var backups = SettingsBackup.List();
+		BackupList.ItemsSource = backups;
+		NoBackupText.Visibility = backups.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+	}
+
+	void BackupNow_Click(object sender, RoutedEventArgs e)
+	{
+		SaveRules();
+		SettingsBackup.Create(Settings, BackupReason.Manual);
+		LoadBackups();
+	}
+
+	void ExportSettings_Click(object sender, RoutedEventArgs e)
+	{
+		SaveRules();
+		var dialog = new SaveFileDialog
+		{
+			Title = "导出当前配置",
+			FileName = $"MyDesktop 配置 {DateTime.Now:yyyy-MM-dd}.json",
+			Filter = "MyDesktop 配置 (*.json)|*.json",
+		};
+		if (dialog.ShowDialog(this) != true)
+		{
+			return;
+		}
+		try
+		{
+			SettingsStore.SaveTo(Settings, dialog.FileName);
+		}
+		catch (Exception ex)
+		{
+			Log.Warn($"导出配置失败：{dialog.FileName}", ex);
+			MessageDialog.Show("导出当前配置", $"导出失败：{ex.Message}", "确定");
+		}
+	}
+
+	void ImportSettings_Click(object sender, RoutedEventArgs e)
+	{
+		var dialog = new OpenFileDialog
+		{
+			Title = "从文件恢复配置",
+			Filter = "MyDesktop 配置 (*.json)|*.json",
+		};
+		if (dialog.ShowDialog(this) == true)
+		{
+			_manager.RestoreSettings(dialog.FileName);
+		}
+	}
+
+	void RestoreBackup_Click(object sender, RoutedEventArgs e)
+	{
+		if ((sender as FrameworkElement)?.DataContext is BackupEntry entry)
+		{
+			_manager.RestoreSettings(entry.File);
+		}
+	}
+
+	void DeleteBackup_Click(object sender, RoutedEventArgs e)
+	{
+		if ((sender as FrameworkElement)?.DataContext is BackupEntry entry)
+		{
+			SettingsBackup.Delete(entry);
+			LoadBackups();
+		}
+	}
+
+	#endregion
+
 	void OpenDataDir_Click(object sender, RoutedEventArgs e) => OpenInExplorer(AppPaths.DataDir);
 
 	void CheckUpdate_Click(object sender, RoutedEventArgs e) => _ = _manager.Updater.CheckAsync(true);
+
+	void Feedback_Click(object sender, RoutedEventArgs e)
+	{
+		try
+		{
+			Process.Start(new ProcessStartInfo(IssuesPage) { UseShellExecute = true })?.Dispose();
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("打开反馈页面失败", ex);
+		}
+	}
 
 	static void OpenInExplorer(string folder)
 	{

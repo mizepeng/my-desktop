@@ -119,6 +119,7 @@ internal sealed class FenceManager
 		_tray.TaskbarCreated += OnExplorerRestarted;
 		_tray.DisplayChanged += () => _dispatcher.InvokeAsync(() =>
 		{
+			ApplyDisplayLayout();
 			EnsureAllOnScreen();
 			_takeover?.OnDisplayChanged();
 		}, DispatcherPriority.Background);
@@ -132,6 +133,11 @@ internal sealed class FenceManager
 		}
 
 		ConvertLegacyFences();
+		// 程序没运行时接上或拔掉过显示器的，先换成当前显示器组合下的布局
+		if (SwitchDisplayLayout())
+		{
+			SaveSoon();
+		}
 		// 程序没运行时改过缩放比例的，先按新比例调整分区再打开
 		if (AdaptLayoutToDpi())
 		{
@@ -293,6 +299,7 @@ internal sealed class FenceManager
 		{
 			return;
 		}
+		SettingsBackup.Create(Settings, BackupReason.DeleteFence);
 		_windows.Remove(window);
 		Settings.Fences.Remove(model);
 		foreach (var rule in Settings.Rules.Where(r => r.FenceId == model.Id))
@@ -840,6 +847,33 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
+	/// 用备份或导出的配置文件替换当前的全部分区和设置，程序随即重新启动；替换前先把当前配置备份一份，恢复错了还能撤回。
+	/// </summary>
+	public void RestoreSettings(string file)
+	{
+		AppSettings restored;
+		try
+		{
+			// 先读进内存：要恢复的可能是最旧的那份备份，接下来新建备份时会被清理掉
+			restored = SettingsStore.ReadFrom(file);
+		}
+		catch (Exception ex)
+		{
+			Log.Warn($"读取配置文件失败：{file}", ex);
+			MessageDialog.Show("恢复配置", $"无法读取这个配置文件：{ex.Message}", "确定");
+			return;
+		}
+		var message = "将用这份配置替换当前的全部分区和设置，程序会重新启动。\n\n当前配置会先自动备份一份，恢复错了可以再恢复回来。";
+		if (MessageDialog.Show("恢复配置", message, "恢复并重启", "取消") != 0)
+		{
+			return;
+		}
+		SettingsBackup.Create(Settings, BackupReason.Restore);
+		Log.Info($"恢复配置：{file}");
+		App.Current.RestartWithSettings(restored);
+	}
+
+	/// <summary>
 	/// 分辨率或显示器变化后，把跑到屏幕外的分区拉回可见区域。
 	/// </summary>
 	public void EnsureAllOnScreen()
@@ -979,6 +1013,11 @@ internal sealed class FenceManager
 	/// </summary>
 	public void RefreshWindowsDpi()
 	{
+		// 缩放比例的变化可能伴随着显示器增减，先换成新显示器组合下的布局
+		if (SwitchDisplayLayout())
+		{
+			SaveSoon();
+		}
 		if (AdaptLayoutToDpi())
 		{
 			SaveSoon();
@@ -995,6 +1034,72 @@ internal sealed class FenceManager
 			}
 		}
 		_takeover?.RelayoutSoon();
+	}
+
+	/// <summary>
+	/// 显示器组合变了（接上或拔掉显示器、改分辨率）时换成新组合下的布局，并按新位置摆放分区窗口。
+	/// </summary>
+	void ApplyDisplayLayout()
+	{
+		if (!SwitchDisplayLayout())
+		{
+			return;
+		}
+		foreach (var window in _windows)
+		{
+			// 移到 DPI 不同的显示器上时 WPF 会按新 DPI 缩放窗口，第二次把尺寸校正回保存的物理像素
+			window.ApplyBounds();
+			window.ApplyBounds();
+		}
+		SaveSoon();
+		_takeover?.RelayoutSoon();
+	}
+
+	/// <summary>
+	/// 显示器组合变了：分区现在的布局记到原来的组合下，新组合以前用过的恢复当时的布局（如重新接上外接显示器时分区回到原处），
+	/// 没用过的保持不动，跑到屏幕外的随后由 EnsureAllOnScreen 拉回来。
+	/// </summary>
+	/// <returns>显示器组合变了时返回 true。</returns>
+	bool SwitchDisplayLayout()
+	{
+		var key = CurrentDisplayKey();
+		var old = Settings.DisplayKey;
+		// 显示器切换过程中可能短暂枚举不到显示器，不当作新组合
+		if (key.Length == 0 || key == old)
+		{
+			return false;
+		}
+		Settings.DisplayKey = key;
+		// 旧版本配置没记录显示器组合，按当前的看待
+		if (old == null)
+		{
+			return true;
+		}
+		Log.Info($"显示器组合变化：{old} → {key}");
+		foreach (var model in Settings.Fences)
+		{
+			model.LayoutByDisplay[old] = new FenceLayout(model.X, model.Y, model.Width, model.Height, model.LayoutDpi, model.RollEdge);
+			if (model.LayoutByDisplay.TryGetValue(key, out var saved))
+			{
+				(model.X, model.Y, model.Width, model.Height) = (saved.X, saved.Y, saved.Width, saved.Height);
+				(model.LayoutDpi, model.RollEdge) = (saved.Dpi, saved.RollEdge);
+			}
+		}
+		return true;
+	}
+
+	/// <summary>
+	/// 当前的显示器组合：各显示器的范围（物理像素）按位置排序后拼成的字符串，显示器增减、改分辨率或调整排列时都会变。
+	/// </summary>
+	static string CurrentDisplayKey()
+	{
+		var monitors = new List<RECT>();
+		EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr monitor, IntPtr hdc, ref RECT rect, IntPtr data) =>
+		{
+			monitors.Add(rect);
+			return true;
+		}, IntPtr.Zero);
+		return string.Join(";", monitors.OrderBy(r => r.Left).ThenBy(r => r.Top).Select(r => $"{r.Left},{r.Top},{r.Right},{r.Bottom}"));
 	}
 
 	/// <summary>

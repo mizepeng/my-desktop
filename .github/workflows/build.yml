@@ -1,0 +1,18 @@
+# 推送到 main 和提交 PR 时在 Windows 上编译一遍，确认能通过编译；不签名、不打安装包
+name: 编译检查
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      - name: 编译
+        run: dotnet build src/MyDesktop/MyDesktop.csproj -c Release
