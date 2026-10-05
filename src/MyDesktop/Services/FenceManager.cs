@@ -76,11 +76,14 @@ internal sealed class FenceManager
 		_foregroundCallback = OnForegroundChanged;
 		_reorderCallback = OnZOrderChanged;
 		Organizer = new DesktopOrganizer(this);
+		Updater = new Updater(this);
 	}
 
 	public AppSettings Settings { get; }
 
 	public DesktopOrganizer Organizer { get; }
+
+	public Updater Updater { get; }
 
 	public IReadOnlyList<FenceWindow> Windows => _windows;
 
@@ -151,6 +154,11 @@ internal sealed class FenceManager
 		_reorderHook = SetWinEventHook(EVENT_OBJECT_REORDER, EVENT_OBJECT_REORDER, IntPtr.Zero, _reorderCallback, 0, 0,
 				WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 		_watchdogTimer.Start();
+		// 用 --data 启动的测试实例不自动检查更新，免得和正式实例重复提示
+		if (!AppPaths.IsCustomDataDir)
+		{
+			Updater.Start();
+		}
 		Log.Info($"启动完成，共 {_windows.Count} 个分区");
 
 		if (firstRun)
@@ -167,6 +175,7 @@ internal sealed class FenceManager
 		}
 		_shutdown = true;
 		_watchdogTimer.Stop();
+		Updater.Stop();
 		_zOrderTimer.Stop();
 		_iconReloadTimer.Stop();
 		_registryWatchers.ForEach(w => w.Dispose());
@@ -635,6 +644,7 @@ internal sealed class FenceManager
 			AppCommand.DoubleClickHidesIcons => () => SetDoubleClickTarget(HideTarget.Icons),
 			AppCommand.DoubleClickHidesFences => () => SetDoubleClickTarget(HideTarget.Fences),
 			AppCommand.Exit => App.Current.ExitApp,
+			AppCommand.Updated => ShowUpdatedNotice,
 		};
 		action();
 	}
@@ -925,6 +935,7 @@ internal sealed class FenceManager
 		menu.AddSeparator();
 		menu.Add("设置…", ShowSettings, isDefault: true);
 		menu.Add("开机自动启动", () => AutoStart.SetEnabled(!autoStart), isChecked: autoStart);
+		menu.Add("检查更新…", () => _ = Updater.CheckAsync(true));
 		menu.AddSeparator();
 		menu.Add("退出", App.Current.ExitApp);
 		menu.Show(_tray.Handle, point);
@@ -948,6 +959,14 @@ internal sealed class FenceManager
 		{
 			_tray?.ShowBalloon("MyDesktop 已在后台运行", "右键托盘图标可以新建分区或打开设置。");
 		}
+	}
+
+	/// <summary>
+	/// 自动更新装完、安装程序重新启动本程序后，在通知区域提示已更新到的版本。
+	/// </summary>
+	void ShowUpdatedNotice()
+	{
+		_tray?.ShowBalloon($"MyDesktop 已更新到 {Updater.CurrentVersion.ToString(3)}", "新版本已安装完成，分区和设置保持不变。");
 	}
 
 	#endregion

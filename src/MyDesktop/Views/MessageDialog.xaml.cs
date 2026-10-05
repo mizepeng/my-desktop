@@ -49,4 +49,54 @@ internal partial class MessageDialog : Window
 		dialog.ShowDialog();
 		return dialog._result;
 	}
+
+	/// <summary>
+	/// 显示带进度条和「取消」按钮的对话框，执行 work 直到完成；点取消或关闭窗口会取消它。
+	/// 返回是否顺利完成；出错时由 error 带回异常，取消时 error 为空。
+	/// </summary>
+	public static bool ShowProgress(string title, string message, Func<IProgress<double>, CancellationToken, Task> work, out Exception? error)
+	{
+		var dialog = new MessageDialog { Title = title };
+		dialog.HeaderText.Text = title;
+		dialog.MessageText.Text = message;
+		dialog.ProgressBar.Visibility = Visibility.Visible;
+		using var cancel = new CancellationTokenSource();
+		var button = new Button { Content = "取消", MinWidth = 96, IsCancel = true };
+		button.Click += (_, _) => dialog.Close();
+		dialog.ButtonPanel.Children.Add(button);
+		bool completed = false;
+		bool closed = false;
+		Exception? failure = null;
+		// 完成后由这里关闭窗口时不算取消
+		dialog.Closing += (_, _) =>
+		{
+			if (!completed)
+			{
+				cancel.Cancel();
+			}
+		};
+		dialog.Closed += (_, _) => closed = true;
+		dialog.Loaded += async (_, _) =>
+		{
+			try
+			{
+				await work(new Progress<double>(value => dialog.ProgressBar.Value = value), cancel.Token);
+				completed = true;
+			}
+			catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+			{
+			}
+			catch (Exception ex)
+			{
+				failure = ex;
+			}
+			if (!closed)
+			{
+				dialog.Close();
+			}
+		};
+		dialog.ShowDialog();
+		error = failure;
+		return completed;
+	}
 }

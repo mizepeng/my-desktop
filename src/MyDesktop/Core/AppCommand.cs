@@ -18,6 +18,8 @@ internal enum AppCommand
 	// 安装程序升级、卸载前让正在运行的实例正常退出
 	Exit = 7,
 	NewPortalFence = 8,
+	// 自动更新装完后，安装程序重新启动程序时带上，在通知区域提示已更新
+	Updated = 9,
 }
 
 internal static class AppCommands
@@ -64,6 +66,7 @@ internal static class AppCommands
 			AppCommand.DoubleClickHidesFences => "double-click-fences",
 			AppCommand.Exit => "exit",
 			AppCommand.NewPortalFence => "new-portal-fence",
+			AppCommand.Updated => "updated",
 		};
 	}
 

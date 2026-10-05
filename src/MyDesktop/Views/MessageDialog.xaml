@@ -15,9 +15,12 @@
 			<RowDefinition Height="Auto" />
 			<RowDefinition Height="Auto" />
 			<RowDefinition Height="Auto" />
+			<RowDefinition Height="Auto" />
 		</Grid.RowDefinitions>
 		<TextBlock x:Name="HeaderText" Margin="0,0,0,12" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" />
 		<TextBlock x:Name="MessageText" Grid.Row="1" TextWrapping="Wrap" LineHeight="21" />
-		<StackPanel x:Name="ButtonPanel" Grid.Row="2" Margin="0,24,0,0" HorizontalAlignment="Right" Orientation="Horizontal" />
+		<!-- 只在显示进度时出现 -->
+		<ProgressBar x:Name="ProgressBar" Grid.Row="2" Height="4" Margin="0,16,0,0" Maximum="1" Visibility="Collapsed" />
+		<StackPanel x:Name="ButtonPanel" Grid.Row="3" Margin="0,24,0,0" HorizontalAlignment="Right" Orientation="Horizontal" />
 	</Grid>
 </Window>

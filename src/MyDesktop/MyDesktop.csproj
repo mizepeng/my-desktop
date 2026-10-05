@@ -14,7 +14,7 @@
 		<StartupObject>MyDesktop.Program</StartupObject>
 		<Product>MyDesktop 桌面分区</Product>
 		<Description>Windows 11 桌面分区整理工具</Description>
-		<Version>1.0.1</Version>
+		<Version>1.0.2</Version>
 		<SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
 		<!-- 枚举 switch 表达式漏掉分支时直接编译失败；未命名枚举值的提示无意义，关闭 -->
 		<WarningsAsErrors>$(WarningsAsErrors);CS8509</WarningsAsErrors>
@@ -29,6 +29,8 @@
 	<ItemGroup>
 		<Resource Include="Assets\app.ico" />
 		<Resource Include="Assets\app.png" />
+		<!-- 发行版安装包签名证书的公钥，自动更新时用它核对下载的安装包 -->
+		<EmbeddedResource Include="..\..\installer\MyDesktop.cer" LogicalName="MyDesktop.cer" />
 	</ItemGroup>
 
 	<!-- 生成并签名桌面右键菜单扩展包，放在 exe 旁边；没有签名证书时脚本只给出提示（创建方法见 ShellExtension\Pack-DesktopMenu.ps1），输入未变化时跳过 -->

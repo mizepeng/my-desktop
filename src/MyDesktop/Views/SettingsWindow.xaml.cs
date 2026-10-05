@@ -56,6 +56,7 @@ internal partial class SettingsWindow : Window
 		AutoOrganizeBox.IsChecked = Settings.AutoOrganize;
 		TextShadowBox.IsChecked = Settings.TextShadow;
 		ShortcutArrowBox.IsChecked = Settings.ShowShortcutArrows;
+		AutoUpdateBox.IsChecked = Settings.AutoCheckUpdates;
 		OpacitySlider.Value = Math.Round(Settings.DefaultOpacity * 100);
 		RadiusSlider.Value = Settings.CornerRadius;
 		SnapGapSlider.Value = Settings.SnapGap;
@@ -131,6 +132,7 @@ internal partial class SettingsWindow : Window
 		Settings.TextShadow = textShadow;
 		Settings.ShowShortcutArrows = arrows;
 		Settings.DesktopContextMenu = desktopMenu;
+		Settings.AutoCheckUpdates = AutoUpdateBox.IsChecked == true;
 		_manager.ApplyMouseHookSettings();
 		_manager.Organizer.ApplyWatchSetting();
 		if (desktopMenuChanged)
@@ -369,6 +371,8 @@ internal partial class SettingsWindow : Window
 	#endregion
 
 	void OpenDataDir_Click(object sender, RoutedEventArgs e) => OpenInExplorer(AppPaths.DataDir);
+
+	void CheckUpdate_Click(object sender, RoutedEventArgs e) => _ = _manager.Updater.CheckAsync(true);
 
 	static void OpenInExplorer(string folder)
 	{

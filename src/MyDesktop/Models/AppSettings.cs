@@ -84,6 +84,21 @@ public sealed class AppSettings
 	public bool DesktopContextMenu { get; set; } = true;
 
 	/// <summary>
+	/// 启动后和之后每天自动检查一次新版本。
+	/// </summary>
+	public bool AutoCheckUpdates { get; set; } = true;
+
+	/// <summary>
+	/// 上次检查新版本的时间（手动检查也算），自动检查据此每天只查一次（跨重启）。
+	/// </summary>
+	public DateTime? LastUpdateCheck { get; set; }
+
+	/// <summary>
+	/// 用户选择「跳过此版本」的发行版标签（如 v1.0.2），自动检查时不再提示它。
+	/// </summary>
+	public string? SkippedVersion { get; set; }
+
+	/// <summary>
 	/// 映射分区显示隐藏文件；桌面分区和散放图标跟随资源管理器的「隐藏的项目」设置。
 	/// </summary>
 	public bool ShowHiddenFiles { get; set; }

@@ -1,8 +1,6 @@
 ; MyDesktop 安装程序（Inno Setup 6）：安装程序本体与桌面右键菜单扩展包，信任扩展包的签名证书，
-; 电脑上没有 .NET 10 桌面运行时时自动下载安装。在仓库根目录先发布程序，再编译本脚本，安装包生成在 publish 目录：
-;   dotnet publish src/MyDesktop/MyDesktop.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish
-;   "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer\MyDesktop.iss
-; （ISCC.exe 在 Inno Setup 的安装目录里，winget 默认按用户装在上面这个位置）
+; 电脑上没有 .NET 10 桌面运行时时自动下载安装。发行版用 installer\Build-Installer.ps1 生成：
+; 它先发布程序、再用 ISCC 编译本脚本，最后给安装包签名（程序的自动更新只接受签过名的安装包）。
 ; 签名证书的公钥 MyDesktop.cer 随仓库放在本目录；更换签名证书后按 src\MyDesktop\ShellExtension\Pack-DesktopMenu.ps1 开头的命令重新导出覆盖它。
 
 #define PublishDir AddBackslash(SourcePath) + "..\publish\"
@@ -67,6 +65,8 @@ Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\MyDesktop"; Flags:
 ; 信任右键菜单扩展包的签名证书，程序启动时会自动注册扩展包
 Filename: "{sys}\certutil.exe"; Parameters: "-addstore -f TrustedPeople ""{tmp}\MyDesktop.cer"""; Flags: runhidden; StatusMsg: "正在配置桌面右键菜单…"
 Filename: "{app}\MyDesktop.exe"; Description: "启动 MyDesktop"; Flags: nowait postinstall skipifsilent
+; 程序自动更新时静默安装（参数 /autoupdate=1），装完以原来的用户身份重新启动它，并在通知区域提示已更新
+Filename: "{app}\MyDesktop.exe"; Parameters: "--command updated"; Flags: nowait runasoriginaluser; Check: IsAutoUpdate
 
 [UninstallRun]
 ; 先让程序正常退出（恢复桌面图标），再注销右键菜单扩展包、删除证书
@@ -82,6 +82,12 @@ Type: dirifempty; Name: "{localappdata}\MyDesktop"
 [Code]
 var
 	DownloadPage: TDownloadWizardPage;
+
+// 由程序的自动更新启动（命令行带 /autoupdate=1）
+function IsAutoUpdate: Boolean;
+begin
+	Result := ExpandConstant('{param:autoupdate|0}') = '1';
+end;
 
 // 是否已装 .NET 10 桌面运行时，任意 10.x 版本都能运行本程序
 function IsRuntimeInstalled: Boolean;

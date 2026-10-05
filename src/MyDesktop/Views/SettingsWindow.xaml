@@ -291,6 +291,19 @@
 						</StackPanel>
 					</Border>
 
+					<TextBlock Style="{StaticResource SectionTitle}" Text="更新" />
+					<Border Style="{StaticResource Card}">
+						<DockPanel>
+							<Button VerticalAlignment="Center" Content="检查更新" DockPanel.Dock="Right" Click="CheckUpdate_Click" />
+							<CheckBox x:Name="AutoUpdateBox" Margin="0,0,12,0" Click="Setting_Changed">
+								<StackPanel>
+									<TextBlock Text="自动检查更新" />
+									<TextBlock Style="{StaticResource Hint}" Text="启动后和之后每天检查一次新版本，有新版本时提示更新" />
+								</StackPanel>
+							</CheckBox>
+						</DockPanel>
+					</Border>
+
 					<TextBlock Style="{StaticResource SectionTitle}" Text="使用提示" />
 					<Border Style="{StaticResource Card}">
 						<TextBlock x:Name="TipsText" LineHeight="24" TextWrapping="Wrap" />
