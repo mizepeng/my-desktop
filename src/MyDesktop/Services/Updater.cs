@@ -34,6 +34,11 @@ internal sealed class Updater
 	/// </summary>
 	static readonly string PublisherThumbprint = LoadPublisherThumbprint();
 
+	/// <summary>
+	/// 下载的安装包放在临时目录的这个文件夹里。
+	/// </summary>
+	static string DownloadFolder => Path.Combine(Path.GetTempPath(), "MyDesktop-Update");
+
 	readonly FenceManager _manager;
 	readonly DispatcherTimer _timer;
 	bool _busy;
@@ -49,6 +54,10 @@ internal sealed class Updater
 			// 每次启动 1 分钟后都检查一次；之后每小时看一次距上次检查是否已满一天
 			bool startup = _timer.Interval == StartupDelay;
 			_timer.Interval = TimeSpan.FromHours(1);
+			if (startup && !_busy)
+			{
+				CleanDownloads();
+			}
 			var last = _manager.Settings.LastUpdateCheck;
 			if (_manager.Settings.AutoCheckUpdates && (startup || last == null || DateTime.Now - last.Value >= CheckInterval))
 			{
@@ -174,7 +183,7 @@ internal sealed class Updater
 
 	void DownloadAndInstall(Release release)
 	{
-		var file = Path.Combine(Path.GetTempPath(), "MyDesktop-Update", release.AssetName);
+		var file = Path.Combine(DownloadFolder, release.AssetName);
 		bool done = MessageDialog.ShowProgress("正在下载更新", $"MyDesktop {release.Version.ToString(3)}（{release.AssetSize / 1048576.0:0.0} MB）",
 				(progress, token) => DownloadAsync(release, file, progress, token), out var error);
 		if (!done)
@@ -283,6 +292,24 @@ internal sealed class Updater
 			{
 				Log.Warn("打开发行版页面失败", ex);
 			}
+		}
+	}
+
+	/// <summary>
+	/// 删掉以前下载的安装包，装完更新后它们就没用了；安装程序还没退出时删不掉，下次启动再删。
+	/// </summary>
+	static void CleanDownloads()
+	{
+		try
+		{
+			if (Directory.Exists(DownloadFolder))
+			{
+				Directory.Delete(DownloadFolder, true);
+			}
+		}
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+		{
+			Log.Warn("清理下载的安装包失败，下次启动再试", ex);
 		}
 	}
 

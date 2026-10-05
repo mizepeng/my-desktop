@@ -121,7 +121,8 @@
 				PreviewMouseLeftButtonDown="ItemsList_PreviewMouseLeftButtonDown"
 				PreviewMouseMove="ItemsList_PreviewMouseMove"
 				PreviewMouseLeftButtonUp="ItemsList_PreviewMouseLeftButtonUp"
-				MouseRightButtonUp="ItemsList_MouseRightButtonUp">
+				MouseRightButtonUp="ItemsList_MouseRightButtonUp"
+				SelectionChanged="ItemsList_SelectionChanged">
 			<ListBox.Template>
 				<ControlTemplate TargetType="ListBox">
 					<ItemsPresenter />

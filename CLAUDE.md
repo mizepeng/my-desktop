@@ -41,7 +41,7 @@ powershell -ExecutionPolicy Bypass -File installer/Build-Installer.ps1
 ### 桌面右键菜单
 签名的外部位置稀疏包 `MyDesktop.DesktopMenu`（`ShellExtension/AppxManifest.xml`）加进程外 COM：系统以包身份按需启动 `MyDesktop.exe --shell-extension`（`Core/DesktopMenuServer`，实现 IExplorerCommand）。程序启动时注册扩展包（`Core/DesktopMenuPackage`，注册记录在 `%LOCALAPPDATA%\MyDesktop\desktop-menu-package.txt`），注册失败时退回写当前用户注册表的静态菜单（`Core/DesktopMenu`）。
 ### 安装包与自动更新
-- `installer/MyDesktop.iss`（Inno Setup 6，中文界面用 `installer/ChineseSimplified.isl`）：缺少 .NET 10 桌面运行时时下载固定版本并校验 SHA-256；安装、卸载前先让正在运行的实例正常退出；卸载时注销扩展包、删除证书和开机自启，保留用户配置。
+- `installer/MyDesktop.iss`（Inno Setup 6，中文界面用 `installer/ChineseSimplified.isl`）：缺少 .NET 10 桌面运行时时下载固定版本并校验 SHA-256；安装、卸载前先让正在运行的实例正常退出；卸载时注销扩展包、删除证书和开机自启，并询问是否删除用户配置（默认保留，静默卸载时保留）。
 - `Services/Updater`：匿名查询 GitHub 的 `releases/latest`，取名为 `MyDesktop-Setup-*.exe` 的附件；提示后下载，用 WinVerifyTrust 核对签名完好、签名者是嵌入程序的 `installer/MyDesktop.cer`，再以 `/VERYSILENT /autoupdate=1` 静默安装。安装程序装完按 `/autoupdate=1` 以原来的用户身份重新启动程序。程序发现版本比上次运行时（`LastRunVersion`）新，就在通知区域提示一次已更新，手动安装升级也一样。
 ## 实测得出的约束（改相关代码前先看）
 - 分区窗口绝不能把 owner 或 parent 设成资源管理器的窗口：跨进程窗口关系会共享输入队列，右键菜单等场景下两个进程互相等待而死锁。

@@ -1503,6 +1503,22 @@ internal partial class FenceWindow : Window
 
 	#region 鼠标：选择、框选、拖出、右键
 
+	/// <summary>
+	/// 在分区里按下鼠标（任意键，含空白处）即开始操作这个分区，取消桌面和其他分区的选择。
+	/// </summary>
+	void ItemsList_PreviewMouseDown(object sender, MouseButtonEventArgs e) => _manager.OnSelectionScopeActivated(this);
+
+	/// <summary>
+	/// 分区里有图标被选中（键盘、全选、拖入后选中等，不只是鼠标点击）：同样取消别处的选择。
+	/// </summary>
+	void ItemsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+	{
+		if (e.AddedItems.Count > 0)
+		{
+			_manager.OnSelectionScopeActivated(this);
+		}
+	}
+
 	void ItemsList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
 	{
 		if (IsInside<ScrollBar>(e.OriginalSource) || IsInside<TextBox>(e.OriginalSource))

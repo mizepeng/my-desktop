@@ -78,6 +78,8 @@ Filename: "{sys}\certutil.exe"; Parameters: "-delstore TrustedPeople {#CertThumb
 ; 扩展包的注册记录，不删的话重装同一版本时程序会以为已经注册过
 Type: files; Name: "{localappdata}\MyDesktop\desktop-menu-package.txt"
 Type: dirifempty; Name: "{localappdata}\MyDesktop"
+; 自动更新时下载到临时目录的安装包
+Type: filesandordirs; Name: "{%TEMP}\MyDesktop-Update"
 
 [Code]
 var
@@ -162,4 +164,18 @@ begin
 	ExtractTemporaryFile('MyDesktop.exe');
 	Exec(ExpandConstant('{tmp}\MyDesktop.exe'), '--command exit', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 	Result := '';
+end;
+
+// 卸载完成后询问是否一并删除分区设置、日志和备份，默认保留（重新安装后可以接着用）；静默卸载时一律保留
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+	DataDir: String;
+begin
+	if CurUninstallStep <> usPostUninstall then
+		exit;
+	DataDir := ExpandConstant('{userappdata}\MyDesktop');
+	if DirExists(DataDir) and not UninstallSilent
+			and (TaskDialogMsgBox('是否同时删除 MyDesktop 的分区设置、日志和备份？', '保留的话，重新安装后分区可以接着使用。',
+				mbConfirmation, MB_YESNO or MB_DEFBUTTON2, ['删除', '保留'], 0) = IDYES) then
+		DelTree(DataDir, True, True, True);
 end;

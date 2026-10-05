@@ -413,6 +413,22 @@ internal sealed class FenceManager
 		}
 	}
 
+	/// <summary>
+	/// 整个桌面只有一处选择，各分区之间、分区与桌面之间互斥：在某处按下鼠标或选中图标时，取消其他地方的选择。
+	/// </summary>
+	/// <param name="fence">正在操作的分区；为 null 表示正在操作桌面上的图标。</param>
+	public void OnSelectionScopeActivated(FenceWindow? fence)
+	{
+		foreach (var window in _windows.Where(w => w != fence))
+		{
+			window.ClearSelection();
+		}
+		if (fence != null)
+		{
+			_takeover?.ClearSelection();
+		}
+	}
+
 	public bool IsCut(string path) => _cutPaths.Contains(path);
 
 	void UpdateCutState()
@@ -720,14 +736,7 @@ internal sealed class FenceManager
 			_mouse.BlankPressed += additive =>
 			{
 				_takeover?.OnBlankPressed(additive);
-				// 与资源管理器一致，单击桌面空白处取消选择，分区里选中的图标也一并取消
-				if (!additive)
-				{
-					foreach (var window in _windows)
-					{
-						window.ClearSelection();
-					}
-				}
+				OnSelectionScopeActivated(null);
 			};
 			_mouse.BandUpdated += rect => _takeover?.OnBandUpdated(rect);
 			_mouse.BandFinished += () => _takeover?.OnBandFinished();

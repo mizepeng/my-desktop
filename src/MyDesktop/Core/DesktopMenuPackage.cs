@@ -29,13 +29,16 @@ internal static class DesktopMenuPackage
 			return false;
 		}
 		var marker = $"{AppDirectory}|{File.GetLastWriteTimeUtc(PackagePath).Ticks}";
-		if (File.Exists(MarkerPath) && File.ReadAllText(MarkerPath) == marker)
+		var previous = File.Exists(MarkerPath) ? File.ReadAllText(MarkerPath) : null;
+		if (previous == marker)
 		{
 			return true;
 		}
-		// 先移除旧注册：同版本的包换了外部位置（exe 挪了目录）时 Add-AppxPackage 不会更新
-		var script = $"Get-AppxPackage -Name {PackageName} | Remove-AppxPackage; "
-				+ $"Add-AppxPackage -Path {Quote(PackagePath)} -ExternalLocation {Quote(AppDirectory)}";
+		// 升级时原地更新已注册的包，不先注销：注销时 Windows 有时删不掉包的 AppContainer 配置（0x800701C0），
+		// 旧包已删、新包却注册失败，桌面右键菜单就没了。只有 exe 换了目录时才先注销，同版本的包换了外部位置时 Add-AppxPackage 不会更新
+		bool moved = previous != null && !previous.StartsWith(AppDirectory + "|", StringComparison.OrdinalIgnoreCase);
+		var add = $"Add-AppxPackage -Path {Quote(PackagePath)} -ExternalLocation {Quote(AppDirectory)} -ForceUpdateFromAnyVersion -ForceApplicationShutdown";
+		var script = moved ? $"Get-AppxPackage -Name {PackageName} | Remove-AppxPackage; {add}" : add;
 		if (!RunPowerShell(script, out var error))
 		{
 			Log.Warn($"注册桌面右键菜单扩展包失败：{error}");

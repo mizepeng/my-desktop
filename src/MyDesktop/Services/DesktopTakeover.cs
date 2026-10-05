@@ -727,6 +727,8 @@ internal sealed class DesktopTakeover : IDisposable
 		{
 			_anchor = item;
 		}
+		// 操作桌面上的图标时取消分区里的选择
+		_manager.OnSelectionScopeActivated(null);
 		if (additive)
 		{
 			return;
@@ -756,6 +758,22 @@ internal sealed class DesktopTakeover : IDisposable
 			layer.UpdateBand(rect);
 		}
 	}
+
+	/// <summary>
+	/// 取消所有显示器上桌面图标的选择（操作分区时调用）。
+	/// </summary>
+	public void ClearSelection()
+	{
+		foreach (var layer in _layers)
+		{
+			layer.ClearSelection();
+		}
+	}
+
+	/// <summary>
+	/// 图标层上有图标被选中（键盘、全选、框选等，不只是鼠标点击）：取消分区里的选择。
+	/// </summary>
+	public void OnLayerSelected() => _manager.OnSelectionScopeActivated(null);
 
 	public void OnBandFinished()
 	{

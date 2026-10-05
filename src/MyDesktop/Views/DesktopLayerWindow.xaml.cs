@@ -358,6 +358,14 @@ internal partial class DesktopLayerWindow : Window
 
 	public void SelectAll() => ItemsList.SelectAll();
 
+	void ItemsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+	{
+		if (e.AddedItems.Count > 0)
+		{
+			_takeover.OnLayerSelected();
+		}
+	}
+
 	public void Select(FenceItem item)
 	{
 		ItemsList.UnselectAll();
