@@ -50,7 +50,7 @@ powershell -ExecutionPolicy Bypass -File installer/Build-Installer.ps1
 - 资源管理器隐藏着的图标列表不随缩放比例变化更新自己的 DPI，IFolderView 报告的间距会按新旧 DPI 之比失真，图标位置却已按新比例排好，读取时要校正（`ExplorerDesktopView.CorrectSpacing`）；分区窗口在缩放变化后也可能停在旧 DPI（`FenceManager.RefreshWindowsDpi`）。
 - 关闭自动排列时，IFolderView 报告的位置是图标图像左边缘、比图标顶端高约 2 DIP 处；自动排列时报告的是格子左上角，两种模式要分别换算（`DesktopTakeover.ToCell`、`ToPosition`）。
 - 系统图像列表对象在本进程里不应答 IImageList 的 QueryInterface，角标按虚表直接调用（`Native/ShellIconLoader`）。
-- 系统提供的模糊对分区不起作用（2026-10 在 Windows 11 26H2 上实测）：亚克力、云母背景在窗口未激活时按设计显示为纯色，而分区几乎总是未激活；`SetWindowCompositionAttribute` 的模糊无论分层窗口还是普通窗口都显示为不透明。所以毛玻璃是自己画的（`Services/WallpaperBlur`），前提是分区下面只有壁纸。GDI 截屏拍不到系统的模糊效果，验证这类效果要靠人眼看。
+- 系统提供的模糊（亚克力、云母等）对分区这类几乎总是未激活的窗口不起作用，所以毛玻璃是自己画的（`Services/WallpaperBlur`），前提是分区下面只有壁纸。
 ## 代码约定
 - 遵循 `.editorconfig`：tab 缩进；含中文的 `.ps1` 必须是 UTF-8 带 BOM（Windows PowerShell 5.1 按系统代码页读取无 BOM 的脚本）。
 - csproj 把 CS8509（switch 表达式没有覆盖全部枚举值）设为错误：对枚举优先用 switch 表达式列全所有值，不写 default。
