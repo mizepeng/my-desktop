@@ -162,7 +162,7 @@
 				<!-- 外观 -->
 				<StackPanel x:Name="AppearancePage" Visibility="Collapsed">
 					<TextBlock Style="{StaticResource PageTitle}" Text="外观" />
-					<TextBlock Style="{StaticResource Hint}" Text="以下是所有分区的默认外观。单个分区可以在它的右键菜单里单独设置颜色、不透明度和图标大小。" />
+					<TextBlock Style="{StaticResource Hint}" Text="以下是所有分区的默认外观。单个分区可以在它的右键菜单里单独设置颜色、不透明度、毛玻璃和图标大小。" />
 
 					<TextBlock Style="{StaticResource SectionTitle}" Text="背景颜色" />
 					<Border Style="{StaticResource Card}">
@@ -182,6 +182,14 @@
 							<TextBlock x:Name="OpacityText" Width="52" VerticalAlignment="Center" DockPanel.Dock="Right" TextAlignment="Right" />
 							<Slider x:Name="OpacitySlider" IsSnapToTickEnabled="True" Maximum="100" Minimum="5" TickFrequency="5" ValueChanged="OpacitySlider_ValueChanged" />
 						</DockPanel>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="BlurBox" Click="Setting_Changed">
+							<StackPanel>
+								<TextBlock Text="毛玻璃背景" />
+								<TextBlock Style="{StaticResource Hint}" Text="分区后面的壁纸模糊后透出来，不透明度越低越通透；用动态壁纸或视频壁纸时自动改为半透明" />
+							</StackPanel>
+						</CheckBox>
 					</Border>
 
 					<TextBlock Style="{StaticResource SectionTitle}" Text="圆角大小" />
@@ -220,7 +228,7 @@
 							<Button VerticalAlignment="Center" Content="全部重置" DockPanel.Dock="Right" Click="ResetAppearance_Click" />
 							<StackPanel Margin="0,0,12,0">
 								<TextBlock Text="所有分区改用默认外观" />
-								<TextBlock Style="{StaticResource Hint}" Text="清除各分区单独设置的颜色、不透明度和图标大小" />
+								<TextBlock Style="{StaticResource Hint}" Text="清除各分区单独设置的颜色、不透明度、毛玻璃和图标大小" />
 							</StackPanel>
 						</DockPanel>
 					</Border>

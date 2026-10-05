@@ -12,6 +12,7 @@ internal sealed class TrayIcon : IDisposable
 {
 	const int WM_TRAYICON = WM_APP + 1;
 	const int SPI_SETWORKAREA = 0x002F;
+	const int SPI_SETDESKWALLPAPER = 0x0014;
 	const uint IconId = 1;
 
 	readonly HwndSource _window;
@@ -27,6 +28,11 @@ internal sealed class TrayIcon : IDisposable
 	public event Action<int>? CommandReceived;
 	public event Action? DisplayChanged;
 	public event Action? ThemeChanged;
+
+	/// <summary>
+	/// 桌面壁纸换了（毛玻璃背景要跟着重画）。
+	/// </summary>
+	public event Action? WallpaperChanged;
 
 	/// <summary>
 	/// 剪贴板内容变化（用来把被剪切的图标显示成半透明）。
@@ -153,6 +159,10 @@ internal sealed class TrayIcon : IDisposable
 			if ((int)wParam == SPI_SETWORKAREA)
 			{
 				DisplayChanged?.Invoke();
+			}
+			else if ((int)wParam == SPI_SETDESKWALLPAPER)
+			{
+				WallpaperChanged?.Invoke();
 			}
 			else if (lParam != IntPtr.Zero && Marshal.PtrToStringUni(lParam) == "ImmersiveColorSet")
 			{

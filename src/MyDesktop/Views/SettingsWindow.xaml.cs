@@ -61,6 +61,7 @@ internal partial class SettingsWindow : Window
 		ShowHiddenBox.IsChecked = Settings.ShowHiddenFiles;
 		AutoOrganizeBox.IsChecked = Settings.AutoOrganize;
 		TextShadowBox.IsChecked = Settings.TextShadow;
+		BlurBox.IsChecked = Settings.DefaultBlur;
 		ShortcutArrowBox.IsChecked = Settings.ShowShortcutArrows;
 		AutoUpdateBox.IsChecked = Settings.AutoCheckUpdates;
 		OpacitySlider.Value = Math.Round(Settings.DefaultOpacity * 100);
@@ -129,6 +130,8 @@ internal partial class SettingsWindow : Window
 		bool textShadow = TextShadowBox.IsChecked == true;
 		bool hiddenChanged = Settings.ShowHiddenFiles != showHidden;
 		bool shadowChanged = Settings.TextShadow != textShadow;
+		bool blur = BlurBox.IsChecked == true;
+		bool blurChanged = Settings.DefaultBlur != blur;
 		bool arrows = ShortcutArrowBox.IsChecked == true;
 		bool arrowsChanged = Settings.ShowShortcutArrows != arrows;
 		bool desktopMenu = DesktopMenuBox.IsChecked == true;
@@ -141,6 +144,7 @@ internal partial class SettingsWindow : Window
 		Settings.AutoOrganize = AutoOrganizeBox.IsChecked == true;
 		Settings.ShowHiddenFiles = showHidden;
 		Settings.TextShadow = textShadow;
+		Settings.DefaultBlur = blur;
 		Settings.ShowShortcutArrows = arrows;
 		Settings.DesktopContextMenu = desktopMenu;
 		Settings.AutoCheckUpdates = AutoUpdateBox.IsChecked == true;
@@ -154,7 +158,7 @@ internal partial class SettingsWindow : Window
 		{
 			_manager.RefreshAllItems();
 		}
-		if (shadowChanged)
+		if (shadowChanged || blurChanged)
 		{
 			_manager.RefreshAllAppearance();
 		}
@@ -322,7 +326,7 @@ internal partial class SettingsWindow : Window
 
 	void ResetAppearance_Click(object sender, RoutedEventArgs e)
 	{
-		if (MessageDialog.Show("重置外观", "所有分区单独设置的颜色、不透明度和图标大小都将清除，改用默认外观。", "全部重置", "取消") == 0)
+		if (MessageDialog.Show("重置外观", "所有分区单独设置的颜色、不透明度、毛玻璃和图标大小都将清除，改用默认外观。", "全部重置", "取消") == 0)
 		{
 			_manager.ResetAllAppearance();
 		}

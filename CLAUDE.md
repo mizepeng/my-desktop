@@ -34,14 +34,15 @@ powershell -ExecutionPolicy Bypass -File installer/Build-Installer.ps1
 - `Services/DesktopTakeover` 统筹接管：图标层、隐藏与恢复、看门狗（资源管理器重启后重新接管）、守护进程、缩放变化处理，以及改名接手（系统「新建」后在隐藏列表里开始的改名，通过 WinEvent 发现后取消，改在图标层上进行）。`Services/DesktopItems` 管快照刷新和桌面文件夹监视。
 - `Core/DesktopMouseWatcher`：低级鼠标、键盘钩子。负责双击桌面空白处隐藏、按住右键画框新建分区、空白处框选；桌面在前台时拦下 Delete、F2、Ctrl+A 等按键和首字母定位，转给图标层，防止作用到隐藏列表里看不见的文件（按着 Win 键时一律放行）。
 - `Core/DesktopHost`：窗口层级。图标层紧贴桌面窗口之上，分区在图标层之上，靠在 `WM_WINDOWPOSCHANGING` 中改写层级维持。
-- `Services/FenceManager`：分区窗口的生命周期、托盘菜单、命令分发、按缩放比例记忆分区布局（`LayoutDpi`、`BoundsByDpi`），按显示器组合记忆分区布局（`DisplayKey`、`LayoutByDisplay`，接上或拔掉显示器时 `SwitchDisplayLayout` 存旧组合、恢复新组合的布局）。命令定义在 `Core/AppCommand`：再次启动程序时用 `--command <名称>` 广播给正在运行的实例，`exit` 供安装程序在升级、卸载前让实例正常退出，`updated` 供自动更新装完重新启动后提示已更新。
+- `Services/FenceManager`：分区窗口的生命周期、托盘菜单、命令分发、按缩放比例记忆分区布局（`LayoutDpi`、`BoundsByDpi`），按显示器组合记忆分区布局（`DisplayKey`、`LayoutByDisplay`，接上或拔掉显示器时 `SwitchDisplayLayout` 存旧组合、恢复新组合的布局）。命令定义在 `Core/AppCommand`：再次启动程序时用 `--command <名称>` 广播给正在运行的实例，`exit` 供安装程序在升级、卸载前让实例正常退出。
 - `Views/ItemOps` 汇集分区和图标层共用的项目操作（打开、删除、剪贴板、改名、拖放）。
+- `Services/WallpaperBlur`：分区的毛玻璃背景。在后台线程经 IDesktopWallpaper 读各显示器的壁纸和契合度，按 1/8 尺寸画好并模糊，拼成覆盖整个虚拟屏幕的一张图；分区在背景颜色下面铺一层这张图，按自己的屏幕位置截取。拖动、调整大小时毛玻璃先淡出、松手再淡入：边拖边更新的话，背景要等重绘才跟上，看上去慢半拍。动态壁纸（Progman 或资源管理器的 WorkerW 下出现别的程序的可见窗口）、读不出图片的壁纸（如视频）时不画，分区退回半透明。
 - `Services/SettingsBackup`：整份配置备份到数据目录的 `backups`，一键整理、删除分区、恢复配置之前自动备份，保留最近 30 份。恢复配置时写入新配置后以 `--restart` 重启程序，新进程等旧进程释放单实例互斥体后再启动。
 ### 桌面右键菜单
 签名的外部位置稀疏包 `MyDesktop.DesktopMenu`（`ShellExtension/AppxManifest.xml`）加进程外 COM：系统以包身份按需启动 `MyDesktop.exe --shell-extension`（`Core/DesktopMenuServer`，实现 IExplorerCommand）。程序启动时注册扩展包（`Core/DesktopMenuPackage`，注册记录在 `%LOCALAPPDATA%\MyDesktop\desktop-menu-package.txt`），注册失败时退回写当前用户注册表的静态菜单（`Core/DesktopMenu`）。
 ### 安装包与自动更新
 - `installer/MyDesktop.iss`（Inno Setup 6，中文界面用 `installer/ChineseSimplified.isl`）：缺少 .NET 10 桌面运行时时下载固定版本并校验 SHA-256；安装、卸载前先让正在运行的实例正常退出；卸载时注销扩展包、删除证书和开机自启，保留用户配置。
-- `Services/Updater`：匿名查询 GitHub 的 `releases/latest`，取名为 `MyDesktop-Setup-*.exe` 的附件；提示后下载，用 WinVerifyTrust 核对签名完好、签名者是嵌入程序的 `installer/MyDesktop.cer`，再以 `/VERYSILENT /autoupdate=1` 静默安装。安装程序装完按 `/autoupdate=1` 以原来的用户身份带 `--command updated` 重新启动程序，程序据此在通知区域提示已更新。
+- `Services/Updater`：匿名查询 GitHub 的 `releases/latest`，取名为 `MyDesktop-Setup-*.exe` 的附件；提示后下载，用 WinVerifyTrust 核对签名完好、签名者是嵌入程序的 `installer/MyDesktop.cer`，再以 `/VERYSILENT /autoupdate=1` 静默安装。安装程序装完按 `/autoupdate=1` 以原来的用户身份重新启动程序。程序发现版本比上次运行时（`LastRunVersion`）新，就在通知区域提示一次已更新，手动安装升级也一样。
 ## 实测得出的约束（改相关代码前先看）
 - 分区窗口绝不能把 owner 或 parent 设成资源管理器的窗口：跨进程窗口关系会共享输入队列，右键菜单等场景下两个进程互相等待而死锁。
 - 拖动吸附要按鼠标相对拖动起点的绝对位移计算；系统按「上次结果 + 鼠标增量」推算位置，直接改写会把窗口粘住。
@@ -49,7 +50,7 @@ powershell -ExecutionPolicy Bypass -File installer/Build-Installer.ps1
 - 资源管理器隐藏着的图标列表不随缩放比例变化更新自己的 DPI，IFolderView 报告的间距会按新旧 DPI 之比失真，图标位置却已按新比例排好，读取时要校正（`ExplorerDesktopView.CorrectSpacing`）；分区窗口在缩放变化后也可能停在旧 DPI（`FenceManager.RefreshWindowsDpi`）。
 - 关闭自动排列时，IFolderView 报告的位置是图标图像左边缘、比图标顶端高约 2 DIP 处；自动排列时报告的是格子左上角，两种模式要分别换算（`DesktopTakeover.ToCell`、`ToPosition`）。
 - 系统图像列表对象在本进程里不应答 IImageList 的 QueryInterface，角标按虚表直接调用（`Native/ShellIconLoader`）。
-- 分区窗口做不了毛玻璃（2026-10 在 Windows 11 26H2 上实测）：系统的亚克力、云母背景在窗口未激活时按设计显示为纯色，而分区几乎总是未激活；`SetWindowCompositionAttribute` 的模糊无论分层窗口还是普通窗口都显示为不透明。
+- 系统提供的模糊对分区不起作用（2026-10 在 Windows 11 26H2 上实测）：亚克力、云母背景在窗口未激活时按设计显示为纯色，而分区几乎总是未激活；`SetWindowCompositionAttribute` 的模糊无论分层窗口还是普通窗口都显示为不透明。所以毛玻璃是自己画的（`Services/WallpaperBlur`），前提是分区下面只有壁纸。GDI 截屏拍不到系统的模糊效果，验证这类效果要靠人眼看。
 ## 代码约定
 - 遵循 `.editorconfig`：tab 缩进；含中文的 `.ps1` 必须是 UTF-8 带 BOM（Windows PowerShell 5.1 按系统代码页读取无 BOM 的脚本）。
 - csproj 把 CS8509（switch 表达式没有覆盖全部枚举值）设为错误：对枚举优先用 switch 表达式列全所有值，不写 default。

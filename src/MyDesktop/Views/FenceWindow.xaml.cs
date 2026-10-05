@@ -30,6 +30,9 @@ internal partial class FenceWindow : Window
 	const double ResizeBorderDip = 5;
 	const double SnapDistanceDip = 12;
 	const double FadeMilliseconds = 180;
+	// 毛玻璃在拖动开始时淡出、松手或换壁纸后淡入的时长
+	const double BlurFadeOutMilliseconds = 100;
+	const double BlurFadeInMilliseconds = 300;
 	const double MinWidthDip = 120;
 	// 离屏幕边缘这么近算贴着这条边，决定自动卷起方向
 	const double DockDistanceDip = 24;
@@ -46,6 +49,10 @@ internal partial class FenceWindow : Window
 	FileSystemWatcher? _watcher;
 	ScrollViewer? _scroller;
 	Brush? _frameBorder;
+	// 毛玻璃背景的画刷，开着毛玻璃且取到了壁纸时才有
+	ImageBrush? _blurBrush;
+	// 拖动或调整大小期间毛玻璃暂时淡出
+	bool _blurHidden;
 	bool _folderExisted;
 	// 映射分区里进入的子文件夹；为空时显示映射的文件夹本身
 	string? _subFolder;
@@ -245,6 +252,11 @@ internal partial class FenceWindow : Window
 				DesktopHost.KeepAboveDesktop(hwnd, lParam);
 				break;
 			}
+			case WM_WINDOWPOSCHANGED:
+			{
+				UpdateBlurViewbox();
+				break;
+			}
 			case WM_ENTERSIZEMOVE:
 			{
 				_dragCursorStart = NativeMethods.GetCursorPos();
@@ -277,6 +289,7 @@ internal partial class FenceWindow : Window
 			}
 			case WM_MOVING:
 			{
+				HideBlurWhileMoving();
 				if (Settings.SnapToEdges)
 				{
 					SnapMoving(lParam);
@@ -287,6 +300,7 @@ internal partial class FenceWindow : Window
 			}
 			case WM_SIZING:
 			{
+				HideBlurWhileMoving();
 				_heightResized |= (int)wParam is not (WMSZ_LEFT or WMSZ_RIGHT);
 				_widthResized |= (int)wParam is not (WMSZ_TOP or WMSZ_BOTTOM);
 				var grid = GridSizes();
@@ -610,6 +624,7 @@ internal partial class FenceWindow : Window
 		_inSizeMove = false;
 		_heightResized = false;
 		_widthResized = false;
+		ShowBlurAfterMoving();
 		// 悬停展开时调整完大小，鼠标若已移出，按正常节奏收起
 		if (_tempExpanded)
 		{
@@ -910,6 +925,7 @@ internal partial class FenceWindow : Window
 		_frameBorder = Frozen(light ? Color.FromArgb(0x30, 0, 0, 0) : Color.FromArgb(0x38, 0xFF, 0xFF, 0xFF));
 		Frame.BorderBrush = _frameBorder;
 		Frame.CornerRadius = new CornerRadius(Settings.CornerRadius);
+		UpdateBlur();
 		TitleBar.Background = Frozen(light ? Color.FromArgb(0x12, 0, 0, 0) : Color.FromArgb(0x30, 0, 0, 0));
 		Resources["FenceForeground"] = Frozen(light ? Color.FromRgb(0x1F, 0x1F, 0x1F) : Colors.White);
 		Resources["FenceHover"] = Frozen(light ? Color.FromArgb(0x14, 0, 0, 0) : Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF));
@@ -917,6 +933,67 @@ internal partial class FenceWindow : Window
 		Resources["FenceSelectedBorder"] = Frozen(light ? Color.FromArgb(0x40, 0, 0, 0) : Color.FromArgb(0x59, 0xFF, 0xFF, 0xFF));
 		Resources["TextShadow"] = Settings.TextShadow && !light ? TextShadowEffect : null;
 		UpdateRollVisuals();
+	}
+
+	/// <summary>
+	/// 毛玻璃：背景颜色下面铺一层模糊后的壁纸，截取分区在屏幕上所在的那一块；关掉毛玻璃或取不到壁纸时只有背景颜色，即半透明。
+	/// </summary>
+	void UpdateBlur()
+	{
+		var image = _manager.Wallpaper.Image;
+		if (!(Model.Blur ?? Settings.DefaultBlur) || image == null)
+		{
+			_blurBrush = null;
+			BlurLayer.Background = null;
+			return;
+		}
+		BlurLayer.CornerRadius = Frame.CornerRadius;
+		if (_blurBrush?.ImageSource != image)
+		{
+			_blurBrush = new ImageBrush(image) { ViewboxUnits = BrushMappingMode.Absolute, Stretch = Stretch.Fill };
+			BlurLayer.Background = _blurBrush;
+			UpdateBlurViewbox();
+			// 刚取到或换了壁纸时淡入，和系统换壁纸的过渡差不多，不会突然跳变
+			BlurLayer.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(BlurFadeInMilliseconds)));
+			return;
+		}
+		UpdateBlurViewbox();
+	}
+
+	/// <summary>
+	/// 分区移动或改变大小后，毛玻璃改截取新位置上的那一块壁纸；拖动过程中不更新，见 HideBlurWhileMoving。
+	/// </summary>
+	void UpdateBlurViewbox()
+	{
+		if (_blurBrush != null && !_blurHidden && _hwnd != IntPtr.Zero)
+		{
+			_blurBrush.Viewbox = _manager.Wallpaper.ViewboxFor(GetBounds());
+		}
+	}
+
+	/// <summary>
+	/// 拖动或调整大小时位置每一步都在变，背景要等界面重绘后才跟上，看上去慢半拍；
+	/// 所以一开始移动就把毛玻璃淡出，只剩半透明，后面的壁纸实时透出，松手后再按新位置淡入。只单击标题栏不移动时不淡出。
+	/// </summary>
+	void HideBlurWhileMoving()
+	{
+		if (_blurBrush == null || _blurHidden)
+		{
+			return;
+		}
+		_blurHidden = true;
+		BlurLayer.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(BlurFadeOutMilliseconds)));
+	}
+
+	void ShowBlurAfterMoving()
+	{
+		if (!_blurHidden)
+		{
+			return;
+		}
+		_blurHidden = false;
+		UpdateBlurViewbox();
+		BlurLayer.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(BlurFadeInMilliseconds)));
 	}
 
 	public void ApplyViewMode()
@@ -1786,6 +1863,13 @@ internal partial class FenceWindow : Window
 				sub.AddSeparator();
 				sub.Add("跟随默认外观", () => SetOpacity(null), isChecked: Model.Opacity == null, radio: true);
 			});
+			menu.AddSubMenu("毛玻璃背景", sub =>
+			{
+				sub.Add("开", () => SetBlur(true), isChecked: Model.Blur == true, radio: true);
+				sub.Add("关", () => SetBlur(false), isChecked: Model.Blur == false, radio: true);
+				sub.AddSeparator();
+				sub.Add("跟随默认外观", () => SetBlur(null), isChecked: Model.Blur == null, radio: true);
+			});
 			menu.AddSeparator();
 			menu.Add("重命名分区", BeginTitleEdit);
 			menu.Add(Model.RolledUp ? "展开分区" : "卷起分区", ToggleRollUp);
@@ -1894,6 +1978,13 @@ internal partial class FenceWindow : Window
 	void SetOpacity(double? opacity)
 	{
 		Model.Opacity = opacity;
+		ApplyAppearance();
+		_manager.SaveSoon();
+	}
+
+	void SetBlur(bool? blur)
+	{
+		Model.Blur = blur;
 		ApplyAppearance();
 		_manager.SaveSoon();
 	}

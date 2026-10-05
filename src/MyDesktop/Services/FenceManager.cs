@@ -85,6 +85,11 @@ internal sealed class FenceManager
 
 	public Updater Updater { get; }
 
+	/// <summary>
+	/// 分区毛玻璃背景用的模糊壁纸。
+	/// </summary>
+	public WallpaperBlur Wallpaper { get; } = new();
+
 	public IReadOnlyList<FenceWindow> Windows => _windows;
 
 	public bool FencesHidden => _fencesHidden;
@@ -122,9 +127,14 @@ internal sealed class FenceManager
 			ApplyDisplayLayout();
 			EnsureAllOnScreen();
 			_takeover?.OnDisplayChanged();
+			Wallpaper.Refresh();
 		}, DispatcherPriority.Background);
 		_tray.ThemeChanged += SystemTheme.ApplyToMenus;
 		_tray.ClipboardChanged += () => _dispatcher.InvokeAsync(UpdateCutState, DispatcherPriority.Background);
+		_tray.WallpaperChanged += Wallpaper.Refresh;
+		Wallpaper.Changed += RefreshAllAppearance;
+		Wallpaper.Start();
+		NotifyIfUpgraded(firstRun);
 
 		// 上次异常退出时桌面图标可能停留在隐藏状态，启动时先恢复
 		if (!DesktopHost.IconsHiddenBySystem())
@@ -182,6 +192,8 @@ internal sealed class FenceManager
 		_shutdown = true;
 		_watchdogTimer.Stop();
 		Updater.Stop();
+		Wallpaper.Stop();
+		Wallpaper.Changed -= RefreshAllAppearance;
 		_zOrderTimer.Stop();
 		_iconReloadTimer.Stop();
 		_registryWatchers.ForEach(w => w.Dispose());
@@ -651,7 +663,6 @@ internal sealed class FenceManager
 			AppCommand.DoubleClickHidesIcons => () => SetDoubleClickTarget(HideTarget.Icons),
 			AppCommand.DoubleClickHidesFences => () => SetDoubleClickTarget(HideTarget.Fences),
 			AppCommand.Exit => App.Current.ExitApp,
-			AppCommand.Updated => ShowUpdatedNotice,
 		};
 		action();
 	}
@@ -808,7 +819,7 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 清除各分区单独设置的颜色、不透明度和图标大小，统一跟随默认外观。
+	/// 清除各分区单独设置的颜色、不透明度、毛玻璃和图标大小，统一跟随默认外观。
 	/// </summary>
 	public void ResetAllAppearance()
 	{
@@ -816,6 +827,7 @@ internal sealed class FenceManager
 		{
 			model.Color = null;
 			model.Opacity = null;
+			model.Blur = null;
 			model.IconSize = null;
 		}
 		RefreshAllAppearance();
@@ -996,11 +1008,22 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 自动更新装完、安装程序重新启动本程序后，在通知区域提示已更新到的版本。
+	/// 升级后第一次启动时（不论自动更新还是手动安装）在通知区域提示一次已更新到的版本；第一次安装、重装同一版本不提示。
+	/// 旧版本没有记录上次运行的版本，有配置文件就算是从旧版本升级上来的。
 	/// </summary>
-	void ShowUpdatedNotice()
+	void NotifyIfUpgraded(bool firstRun)
 	{
-		_tray?.ShowBalloon($"MyDesktop 已更新到 {Updater.CurrentVersion.ToString(3)}", "新版本已安装完成，分区和设置保持不变。");
+		var current = Updater.CurrentVersion;
+		bool upgraded = Version.TryParse(Settings.LastRunVersion, out var last) ? last < current : !firstRun;
+		if (Settings.LastRunVersion != current.ToString(3))
+		{
+			Settings.LastRunVersion = current.ToString(3);
+			SaveSoon();
+		}
+		if (upgraded)
+		{
+			_dispatcher.InvokeAsync(() => _tray?.ShowBalloon($"MyDesktop 已更新到 {current.ToString(3)}", "新版本已安装完成，分区和设置保持不变。"), DispatcherPriority.Background);
+		}
 	}
 
 	#endregion

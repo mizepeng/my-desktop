@@ -65,8 +65,8 @@ Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\MyDesktop"; Flags:
 ; 信任右键菜单扩展包的签名证书，程序启动时会自动注册扩展包
 Filename: "{sys}\certutil.exe"; Parameters: "-addstore -f TrustedPeople ""{tmp}\MyDesktop.cer"""; Flags: runhidden; StatusMsg: "正在配置桌面右键菜单…"
 Filename: "{app}\MyDesktop.exe"; Description: "启动 MyDesktop"; Flags: nowait postinstall skipifsilent
-; 程序自动更新时静默安装（参数 /autoupdate=1），装完以原来的用户身份重新启动它，并在通知区域提示已更新
-Filename: "{app}\MyDesktop.exe"; Parameters: "--command updated"; Flags: nowait runasoriginaluser; Check: IsAutoUpdate
+; 程序自动更新时静默安装（参数 /autoupdate=1），装完以原来的用户身份重新启动它
+Filename: "{app}\MyDesktop.exe"; Flags: nowait runasoriginaluser; Check: IsAutoUpdate
 
 [UninstallRun]
 ; 先让程序正常退出（恢复桌面图标），再注销右键菜单扩展包、删除证书

@@ -124,6 +124,16 @@ public sealed class AppSettings
 	public IconSizeMode DefaultIconSize { get; set; } = IconSizeMode.Medium;
 
 	/// <summary>
+	/// 分区背景默认用毛玻璃：背景颜色下面铺一层模糊后的壁纸。
+	/// </summary>
+	public bool DefaultBlur { get; set; } = true;
+
+	/// <summary>
+	/// 上次运行的程序版本；升级后（不论自动更新还是手动安装）第一次启动时据此提示已更新。
+	/// </summary>
+	public string? LastRunVersion { get; set; }
+
+	/// <summary>
 	/// 各分区现在的位置与尺寸所属的显示器组合（见 FenceManager.CurrentDisplayKey）；为空时是旧版本配置，按当前组合看待。
 	/// </summary>
 	public string? DisplayKey { get; set; }
@@ -210,6 +220,8 @@ public sealed class FenceSettings
 	public string? Color { get; set; }
 
 	public double? Opacity { get; set; }
+
+	public bool? Blur { get; set; }
 
 	public IconSizeMode? IconSize { get; set; }
 

@@ -119,131 +119,135 @@
 		</DataTemplate>
 	</Window.Resources>
 
-	<Border x:Name="Frame" BorderThickness="1" CornerRadius="8" Background="#73000000" BorderBrush="#38FFFFFF">
-		<!-- 卷起的分区标题栏放在收向的一侧，行列由代码按卷起方向重排 -->
-		<Grid x:Name="LayoutRoot">
-			<Grid.RowDefinitions>
-				<RowDefinition Height="30" />
-				<RowDefinition Height="*" />
-			</Grid.RowDefinitions>
+	<Grid>
+		<!-- 毛玻璃：背景颜色下面铺一层模糊后的壁纸，画刷由代码设置 -->
+		<Border x:Name="BlurLayer" CornerRadius="8" RenderOptions.BitmapScalingMode="Linear" />
+		<Border x:Name="Frame" BorderThickness="1" CornerRadius="8" Background="#73000000" BorderBrush="#38FFFFFF">
+			<!-- 卷起的分区标题栏放在收向的一侧，行列由代码按卷起方向重排 -->
+			<Grid x:Name="LayoutRoot">
+				<Grid.RowDefinitions>
+					<RowDefinition Height="30" />
+					<RowDefinition Height="*" />
+				</Grid.RowDefinitions>
 
-			<Border x:Name="TitleBar"
-					Background="#30000000"
-					CornerRadius="7,7,0,0"
-					MouseLeftButtonDown="TitleBar_MouseLeftButtonDown"
-					MouseRightButtonUp="TitleBar_MouseRightButtonUp">
-				<Grid x:Name="TitleContent" Margin="10,0,4,0">
-					<Grid.ColumnDefinitions>
-						<ColumnDefinition Width="Auto" />
-						<ColumnDefinition Width="*" />
-						<ColumnDefinition Width="Auto" />
-					</Grid.ColumnDefinitions>
-					<StackPanel Orientation="Horizontal">
-						<!-- 映射分区进入子文件夹后显示 -->
-						<Button x:Name="BackButton"
-								Margin="-6,0,4,0"
-								Style="{StaticResource FenceTitleButton}"
-								Content="&#xE72B;"
-								ToolTip="返回上一级（Backspace）"
-								Visibility="Collapsed"
-								Click="BackButton_Click" />
-						<TextBlock x:Name="BadgeText"
-								Margin="0,0,6,0"
+				<Border x:Name="TitleBar"
+						Background="#30000000"
+						CornerRadius="7,7,0,0"
+						MouseLeftButtonDown="TitleBar_MouseLeftButtonDown"
+						MouseRightButtonUp="TitleBar_MouseRightButtonUp">
+					<Grid x:Name="TitleContent" Margin="10,0,4,0">
+						<Grid.ColumnDefinitions>
+							<ColumnDefinition Width="Auto" />
+							<ColumnDefinition Width="*" />
+							<ColumnDefinition Width="Auto" />
+						</Grid.ColumnDefinitions>
+						<StackPanel Orientation="Horizontal">
+							<!-- 映射分区进入子文件夹后显示 -->
+							<Button x:Name="BackButton"
+									Margin="-6,0,4,0"
+									Style="{StaticResource FenceTitleButton}"
+									Content="&#xE72B;"
+									ToolTip="返回上一级（Backspace）"
+									Visibility="Collapsed"
+									Click="BackButton_Click" />
+							<TextBlock x:Name="BadgeText"
+									Margin="0,0,6,0"
+									VerticalAlignment="Center"
+									FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+									FontSize="11"
+									Opacity="0.8"
+									Foreground="{DynamicResource FenceForeground}" />
+						</StackPanel>
+						<TextBlock x:Name="TitleText"
+								Grid.Column="1"
 								VerticalAlignment="Center"
-								FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-								FontSize="11"
-								Opacity="0.8"
-								Foreground="{DynamicResource FenceForeground}" />
-					</StackPanel>
-					<TextBlock x:Name="TitleText"
-							Grid.Column="1"
-							VerticalAlignment="Center"
-							FontSize="13"
-							FontWeight="SemiBold"
-							TextTrimming="CharacterEllipsis"
-							Foreground="{DynamicResource FenceForeground}"
-							Effect="{DynamicResource TextShadow}" />
-					<!-- 左右收起时的竖排标题：标题栏整体旋转 90°，这里再转回来，每个字一行、正立 -->
-					<TextBlock x:Name="VerticalTitleText"
-							Grid.Column="1"
-							HorizontalAlignment="Left"
-							VerticalAlignment="Center"
-							Visibility="Collapsed"
-							FontSize="13"
-							FontWeight="SemiBold"
-							TextAlignment="Center"
-							Foreground="{DynamicResource FenceForeground}"
-							Effect="{DynamicResource TextShadow}">
-						<TextBlock.LayoutTransform>
-							<RotateTransform Angle="-90" />
-						</TextBlock.LayoutTransform>
-					</TextBlock>
-					<TextBox x:Name="TitleEditor"
-							Grid.Column="1"
-							Margin="0,0,4,0"
-							VerticalAlignment="Center"
-							Visibility="Collapsed"
-							FontSize="13"
-							Style="{StaticResource RenameBoxStyle}"
-							KeyDown="TitleEditor_KeyDown"
-							LostKeyboardFocus="TitleEditor_LostKeyboardFocus" />
-					<StackPanel x:Name="TitleButtons" Grid.Column="2" Orientation="Horizontal" Opacity="0">
-						<Button x:Name="RollButton" Style="{StaticResource FenceTitleButton}" Content="&#xE70E;" ToolTip="卷起" Click="RollButton_Click" />
-						<Button x:Name="MenuButton" Style="{StaticResource FenceTitleButton}" Content="&#xE712;" ToolTip="分区菜单" Click="MenuButton_Click" />
-					</StackPanel>
-				</Grid>
-			</Border>
+								FontSize="13"
+								FontWeight="SemiBold"
+								TextTrimming="CharacterEllipsis"
+								Foreground="{DynamicResource FenceForeground}"
+								Effect="{DynamicResource TextShadow}" />
+						<!-- 左右收起时的竖排标题：标题栏整体旋转 90°，这里再转回来，每个字一行、正立 -->
+						<TextBlock x:Name="VerticalTitleText"
+								Grid.Column="1"
+								HorizontalAlignment="Left"
+								VerticalAlignment="Center"
+								Visibility="Collapsed"
+								FontSize="13"
+								FontWeight="SemiBold"
+								TextAlignment="Center"
+								Foreground="{DynamicResource FenceForeground}"
+								Effect="{DynamicResource TextShadow}">
+							<TextBlock.LayoutTransform>
+								<RotateTransform Angle="-90" />
+							</TextBlock.LayoutTransform>
+						</TextBlock>
+						<TextBox x:Name="TitleEditor"
+								Grid.Column="1"
+								Margin="0,0,4,0"
+								VerticalAlignment="Center"
+								Visibility="Collapsed"
+								FontSize="13"
+								Style="{StaticResource RenameBoxStyle}"
+								KeyDown="TitleEditor_KeyDown"
+								LostKeyboardFocus="TitleEditor_LostKeyboardFocus" />
+						<StackPanel x:Name="TitleButtons" Grid.Column="2" Orientation="Horizontal" Opacity="0">
+							<Button x:Name="RollButton" Style="{StaticResource FenceTitleButton}" Content="&#xE70E;" ToolTip="卷起" Click="RollButton_Click" />
+							<Button x:Name="MenuButton" Style="{StaticResource FenceTitleButton}" Content="&#xE712;" ToolTip="分区菜单" Click="MenuButton_Click" />
+						</StackPanel>
+					</Grid>
+				</Border>
 
-			<Grid x:Name="ContentHost" Grid.Row="1" ClipToBounds="True">
-				<!-- 输入首字母按显示名定位图标 -->
-				<ListBox x:Name="ItemsList"
-						TextSearch.TextPath="DisplayName"
-						Style="{StaticResource FenceListBox}"
-						ItemContainerStyle="{StaticResource FenceItemContainer}"
-						PreviewMouseLeftButtonDown="ItemsList_PreviewMouseLeftButtonDown"
-						PreviewMouseMove="ItemsList_PreviewMouseMove"
-						PreviewMouseLeftButtonUp="ItemsList_PreviewMouseLeftButtonUp"
-						MouseRightButtonUp="ItemsList_MouseRightButtonUp" />
-				<TextBlock x:Name="EmptyHint"
-						Margin="12"
+				<Grid x:Name="ContentHost" Grid.Row="1" ClipToBounds="True">
+					<!-- 输入首字母按显示名定位图标 -->
+					<ListBox x:Name="ItemsList"
+							TextSearch.TextPath="DisplayName"
+							Style="{StaticResource FenceListBox}"
+							ItemContainerStyle="{StaticResource FenceItemContainer}"
+							PreviewMouseLeftButtonDown="ItemsList_PreviewMouseLeftButtonDown"
+							PreviewMouseMove="ItemsList_PreviewMouseMove"
+							PreviewMouseLeftButtonUp="ItemsList_PreviewMouseLeftButtonUp"
+							MouseRightButtonUp="ItemsList_MouseRightButtonUp" />
+					<TextBlock x:Name="EmptyHint"
+							Margin="12"
+							HorizontalAlignment="Center"
+							VerticalAlignment="Center"
+							TextAlignment="Center"
+							TextWrapping="Wrap"
+							Opacity="0.55"
+							IsHitTestVisible="False"
+							Text="拖放文件到这里"
+							Foreground="{DynamicResource FenceForeground}" />
+					<Canvas IsHitTestVisible="False">
+						<Rectangle x:Name="SelectionRect"
+								Visibility="Collapsed"
+								RadiusX="2"
+								RadiusY="2"
+								Fill="#333B82F6"
+								Stroke="#CC60A5FA"
+								StrokeThickness="1" />
+						<!-- 拖动调整顺序时的插入位置 -->
+						<Rectangle x:Name="InsertMarker"
+								Visibility="Collapsed"
+								RadiusX="1.5"
+								RadiusY="1.5"
+								Fill="#FF60A5FA" />
+					</Canvas>
+				</Grid>
+
+				<!-- 调整大小时显示能容纳的列数 × 行数 -->
+				<Border x:Name="GridHint"
+						Grid.RowSpan="2"
+						Grid.ColumnSpan="2"
 						HorizontalAlignment="Center"
 						VerticalAlignment="Center"
-						TextAlignment="Center"
-						TextWrapping="Wrap"
-						Opacity="0.55"
-						IsHitTestVisible="False"
-						Text="拖放文件到这里"
-						Foreground="{DynamicResource FenceForeground}" />
-				<Canvas IsHitTestVisible="False">
-					<Rectangle x:Name="SelectionRect"
-							Visibility="Collapsed"
-							RadiusX="2"
-							RadiusY="2"
-							Fill="#333B82F6"
-							Stroke="#CC60A5FA"
-							StrokeThickness="1" />
-					<!-- 拖动调整顺序时的插入位置 -->
-					<Rectangle x:Name="InsertMarker"
-							Visibility="Collapsed"
-							RadiusX="1.5"
-							RadiusY="1.5"
-							Fill="#FF60A5FA" />
-				</Canvas>
+						Padding="14,4"
+						CornerRadius="6"
+						Background="#B3000000"
+						Visibility="Collapsed"
+						IsHitTestVisible="False">
+					<TextBlock x:Name="GridHintText" FontSize="22" FontWeight="SemiBold" Foreground="White" />
+				</Border>
 			</Grid>
-
-			<!-- 调整大小时显示能容纳的列数 × 行数 -->
-			<Border x:Name="GridHint"
-					Grid.RowSpan="2"
-					Grid.ColumnSpan="2"
-					HorizontalAlignment="Center"
-					VerticalAlignment="Center"
-					Padding="14,4"
-					CornerRadius="6"
-					Background="#B3000000"
-					Visibility="Collapsed"
-					IsHitTestVisible="False">
-				<TextBlock x:Name="GridHintText" FontSize="22" FontWeight="SemiBold" Foreground="White" />
-			</Border>
-		</Grid>
-	</Border>
+		</Border>
+	</Grid>
 </Window>

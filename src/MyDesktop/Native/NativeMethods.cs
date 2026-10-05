@@ -38,6 +38,7 @@ internal static class NativeMethods
 	public const int WM_DRAWITEM = 0x002B;
 	public const int WM_MEASUREITEM = 0x002C;
 	public const int WM_WINDOWPOSCHANGING = 0x0046;
+	public const int WM_WINDOWPOSCHANGED = 0x0047;
 	public const int WM_DISPLAYCHANGE = 0x007E;
 	public const int WM_NCHITTEST = 0x0084;
 	public const int WM_SYSCOMMAND = 0x0112;
