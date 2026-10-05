@@ -414,7 +414,8 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 整个桌面只有一处选择，各分区之间、分区与桌面之间互斥：在某处按下鼠标或选中图标时，取消其他地方的选择。
+	/// 分区里的图标和桌面上的图标同属一个桌面，共用一组选择，规则与系统桌面一致：单击图标只选中它，
+	/// 按住 Ctrl/Shift 单击可以跨分区和桌面追加，点空白处全部取消。这里在单选时取消其他地方的选择。
 	/// </summary>
 	/// <param name="fence">正在操作的分区；为 null 表示正在操作桌面上的图标。</param>
 	public void OnSelectionScopeActivated(FenceWindow? fence)
@@ -427,6 +428,38 @@ internal sealed class FenceManager
 		{
 			_takeover?.ClearSelection();
 		}
+	}
+
+	/// <summary>
+	/// 整个桌面选中的图标（各分区里的和桌面上的）。打开、删除、复制、剪切都作用于它们全部。
+	/// </summary>
+	public List<FenceItem> AllSelectedItems()
+	{
+		var items = _windows.SelectMany(w => w.SelectedItems).ToList();
+		items.AddRange(_takeover?.SelectedItems ?? []);
+		return items;
+	}
+
+	/// <summary>
+	/// 右键菜单、属性、拖动要把选中的图标合成一组 Shell 项：都是桌面上的图标（散放图标和桌面分区里的），或都在同一个映射分区里时合在一起；
+	/// 混有映射分区里的文件、合不到一起时，只保留发起处自己的选择并取消别处的，所见即所得。
+	/// </summary>
+	/// <param name="origin">发起操作的分区；为 null 表示桌面上的图标层。</param>
+	/// <returns>实际作用的图标，以及它们是不是桌面上的图标。</returns>
+	public (List<FenceItem> Items, bool Desktop) SelectionForShell(FenceWindow? origin)
+	{
+		var portals = _windows.Where(w => w.Model.IsPortal && w.HasSelection).ToList();
+		bool desktopSelected = _takeover?.SelectedItems.Count > 0 || _windows.Any(w => !w.Model.IsPortal && w.HasSelection);
+		if (portals.Count == 0)
+		{
+			return (AllSelectedItems(), true);
+		}
+		if (portals.Count == 1 && !desktopSelected)
+		{
+			return (portals[0].SelectedItems, false);
+		}
+		OnSelectionScopeActivated(origin);
+		return origin == null ? (_takeover?.SelectedItems ?? [], true) : (origin.SelectedItems, !origin.Model.IsPortal);
 	}
 
 	public bool IsCut(string path) => _cutPaths.Contains(path);
@@ -736,7 +769,11 @@ internal sealed class FenceManager
 			_mouse.BlankPressed += additive =>
 			{
 				_takeover?.OnBlankPressed(additive);
-				OnSelectionScopeActivated(null);
+				// 点桌面空白处取消所有选择；按着 Ctrl/Shift 时是追加框选，保留分区里的选择
+				if (!additive)
+				{
+					OnSelectionScopeActivated(null);
+				}
 			};
 			_mouse.BandUpdated += rect => _takeover?.OnBandUpdated(rect);
 			_mouse.BandFinished += () => _takeover?.OnBandFinished();

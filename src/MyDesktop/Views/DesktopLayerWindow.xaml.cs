@@ -358,9 +358,12 @@ internal partial class DesktopLayerWindow : Window
 
 	public void SelectAll() => ItemsList.SelectAll();
 
+	/// <summary>
+	/// 不是鼠标单击造成的选中（方向键、新建后选中等）同样是单选，取消分区里的选择；按着 Ctrl/Shift 时是追加。
+	/// </summary>
 	void ItemsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
 	{
-		if (e.AddedItems.Count > 0)
+		if (e.AddedItems.Count > 0 && (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == 0)
 		{
 			_takeover.OnLayerSelected();
 		}
@@ -459,14 +462,15 @@ internal partial class DesktopLayerWindow : Window
 		{
 			return;
 		}
-		// 与系统桌面一样，多个显示器上的图标共用一个选择
-		_takeover.OnLayerPressed(this, (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0, item);
+		// 与系统桌面一样，多个显示器上的图标和分区里的图标共用一个选择；按在已选中的图标上时先保留整组选择，抬起时再单选
+		bool additive = (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0;
+		_takeover.OnLayerPressed(this, additive || ItemsList.SelectedItems.Contains(item), item);
 		_pressPoint = e.GetPosition(this);
 		_pressedItem = item;
 		_deferSelection = false;
 		if (e.ClickCount >= 2)
 		{
-			_takeover.Open(ItemsList.SelectedItems.Contains(item) ? SelectedItems : [item], _hwnd);
+			_takeover.Open(ItemsList.SelectedItems.Contains(item) ? _takeover.AllSelectedItems() : [item], _hwnd);
 			_pressedItem = null;
 			e.Handled = true;
 			return;
@@ -507,13 +511,15 @@ internal partial class DesktopLayerWindow : Window
 			ItemsList.UnselectAll();
 			ItemsList.SelectedItem = item;
 		}
-		StartDragOut(SelectedItems, item);
+		var (items, desktop) = _takeover.SelectionForShell();
+		StartDragOut(items, desktop, item);
 	}
 
 	void ItemsList_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
 	{
 		if (_deferSelection && _pressedItem != null)
 		{
+			_takeover.OnLayerPressed(this, false);
 			ItemsList.UnselectAll();
 			ItemsList.SelectedItem = _pressedItem;
 		}
@@ -539,11 +545,15 @@ internal partial class DesktopLayerWindow : Window
 			ItemsList.UnselectAll();
 			ItemsList.SelectedItem = item;
 		}
-		ShowItemMenu(SelectedItems, NativeMethods.GetCursorPos());
+		var (items, desktop) = _takeover.SelectionForShell();
+		ShowItemMenu(items, desktop, NativeMethods.GetCursorPos(), item);
 		e.Handled = true;
 	}
 
-	public void ShowItemMenu(List<FenceItem> items, POINT point)
+	/// <param name="items">菜单作用的图标，可能包含分区里一起选中的。</param>
+	/// <param name="desktop">它们是不是桌面上的图标。</param>
+	/// <param name="renameTarget">选「重命名」时改名的图标，属于本层。</param>
+	public void ShowItemMenu(List<FenceItem> items, bool desktop, POINT point, FenceItem renameTarget)
 	{
 		if (items.Count == 0)
 		{
@@ -551,16 +561,16 @@ internal partial class DesktopLayerWindow : Window
 		}
 		try
 		{
-			ItemOps.ShowContextMenu(_hwnd, items, true, point, [], verb =>
+			ItemOps.ShowContextMenu(_hwnd, items, desktop, point, [], verb =>
 			{
 				// Shell 自己不会处理重命名（需要视图配合），改为在图标层内联编辑
 				if (!string.Equals(verb, "rename", StringComparison.OrdinalIgnoreCase))
 				{
 					return false;
 				}
-				if (items[0].CanRename)
+				if (renameTarget.CanRename)
 				{
-					BeginRename(items[0]);
+					BeginRename(renameTarget);
 				}
 				return true;
 			});
@@ -572,7 +582,7 @@ internal partial class DesktopLayerWindow : Window
 		_takeover.Items.RefreshSoon();
 	}
 
-	void StartDragOut(List<FenceItem> items, FenceItem anchor)
+	void StartDragOut(List<FenceItem> items, bool desktop, FenceItem anchor)
 	{
 		if (items.Count == 0)
 		{
@@ -582,7 +592,7 @@ internal partial class DesktopLayerWindow : Window
 		var image = ItemOps.CreateDragImage(ItemsList.ItemContainerGenerator.ContainerFromItem(anchor) as ListBoxItem, items.Count, _scale);
 		var press = PointToScreen(_pressPoint);
 		_takeover.OnLayerDragStarting(new POINT((int)Math.Round(press.X), (int)Math.Round(press.Y)));
-		ItemOps.DragOut(_hwnd, items, true, this, image);
+		ItemOps.DragOut(_hwnd, items, desktop, this, image);
 		_takeover.Items.RefreshSoon();
 	}
 

@@ -34,11 +34,17 @@ internal static class DesktopMenuPackage
 		{
 			return true;
 		}
-		// 升级时原地更新已注册的包，不先注销：注销时 Windows 有时删不掉包的 AppContainer 配置（0x800701C0），
-		// 旧包已删、新包却注册失败，桌面右键菜单就没了。只有 exe 换了目录时才先注销，同版本的包换了外部位置时 Add-AppxPackage 不会更新
+		// 一律装到系统盘：「新应用的保存位置」设成其他盘时，包的数据目录会放在那个盘上、原位置只留目录联接，
+		// 之后更新或注销时系统拒绝穿过这些联接（0x800701C0 不受信任的装入点），包就再也更新不了。
+		// 升级时原地更新，不先注销；只有 exe 换了目录（同版本的包换了外部位置时 Add-AppxPackage 不会更新），
+		// 或者已注册的包的数据在其他盘上时才先注销，后者要等重启后才能注册成功，期间由注册表里的菜单顶替
 		bool moved = previous != null && !previous.StartsWith(AppDirectory + "|", StringComparison.OrdinalIgnoreCase);
-		var add = $"Add-AppxPackage -Path {Quote(PackagePath)} -ExternalLocation {Quote(AppDirectory)} -ForceUpdateFromAnyVersion -ForceApplicationShutdown";
-		var script = moved ? $"Get-AppxPackage -Name {PackageName} | Remove-AppxPackage; {add}" : add;
+		var script = "$system = @{}; $volume = Get-AppxVolume | Where-Object IsSystemVolume | Select-Object -First 1; if ($volume) { $system.Volume = $volume }; "
+				+ $"$package = Get-AppxPackage -Name {PackageName}; "
+				+ "$state = if ($package) { Join-Path $env:LOCALAPPDATA \"Packages\\$($package.PackageFamilyName)\\LocalState\" }; "
+				+ "$elsewhere = $state -and (Test-Path $state) -and ((Get-Item $state -Force).Attributes -band [IO.FileAttributes]::ReparsePoint); "
+				+ $"if ($package -and ({(moved ? "$true" : "$false")} -or $elsewhere)) {{ $package | Remove-AppxPackage }}; "
+				+ $"Add-AppxPackage -Path {Quote(PackagePath)} -ExternalLocation {Quote(AppDirectory)} @system -ForceUpdateFromAnyVersion -ForceApplicationShutdown";
 		if (!RunPowerShell(script, out var error))
 		{
 			Log.Warn($"注册桌面右键菜单扩展包失败：{error}");

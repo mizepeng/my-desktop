@@ -727,12 +727,12 @@ internal sealed class DesktopTakeover : IDisposable
 		{
 			_anchor = item;
 		}
-		// 操作桌面上的图标时取消分区里的选择
-		_manager.OnSelectionScopeActivated(null);
 		if (additive)
 		{
 			return;
 		}
+		// 单选桌面上的图标时，分区里的选择也一并取消
+		_manager.OnSelectionScopeActivated(null);
 		foreach (var other in _layers.Where(l => l != layer))
 		{
 			other.ClearSelection();
@@ -771,9 +771,24 @@ internal sealed class DesktopTakeover : IDisposable
 	}
 
 	/// <summary>
-	/// 图标层上有图标被选中（键盘、全选、框选等，不只是鼠标点击）：取消分区里的选择。
+	/// 图标层上有图标被单选（键盘、新建后选中等，不只是鼠标点击）：取消分区里的选择。
 	/// </summary>
 	public void OnLayerSelected() => _manager.OnSelectionScopeActivated(null);
+
+	/// <summary>
+	/// 所有显示器上选中的桌面图标。
+	/// </summary>
+	public List<FenceItem> SelectedItems => _layers.SelectMany(l => l.SelectedItems).ToList();
+
+	/// <summary>
+	/// 整个桌面选中的图标，包括分区里一起选中的。
+	/// </summary>
+	public List<FenceItem> AllSelectedItems() => _manager.AllSelectedItems();
+
+	/// <summary>
+	/// 从桌面上发起右键菜单、属性、拖动时实际作用的图标，见 FenceManager.SelectionForShell。
+	/// </summary>
+	public (List<FenceItem> Items, bool Desktop) SelectionForShell() => _manager.SelectionForShell(null);
 
 	public void OnBandFinished()
 	{
@@ -788,13 +803,13 @@ internal sealed class DesktopTakeover : IDisposable
 	/// </summary>
 	public bool ShowMenuForBand(POINT point)
 	{
-		var selected = _layers.SelectMany(l => l.SelectedItems).ToList();
 		var layer = _layers.FirstOrDefault(l => l.SelectedItems.Count > 0);
 		if (layer == null)
 		{
 			return false;
 		}
-		layer.ShowItemMenu(selected, point);
+		var (items, desktop) = SelectionForShell();
+		layer.ShowItemMenu(items, desktop, point, layer.SelectedItems[0]);
 		return true;
 	}
 
@@ -805,6 +820,8 @@ internal sealed class DesktopTakeover : IDisposable
 	public void HandleKey(DesktopKey key, bool shift = false)
 	{
 		var selected = _layers.SelectMany(l => l.SelectedItems).ToList();
+		// 打开、删除、复制、剪切作用于整个桌面选中的图标，包括分区里一起选中的
+		var all = _manager.AllSelectedItems();
 		var owner = _layers.FirstOrDefault(l => l.SelectedItems.Count > 0) ?? _layers.FirstOrDefault();
 		if (owner == null)
 		{
@@ -812,15 +829,15 @@ internal sealed class DesktopTakeover : IDisposable
 		}
 		Action action = key switch
 		{
-			DesktopKey.Open => () => Open(selected, owner.Handle),
-			DesktopKey.Delete => () => ItemOps.Delete(owner.Handle, selected, false),
-			DesktopKey.DeletePermanently => () => ItemOps.Delete(owner.Handle, selected, true),
+			DesktopKey.Open => () => Open(all, owner.Handle),
+			DesktopKey.Delete => () => ItemOps.Delete(owner.Handle, all, false),
+			DesktopKey.DeletePermanently => () => ItemOps.Delete(owner.Handle, all, true),
 			DesktopKey.Rename => () => BeginRename(selected.FirstOrDefault(i => i.CanRename)),
-			DesktopKey.SelectAll => () => _layers.ForEach(l => l.SelectAll()),
-			DesktopKey.Copy => () => ItemOps.CopyToClipboard(selected, false),
-			DesktopKey.Cut => () => ItemOps.CopyToClipboard(selected, true),
+			DesktopKey.SelectAll => SelectAllOnDesktop,
+			DesktopKey.Copy => () => ItemOps.CopyToClipboard(all, false),
+			DesktopKey.Cut => () => ItemOps.CopyToClipboard(all, true),
 			DesktopKey.ContextMenu => () => ShowMenuForSelection(owner, selected),
-			DesktopKey.Properties => () => ItemOps.ShowProperties(owner.Handle, selected, true),
+			DesktopKey.Properties => () => ShowPropertiesForSelection(owner),
 			DesktopKey.Left or DesktopKey.Up or DesktopKey.Right or DesktopKey.Down or DesktopKey.Home or DesktopKey.End => () => Navigate(key, shift),
 		};
 		action();
@@ -1002,6 +1019,9 @@ internal sealed class DesktopTakeover : IDisposable
 		}
 	}
 
+	/// <summary>
+	/// 菜单键：在第一个选中的桌面图标处弹出整个桌面选中的图标的右键菜单（合不到一起时只对桌面上的，见 SelectionForShell）。
+	/// </summary>
 	void ShowMenuForSelection(DesktopLayerWindow owner, List<FenceItem> selected)
 	{
 		if (selected.Count == 0)
@@ -1011,7 +1031,23 @@ internal sealed class DesktopTakeover : IDisposable
 		var layer = _layers.FirstOrDefault(l => l.Items.Contains(selected[0])) ?? owner;
 		var cell = layer.CellOrigin(selected[0]);
 		var spacing = Items.Snapshot?.Spacing ?? new POINT(0, 0);
-		layer.ShowItemMenu(selected, new POINT(cell.X + spacing.X / 2, cell.Y + spacing.Y / 2));
+		var (items, desktop) = SelectionForShell();
+		layer.ShowItemMenu(items, desktop, new POINT(cell.X + spacing.X / 2, cell.Y + spacing.Y / 2), selected[0]);
+	}
+
+	void ShowPropertiesForSelection(DesktopLayerWindow owner)
+	{
+		var (items, desktop) = SelectionForShell();
+		ItemOps.ShowProperties(owner.Handle, items, desktop);
+	}
+
+	/// <summary>
+	/// 全选只选桌面上的图标，分区里的选择取消，免得接着删除时连带分区里的图标。
+	/// </summary>
+	void SelectAllOnDesktop()
+	{
+		_manager.OnSelectionScopeActivated(null);
+		_layers.ForEach(l => l.SelectAll());
 	}
 
 	#endregion
@@ -1085,7 +1121,9 @@ internal sealed class DesktopTakeover : IDisposable
 		{
 			return DragDropEffects.None;
 		}
-		bool fromFence = drag.Source is FenceWindow;
+		// 从图标层拖动时也可能带着分区里一起选中的图标
+		var fenced = _manager.FencedKeys();
+		bool fromFence = drag.Source is FenceWindow || keys.Any(fenced.Contains);
 		if (fromFence)
 		{
 			_manager.AssignToFence(null, keys);

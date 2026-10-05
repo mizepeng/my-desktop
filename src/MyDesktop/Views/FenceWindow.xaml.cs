@@ -95,6 +95,8 @@ internal partial class FenceWindow : Window
 		Model = model;
 		InitializeComponent();
 		ItemsList.ItemsSource = _items;
+		// 按在空白处时框选的处理会把事件标记为已处理，仍要收到它才能取消别处的选择
+		ItemsList.AddHandler(PreviewMouseDownEvent, new MouseButtonEventHandler(ItemsList_PreviewMouseDown), true);
 		_refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
 		_refreshTimer.Tick += (_, _) =>
 		{
@@ -143,7 +145,11 @@ internal partial class FenceWindow : Window
 
 	double IconDip => Model.View == FenceView.List ? Appearance.ListIconDip : EffectiveIconSize.ToDip();
 
-	List<FenceItem> SelectedItems => ItemsList.SelectedItems.Cast<FenceItem>().ToList();
+	public List<FenceItem> SelectedItems => ItemsList.SelectedItems.Cast<FenceItem>().ToList();
+
+	public bool HasSelection => ItemsList.SelectedItems.Count > 0;
+
+	static bool IsAdditive => (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0;
 
 	#region 生命周期
 
@@ -1504,16 +1510,28 @@ internal partial class FenceWindow : Window
 	#region 鼠标：选择、框选、拖出、右键
 
 	/// <summary>
-	/// 在分区里按下鼠标（任意键，含空白处）即开始操作这个分区，取消桌面和其他分区的选择。
+	/// 在分区里按下鼠标（任意键，含空白处）时单选，取消桌面和其他分区的选择。按着 Ctrl/Shift 是追加选择，不取消；
+	/// 按在已选中的图标上时先保留整组选择（可能要一起拖动或弹出它们的右键菜单），左键没拖动的话抬起时再只选它。
 	/// </summary>
-	void ItemsList_PreviewMouseDown(object sender, MouseButtonEventArgs e) => _manager.OnSelectionScopeActivated(this);
+	void ItemsList_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+	{
+		if (IsAdditive || IsInside<ScrollBar>(e.OriginalSource) || IsInside<TextBox>(e.OriginalSource))
+		{
+			return;
+		}
+		if (ItemFromSource(e.OriginalSource) is FenceItem item && ItemsList.SelectedItems.Contains(item))
+		{
+			return;
+		}
+		_manager.OnSelectionScopeActivated(this);
+	}
 
 	/// <summary>
-	/// 分区里有图标被选中（键盘、全选、拖入后选中等，不只是鼠标点击）：同样取消别处的选择。
+	/// 不是鼠标单击造成的选中（方向键、拖入后选中新项目等）同样是单选，取消别处的选择；按着 Ctrl/Shift 时是追加。
 	/// </summary>
 	void ItemsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
 	{
-		if (e.AddedItems.Count > 0)
+		if (e.AddedItems.Count > 0 && !IsAdditive)
 		{
 			_manager.OnSelectionScopeActivated(this);
 		}
@@ -1539,7 +1557,14 @@ internal partial class FenceWindow : Window
 		}
 		if (e.ClickCount >= 2)
 		{
-			OpenItems(ItemsList.SelectedItems.Contains(item) ? SelectedItems : [item]);
+			if (ItemsList.SelectedItems.Contains(item))
+			{
+				OpenSelected();
+			}
+			else
+			{
+				OpenItems([item]);
+			}
 			_pressedItem = null;
 			e.Handled = true;
 			return;
@@ -1592,7 +1617,8 @@ internal partial class FenceWindow : Window
 			ItemsList.UnselectAll();
 			ItemsList.SelectedItem = item;
 		}
-		StartDragOut(SelectedItems, item);
+		var (items, desktop) = _manager.SelectionForShell(this);
+		StartDragOut(items, desktop, item);
 	}
 
 	void ItemsList_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -1605,6 +1631,7 @@ internal partial class FenceWindow : Window
 		}
 		if (_deferSelection && _pressedItem != null)
 		{
+			_manager.OnSelectionScopeActivated(this);
 			ItemsList.UnselectAll();
 			ItemsList.SelectedItem = _pressedItem;
 		}
@@ -1633,7 +1660,8 @@ internal partial class FenceWindow : Window
 				ItemsList.UnselectAll();
 				ItemsList.SelectedItem = item;
 			}
-			ShowItemMenu(SelectedItems, point);
+			var (items, desktop) = _manager.SelectionForShell(this);
+			ShowItemMenu(items, desktop, point, item);
 		}
 		e.Handled = true;
 	}
@@ -1693,8 +1721,10 @@ internal partial class FenceWindow : Window
 				|| Math.Abs(position.Y - _pressPoint.Y) >= SystemParameters.MinimumVerticalDragDistance;
 	}
 
+	/// <param name="items">拖动的图标，可能包含其他分区和桌面上一起选中的。</param>
+	/// <param name="desktop">它们是不是桌面上的图标。</param>
 	/// <param name="anchor">鼠标按下的那一项，拖动预览图按它生成。</param>
-	void StartDragOut(List<FenceItem> items, FenceItem anchor)
+	void StartDragOut(List<FenceItem> items, bool desktop, FenceItem anchor)
 	{
 		if (items.Count == 0)
 		{
@@ -1702,7 +1732,7 @@ internal partial class FenceWindow : Window
 		}
 		Mouse.Capture(null);
 		var image = ItemOps.CreateDragImage(ItemsList.ItemContainerGenerator.ContainerFromItem(anchor) as ListBoxItem, items.Count, ScaleFactor);
-		ItemOps.DragOut(_hwnd, items, IsDesktopFence, this, image);
+		ItemOps.DragOut(_hwnd, items, desktop, this, image);
 		ScheduleRefresh();
 	}
 
@@ -1919,7 +1949,10 @@ internal partial class FenceWindow : Window
 		}
 	}
 
-	void ShowItemMenu(List<FenceItem> items, POINT point)
+	/// <param name="items">菜单作用的图标，可能包含其他分区和桌面上一起选中的。</param>
+	/// <param name="desktop">它们是不是桌面上的图标。</param>
+	/// <param name="renameTarget">选「重命名」时改名的图标：右键点中的那一个。</param>
+	void ShowItemMenu(List<FenceItem> items, bool desktop, POINT point, FenceItem renameTarget)
 	{
 		if (items.Count == 0)
 		{
@@ -1930,7 +1963,7 @@ internal partial class FenceWindow : Window
 		{
 			var paths = items.Select(i => i.FullPath).ToList();
 			var extras = new List<(string, Action)>();
-			if (IsDesktopFence)
+			if (desktop)
 			{
 				extras.Add(("移出分区", () => _manager.AssignToFence(null, paths)));
 			}
@@ -1938,16 +1971,16 @@ internal partial class FenceWindow : Window
 			{
 				extras.Add(("移回桌面", () => MoveToDesktop(paths)));
 			}
-			ItemOps.ShowContextMenu(_hwnd, items, IsDesktopFence, point, extras, verb =>
+			ItemOps.ShowContextMenu(_hwnd, items, desktop, point, extras, verb =>
 			{
 				// Shell 自己不会处理重命名（需要视图配合），改为在分区内联编辑
 				if (!string.Equals(verb, "rename", StringComparison.OrdinalIgnoreCase))
 				{
 					return false;
 				}
-				if (items[0].CanRename)
+				if (renameTarget.CanRename)
 				{
-					BeginRename(items[0]);
+					BeginRename(renameTarget);
 				}
 				return true;
 			});
@@ -2044,6 +2077,22 @@ internal partial class FenceWindow : Window
 	#endregion
 
 	#region 文件操作
+
+	/// <summary>
+	/// 打开整个桌面选中的图标；只有本分区有选中时按本分区的规则打开（映射分区里的单个文件夹在分区里进入）。
+	/// </summary>
+	void OpenSelected()
+	{
+		var all = _manager.AllSelectedItems();
+		if (all.Count == ItemsList.SelectedItems.Count)
+		{
+			OpenItems(SelectedItems);
+		}
+		else
+		{
+			ItemOps.Open(_hwnd, all, true);
+		}
+	}
 
 	void OpenItems(IEnumerable<FenceItem> items)
 	{
@@ -2304,14 +2353,14 @@ internal partial class FenceWindow : Window
 		switch (key)
 		{
 			case Key.Enter:
-				OpenItems(SelectedItems);
+				OpenSelected();
 				break;
 			case Key.Back when _subFolder != null:
 			case Key.Left when (modifiers & ModifierKeys.Alt) != 0 && _subFolder != null:
 				NavigateUp();
 				break;
 			case Key.Delete:
-				DeleteItems(SelectedItems, shift);
+				DeleteItems(_manager.AllSelectedItems(), shift);
 				break;
 			case Key.F2:
 				if (SelectedItems.FirstOrDefault() is { } item)
@@ -2323,13 +2372,15 @@ internal partial class FenceWindow : Window
 				RefreshItems();
 				break;
 			case Key.A when ctrl:
+				// 全选只选这个分区里的，别处的选择取消，免得接着删除时连带别处的图标
+				_manager.OnSelectionScopeActivated(this);
 				ItemsList.SelectAll();
 				break;
 			case Key.C when ctrl:
-				CopyToClipboard(SelectedItems, false);
+				CopyToClipboard(_manager.AllSelectedItems(), false);
 				break;
 			case Key.X when ctrl:
-				CopyToClipboard(SelectedItems, true);
+				CopyToClipboard(_manager.AllSelectedItems(), true);
 				break;
 			case Key.V when ctrl:
 				PasteFromClipboard();

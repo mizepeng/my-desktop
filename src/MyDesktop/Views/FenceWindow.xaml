@@ -203,7 +203,6 @@
 							TextSearch.TextPath="DisplayName"
 							Style="{StaticResource FenceListBox}"
 							ItemContainerStyle="{StaticResource FenceItemContainer}"
-							PreviewMouseDown="ItemsList_PreviewMouseDown"
 							PreviewMouseLeftButtonDown="ItemsList_PreviewMouseLeftButtonDown"
 							PreviewMouseMove="ItemsList_PreviewMouseMove"
 							PreviewMouseLeftButtonUp="ItemsList_PreviewMouseLeftButtonUp"
