@@ -8,7 +8,11 @@ MyDesktop：Windows 11 桌面分区整理工具（对标 Fences），.NET 10 + W
 换电脑后按下面准备（Windows 11 64 位）：
 - Git、.NET 10 SDK：`winget install Git.Git`、`winget install Microsoft.DotNet.SDK.10`。
 - Inno Setup 6（打安装包用）：`winget install JRSoftware.InnoSetup`，默认按用户装到 `%LOCALAPPDATA%\Programs\Inno Setup 6`；`Build-Installer.ps1` 在这里或 `Program Files (x86)` 下找 `ISCC.exe`。
-- 签名证书：从原电脑导出带私钥的 PFX，导入当前用户证书存储，命令见 `Pack-DesktopMenu.ps1` 开头。不要另建新证书：自动更新只认 `installer/MyDesktop.cer` 这一张，换了证书，所有已安装的程序都会拒绝新安装包，用户只能手动安装一次。没有证书也能编译调试，只是不生成右键菜单扩展包、打不了发行版安装包。
+- 签名证书 `CN=MyDesktop`（指纹 `6C9E104E1EADB0E1E2C87A7DB52110ACC0ECA3D3`）分两部分：
+    - 公钥 `installer/MyDesktop.cer`：随仓库提交。编译时嵌进程序，自动更新用它核对下载的安装包；安装包把它导入用户电脑的「受信任人」，桌面右键菜单扩展包才能注册。
+    - 私钥：只在开发电脑的当前用户证书存储里，用来签名；文件随 Windows 用户加密，不能直接拷走。备份是带密码的 PFX 文件，密码是导出时自己设的，导入时要用；PFX 和密码分开妥善保存，绝不能放进仓库。
+- 换电脑时把 PFX 导入当前用户证书存储（不需要管理员权限），导出、导入命令见 `Pack-DesktopMenu.ps1` 开头。导入后不用手动签名：编译时 `Pack-DesktopMenu.ps1` 自动给右键菜单扩展包签名，`Build-Installer.ps1` 自动给安装包签名，都按 `CN=MyDesktop` 在当前用户证书存储里找证书。`Build-Installer.ps1` 最后输出的签名证书指纹应与上面一致。
+- 不要另建新证书：自动更新只认 `installer/MyDesktop.cer` 这一张，换了证书，所有已安装的程序都会拒绝新安装包，用户只能手动安装一次。没有证书也能编译调试，只是不生成右键菜单扩展包、打不了发行版安装包。
 - 不经安装包、直接运行编译结果又要用桌面右键菜单时：以管理员身份把 `installer/MyDesktop.cer` 导入本机「受信任人」（命令同在脚本开头），或者用安装包装一次。
 - 不需要 Windows SDK：扩展包的打包和签名调用的是系统自带接口。
 ## 常用命令
