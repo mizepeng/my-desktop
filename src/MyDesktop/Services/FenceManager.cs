@@ -318,6 +318,12 @@ internal sealed class FenceManager
 		{
 			rule.FenceId = null;
 		}
+		// 直接关掉活动的分区，系统会把前台交给 Z 序里的下一个窗口，可能是别的程序不可见的窗口；
+		// 它以管理员身份运行时（如 PixPin），本程序注入的输入会被系统丢弃，桌面右键重放失效。先把前台交给桌面，和点一下桌面一样
+		if (window.IsActive)
+		{
+			SetForegroundWindow(DesktopHost.FindDesktopWindow());
+		}
 		window.CloseForReal();
 		SaveSoon();
 		_takeover?.RelayoutSoon();

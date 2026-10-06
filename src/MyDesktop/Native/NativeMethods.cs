@@ -18,6 +18,7 @@ internal static class NativeMethods
 	public const long WS_EX_TRANSPARENT = 0x00000020L;
 	public const long WS_EX_TOOLWINDOW = 0x00000080L;
 	public const long WS_EX_APPWINDOW = 0x00040000L;
+	public const long WS_EX_LAYERED = 0x00080000L;
 	public const long WS_EX_NOACTIVATE = 0x08000000L;
 
 	public static readonly IntPtr HWND_BOTTOM = new(1);
@@ -129,6 +130,7 @@ internal static class NativeMethods
 
 	public const uint GW_HWNDNEXT = 2;
 	public const uint GW_HWNDPREV = 3;
+	public const uint GA_ROOT = 2;
 
 	public const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
 	public const uint EVENT_SYSTEM_MENUPOPUPEND = 0x0007;
@@ -247,6 +249,9 @@ internal static class NativeMethods
 
 	[DllImport("user32.dll")]
 	public static extern IntPtr WindowFromPoint(POINT point);
+
+	[DllImport("user32.dll")]
+	public static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
 
 	[DllImport("user32.dll")]
 	public static extern IntPtr GetParent(IntPtr hwnd);
@@ -484,6 +489,19 @@ internal static class NativeMethods
 
 	[DllImport("advapi32.dll")]
 	public static extern int RegNotifyChangeKeyValue(SafeRegistryHandle key, bool watchSubtree, uint filter, SafeWaitHandle changedEvent, bool asynchronous);
+
+	public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+	public const uint TOKEN_QUERY = 0x0008;
+	public const int TokenElevation = 20;
+
+	[DllImport("kernel32.dll")]
+	public static extern SafeProcessHandle OpenProcess(uint access, bool inheritHandle, uint processId);
+
+	[DllImport("advapi32.dll")]
+	public static extern bool OpenProcessToken(SafeProcessHandle process, uint access, out SafeAccessTokenHandle token);
+
+	[DllImport("advapi32.dll")]
+	public static extern bool GetTokenInformation(SafeAccessTokenHandle token, int infoClass, out int info, int length, out int returnLength);
 
 	#endregion
 

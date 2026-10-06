@@ -399,8 +399,9 @@ internal sealed class DesktopMouseWatcher : IDisposable
 				}
 				return false;
 			case WM_RBUTTONDOWN:
-				// 先扣下右键按下：若随后拖动，开着右键画框时画框新建分区，否则（接管桌面图标时）框选图标；若只是单击则原样重放，桌面右键菜单照常弹出
-				if ((_drawEnabled || _takeoverEnabled) && !injected && IsOverDesktop(info.pt))
+				// 先扣下右键按下：若随后拖动，开着右键画框时画框新建分区，否则（接管桌面图标时）框选图标；若只是单击则原样重放，桌面右键菜单照常弹出。
+				// 以管理员身份运行的程序在前台时，重放的单击会被系统丢弃，这时不扣，交给资源管理器自己处理
+				if ((_drawEnabled || _takeoverEnabled) && !injected && IsOverDesktop(info.pt) && !IsForegroundElevated())
 				{
 					_rightDown = true;
 					_drawing = false;
@@ -601,10 +602,40 @@ internal sealed class DesktopMouseWatcher : IDisposable
 			}
 			if (NativeMethods.GetWindowRect(hwnd).Contains(point))
 			{
+				// 分层窗口的全透明处不接收点击、鼠标穿透到下面，以系统的命中测试为准，例如 NVIDIA 覆盖层铺满全屏的透明窗口。
+				// WindowFromPoint 不向其他线程的窗口发消息（实测目标线程无响应时也立即返回），钩子线程自己没有窗口，可以在这里调用
+				if ((GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64() & WS_EX_LAYERED) != 0 && GetAncestor(WindowFromPoint(point), GA_ROOT) != hwnd)
+				{
+					continue;
+				}
 				return false;
 			}
 		}
 		return false;
+	}
+
+	/// <summary>
+	/// 前台窗口是否属于以管理员身份运行的程序（本程序自己不是）。
+	/// 这时用户界面权限隔离（UIPI）会静默丢弃本程序用 SendInput 注入的输入，SendInput 照样返回成功。
+	/// </summary>
+	static bool IsForegroundElevated()
+	{
+		if (Environment.IsPrivilegedProcess)
+		{
+			return false;
+		}
+		GetWindowThreadProcessId(GetForegroundWindow(), out uint processId);
+		using var process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+		// 管理员进程也允许受限查询。查不了的（切换前台的瞬间没有前台窗口，或者系统、受保护的进程）一律当作会丢弃：
+		// 宁可这次不扣、少一次画框，也不能把右键吞掉
+		if (process.IsInvalid || !OpenProcessToken(process, TOKEN_QUERY, out var token))
+		{
+			return true;
+		}
+		using (token)
+		{
+			return !GetTokenInformation(token, TokenElevation, out int elevated, sizeof(int), out _) || elevated != 0;
+		}
 	}
 
 	static RECT Normalize(POINT a, POINT b)

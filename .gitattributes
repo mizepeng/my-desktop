@@ -1,0 +1,2 @@
+# 文本文件在仓库和工作区一律用 LF，不受各电脑 core.autocrlf 设置的影响；二进制文件由 Git 自动识别，不做转换
+* text=auto eol=lf
