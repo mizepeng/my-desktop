@@ -30,6 +30,7 @@ internal sealed class FenceManager
 	readonly DispatcherTimer _saveTimer;
 	readonly DispatcherTimer _watchdogTimer;
 	readonly DispatcherTimer _zOrderTimer;
+	readonly DispatcherTimer _unliftTimer;
 	readonly DispatcherTimer _iconReloadTimer;
 	readonly List<RegistryWatcher> _registryWatchers = [];
 	readonly WinEventProc _foregroundCallback;
@@ -64,6 +65,14 @@ internal sealed class FenceManager
 		_zOrderTimer.Tick += (_, _) =>
 		{
 			_zOrderTimer.Stop();
+			KeepFencesAboveDesktop();
+		};
+		// 桌面被激活后多久撤销分区的临时置顶：资源管理器提起桌面通常在几十毫秒内完成，留足余量
+		_unliftTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+		_unliftTimer.Tick += (_, _) =>
+		{
+			_unliftTimer.Stop();
+			DesktopHost.Unlift(_windows.Select(w => w.Handle));
 			KeepFencesAboveDesktop();
 		};
 		_iconReloadTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
@@ -195,6 +204,7 @@ internal sealed class FenceManager
 		Wallpaper.Stop();
 		Wallpaper.Changed -= RefreshAllAppearance;
 		_zOrderTimer.Stop();
+		_unliftTimer.Stop();
 		_iconReloadTimer.Stop();
 		_registryWatchers.ForEach(w => w.Dispose());
 		foreach (var hook in new[] { _foregroundHook, _reorderHook })
@@ -790,6 +800,7 @@ internal sealed class FenceManager
 					_mouse?.ReplayRightClickLater();
 				}
 			};
+			_mouse.DesktopActivationNeeded += ActivateDesktopKeepingFences;
 			_mouse.KeyIntercepted += (key, shift) => _takeover?.HandleKey(key, shift);
 			_mouse.CharIntercepted += character => _takeover?.TypeAhead(character.ToString());
 		}
@@ -797,6 +808,18 @@ internal sealed class FenceManager
 		_mouse.DrawEnabled = Settings.DrawToCreate;
 		_mouse.TakeoverEnabled = takeover;
 		_mouse.Start();
+	}
+
+	/// <summary>
+	/// 由本程序激活桌面：先把图标层和分区临时置顶，桌面被提到最前时它们仍在上面，稍后再放回桌面之上。
+	/// 只在本程序的窗口在前台时才会走到这里，有权切换前台。
+	/// </summary>
+	void ActivateDesktopKeepingFences()
+	{
+		DesktopHost.Lift(_windows.Select(w => w.Handle));
+		SetForegroundWindow(DesktopHost.FindDesktopWindow());
+		_unliftTimer.Stop();
+		_unliftTimer.Start();
 	}
 
 	void OnDrawFinished(RECT rect)

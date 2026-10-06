@@ -68,12 +68,95 @@ internal static class DesktopHost
 	public static bool HitsLayerIcon(POINT point) => _layers.IconRects.Any(r => r.Contains(point));
 
 	/// <summary>
-	/// 计算把窗口放到桌面窗口正上方所需的 hwndInsertAfter；已在该位置或找不到桌面时返回 null。
+	/// 「显示桌面」把桌面提到最前后，桌面窗口每次被激活都会被系统再提到普通窗口的最上层，盖住紧贴其上的图标层和分区，
+	/// 等层级被纠正才露出来，看上去闪一下。由本程序激活桌面时先把它们临时置顶（Lift），桌面提上来以后再放回去（Unlift）。
+	/// 置顶期间不改写它们的层级；_lifting 表示正在置顶或撤销置顶，放行这期间的层级变化。只在界面线程上读写。
+	/// </summary>
+	static bool _lifted;
+	static bool _lifting;
+
+	/// <summary>
+	/// 把图标层和分区临时置顶：先图标层后分区，分区仍压在图标层之上。
+	/// </summary>
+	public static void Lift(IEnumerable<IntPtr> fences)
+	{
+		SetZOrder(_layers.Windows.Concat(fences), HWND_TOPMOST);
+		_lifted = true;
+	}
+
+	/// <summary>
+	/// 撤销临时置顶：放到所有普通窗口之上，桌面此时在普通窗口的最上层，它们也就仍在桌面之上，之后由调用方按平时的规则摆好。
+	/// </summary>
+	public static void Unlift(IEnumerable<IntPtr> fences)
+	{
+		if (!_lifted)
+		{
+			return;
+		}
+		_lifted = false;
+		SetZOrder(_layers.Windows.Concat(fences), HWND_NOTOPMOST);
+	}
+
+	static void SetZOrder(IEnumerable<IntPtr> windows, IntPtr insertAfter)
+	{
+		_lifting = true;
+		try
+		{
+			foreach (var hwnd in windows)
+			{
+				SetWindowPos(hwnd, insertAfter, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+			}
+		}
+		finally
+		{
+			_lifting = false;
+		}
+	}
+
+	/// <summary>
+	/// 桌面窗口是否在其他程序的所有普通窗口之上（「显示桌面」之后，或者没有打开的窗口）。这时激活桌面会把它提到最前。
+	/// 只读窗口属性、不发消息，可以在钩子回调里调用。
+	/// </summary>
+	public static bool IsDesktopOnTop()
+	{
+		var desktop = FindDesktopWindow();
+		if (desktop == IntPtr.Zero)
+		{
+			return false;
+		}
+		uint ownProcess = (uint)Environment.ProcessId;
+		for (var above = GetWindow(desktop, GW_HWNDPREV); above != IntPtr.Zero; above = GetWindow(above, GW_HWNDPREV))
+		{
+			// 再往上都是任务栏这类置顶窗口，本来就在桌面之上
+			if ((GetWindowLongPtr(above, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0)
+			{
+				return true;
+			}
+			GetWindowThreadProcessId(above, out uint process);
+			if (process == ownProcess || !IsWindowVisible(above) || IsIconic(above))
+			{
+				continue;
+			}
+			if (DwmGetWindowAttribute(above, DWMWA_CLOAKED, out int cloaked, sizeof(int)) == 0 && cloaked != 0)
+			{
+				continue;
+			}
+			return false;
+		}
+		return true;
+	}
+
+	/// <summary>
+	/// 计算把窗口放到桌面窗口正上方所需的 hwndInsertAfter；已在该位置、找不到桌面或正临时置顶（见 Lift）时返回 null。
 	/// 平时桌面位于最底层，分区也就在所有应用窗口之下；Win+D 时桌面被提到最前，分区紧随其上依然可见。
 	/// 散放图标层紧贴桌面，分区再压在图标层之上，与系统桌面上「窗口盖住图标」的关系一致。
 	/// </summary>
 	public static IntPtr? GetInsertAfterAboveDesktop(IntPtr hwnd)
 	{
+		if (_lifted)
+		{
+			return null;
+		}
 		var desktop = FindDesktopWindow();
 		if (desktop == IntPtr.Zero)
 		{
@@ -122,7 +205,7 @@ internal static class DesktopHost
 	public static void KeepAboveDesktop(IntPtr hwnd, IntPtr lParam)
 	{
 		var pos = Marshal.PtrToStructure<WINDOWPOS>(lParam);
-		if ((pos.flags & SWP_NOZORDER) != 0)
+		if ((pos.flags & SWP_NOZORDER) != 0 || _lifting)
 		{
 			return;
 		}

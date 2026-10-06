@@ -15,6 +15,7 @@ internal static class NativeMethods
 
 	public const long WS_MINIMIZEBOX = 0x00020000L;
 	public const long WS_MAXIMIZEBOX = 0x00010000L;
+	public const long WS_EX_TOPMOST = 0x00000008L;
 	public const long WS_EX_TRANSPARENT = 0x00000020L;
 	public const long WS_EX_TOOLWINDOW = 0x00000080L;
 	public const long WS_EX_APPWINDOW = 0x00040000L;
@@ -23,6 +24,7 @@ internal static class NativeMethods
 
 	public static readonly IntPtr HWND_BOTTOM = new(1);
 	public static readonly IntPtr HWND_TOPMOST = new(-1);
+	public static readonly IntPtr HWND_NOTOPMOST = new(-2);
 	public static readonly IntPtr HWND_BROADCAST = new(0xFFFF);
 
 	public const uint SWP_NOSIZE = 0x0001;
@@ -246,6 +248,9 @@ internal static class NativeMethods
 
 	[DllImport("user32.dll")]
 	public static extern bool IsWindowVisible(IntPtr hwnd);
+
+	[DllImport("user32.dll")]
+	public static extern bool IsIconic(IntPtr hwnd);
 
 	[DllImport("user32.dll")]
 	public static extern IntPtr WindowFromPoint(POINT point);

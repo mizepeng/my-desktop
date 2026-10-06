@@ -745,12 +745,22 @@ internal partial class FenceWindow : Window
 			return;
 		}
 		var rect = !Model.RolledUp ? ExpandedRect : IsCollapsed ? CollapsedRect() : TempExpandedRect();
+		// WPF 在窗口尺寸变化时会立即重新布局并出一帧：展开时先让内容区可见再放大窗口，否则那一帧只有背景、没有图标；
+		// 收起时先缩小窗口再折叠内容区，否则那一帧是空着的大窗口
+		bool collapsed = IsCollapsed;
+		if (!collapsed)
+		{
+			UpdateRollVisuals();
+		}
 		// 左右收起时窗口只有标题栏那么宽：先放开最小宽度再改大小，改完再按当前形态设回，免得被最小宽度撑开
-		double minWidth = IsCollapsed && IsVerticalRoll ? TitleBarDip + 2 : MinWidthDip;
+		double minWidth = collapsed && IsVerticalRoll ? TitleBarDip + 2 : MinWidthDip;
 		MinWidth = Math.Min(MinWidth, minWidth);
 		SetWindowPos(_hwnd, IntPtr.Zero, rect.Left, rect.Top, rect.Width, rect.Height, SWP_NOZORDER | SWP_NOACTIVATE);
 		MinWidth = minWidth;
-		UpdateRollVisuals();
+		if (collapsed)
+		{
+			UpdateRollVisuals();
+		}
 	}
 
 	int CollapsedHeight() => (int)Math.Round((TitleBarDip + 2) * ScaleFactor);

@@ -97,6 +97,7 @@ internal sealed class DesktopMouseWatcher : IDisposable
 	bool _leftDown;
 	bool _banding;
 	POINT _leftStart;
+	bool _leftSwallowed;
 
 	// 以下状态只在界面线程上读写
 	bool _checking;
@@ -143,6 +144,12 @@ internal sealed class DesktopMouseWatcher : IDisposable
 	/// 没框住就调用 ReplayRightClickLater 弹出桌面右键菜单。
 	/// </summary>
 	public event Action<POINT>? BandMenuRequested;
+
+	/// <summary>
+	/// 本程序的窗口在前台、桌面又在最上层时，在桌面空白处按下了鼠标，要由本程序来激活桌面（左键的这次按下已被扣下），在界面线程上触发。
+	/// 让系统随点击激活的话，桌面会被提到分区之上闪一下，见 DesktopHost.Lift。
+	/// </summary>
+	public event Action? DesktopActivationNeeded;
 
 	/// <summary>
 	/// 桌面在前台时被拦下的按键命令（参数二表示是否按着 Shift），在界面线程上触发。
@@ -381,12 +388,19 @@ internal sealed class DesktopMouseWatcher : IDisposable
 				{
 					TrackDoubleClick(info);
 				}
+				_leftSwallowed = false;
 				// 不排除注入的输入：触摸、笔和自动化工具产生的点击同样要能框选
 				if (_takeoverEnabled)
 				{
 					TrackBlankPress(info.pt);
+					// 扣下这次按下（连同抬起），改由本程序激活桌面；资源管理器收到点击本来也只是激活桌面、取消选择，取消选择已由 BlankPressed 完成
+					if (_leftDown && WillRaiseDesktop())
+					{
+						_leftSwallowed = true;
+						_uiDispatcher.BeginInvoke(() => DesktopActivationNeeded?.Invoke());
+					}
 				}
-				return false;
+				return _leftSwallowed;
 			case WM_LBUTTONUP:
 				if (_leftDown)
 				{
@@ -397,16 +411,35 @@ internal sealed class DesktopMouseWatcher : IDisposable
 						_uiDispatcher.BeginInvoke(DispatcherPriority.Input, () => BandFinished?.Invoke());
 					}
 				}
+				if (_leftSwallowed)
+				{
+					_leftSwallowed = false;
+					return true;
+				}
 				return false;
 			case WM_RBUTTONDOWN:
-				// 先扣下右键按下：若随后拖动，开着右键画框时画框新建分区，否则（接管桌面图标时）框选图标；若只是单击则原样重放，桌面右键菜单照常弹出。
-				// 以管理员身份运行的程序在前台时，重放的单击会被系统丢弃，这时不扣，交给资源管理器自己处理
-				if ((_drawEnabled || _takeoverEnabled) && !injected && IsOverDesktop(info.pt) && !IsForegroundElevated())
+				if ((_drawEnabled || _takeoverEnabled) && !injected && IsOverDesktop(info.pt))
 				{
+					// 与资源管理器一样，在桌面空白处按下右键先取消分区和桌面上的所有选择
+					if (_takeoverEnabled)
+					{
+						_uiDispatcher.BeginInvoke(() => BlankPressed?.Invoke(false));
+					}
+					// 以管理员身份运行的程序在前台时，重放的单击会被系统丢弃，这时不扣，交给资源管理器自己处理
+					if (IsForegroundElevated())
+					{
+						return false;
+					}
+					// 先扣下右键按下：若随后拖动，开着右键画框时画框新建分区，否则（接管桌面图标时）框选图标；若只是单击则原样重放，桌面右键菜单照常弹出
 					_rightDown = true;
 					_drawing = false;
 					_rightBanding = false;
 					_rightStart = info.pt;
+					// 单击随后会重放给资源管理器、由它激活桌面，现在先由本程序激活，免得桌面盖住分区闪一下
+					if (WillRaiseDesktop())
+					{
+						_uiDispatcher.BeginInvoke(() => DesktopActivationNeeded?.Invoke());
+					}
 					return true;
 				}
 				return false;
@@ -490,7 +523,7 @@ internal sealed class DesktopMouseWatcher : IDisposable
 	}
 
 	/// <summary>
-	/// 没开右键画框时，右键拖动与资源管理器一样框选图标：开始拖动时先取消原来的选择。
+	/// 没开右键画框时，右键拖动与资源管理器一样框选图标；原来的选择在按下右键时已经取消。
 	/// </summary>
 	void TrackRightBand(POINT point)
 	{
@@ -501,7 +534,6 @@ internal sealed class DesktopMouseWatcher : IDisposable
 				return;
 			}
 			_rightBanding = true;
-			_uiDispatcher.BeginInvoke(() => BlankPressed?.Invoke(false));
 		}
 		_bandUpdates.Post(Normalize(_rightStart, point));
 	}
@@ -612,6 +644,25 @@ internal sealed class DesktopMouseWatcher : IDisposable
 			}
 		}
 		return false;
+	}
+
+	/// <summary>
+	/// 这次按下是否会激活桌面并让它盖住分区：本程序的窗口在前台（菜单开着时除外，这次点击要用来关掉菜单），桌面又在最上层。
+	/// 只读窗口属性、不发消息，可以在钩子回调里调用。
+	/// </summary>
+	static bool WillRaiseDesktop()
+	{
+		uint thread = GetWindowThreadProcessId(GetForegroundWindow(), out uint process);
+		if (process != (uint)Environment.ProcessId)
+		{
+			return false;
+		}
+		var info = new GUITHREADINFO { cbSize = Marshal.SizeOf<GUITHREADINFO>() };
+		if (GetGUIThreadInfo(thread, ref info) && (info.flags & (GUI_INMENUMODE | GUI_POPUPMENUMODE)) != 0)
+		{
+			return false;
+		}
+		return DesktopHost.IsDesktopOnTop();
 	}
 
 	/// <summary>
