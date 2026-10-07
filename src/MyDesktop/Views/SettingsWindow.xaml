@@ -51,6 +51,8 @@
 			</StackPanel>
 			<ListBox x:Name="NavList" Background="Transparent" BorderThickness="0" SelectionChanged="NavList_SelectionChanged">
 				<ListBoxItem Content="常规" IsSelected="True" />
+				<ListBoxItem Content="桌面" />
+				<ListBoxItem Content="分区" />
 				<ListBoxItem Content="外观" />
 				<ListBoxItem Content="整理规则" />
 				<ListBoxItem Content="备份" />
@@ -65,7 +67,7 @@
 				<StackPanel x:Name="GeneralPage">
 					<TextBlock Style="{StaticResource PageTitle}" Text="常规" />
 
-					<TextBlock Style="{StaticResource SectionTitle}" Text="启动与交互" />
+					<TextBlock Style="{StaticResource SectionTitle}" Text="启动" />
 					<Border Style="{StaticResource Card}">
 						<CheckBox x:Name="AutoStartBox" Click="AutoStartBox_Click">
 							<StackPanel>
@@ -74,6 +76,8 @@
 							</StackPanel>
 						</CheckBox>
 					</Border>
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="搜索" />
 					<Border Style="{StaticResource Card}">
 						<DockPanel>
 							<StackPanel VerticalAlignment="Center" DockPanel.Dock="Right" Orientation="Horizontal">
@@ -95,6 +99,24 @@
 							</StackPanel>
 						</DockPanel>
 					</Border>
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="性能" />
+					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="HardwareAccelerationBox" Click="Setting_Changed">
+							<StackPanel>
+								<TextBlock Text="硬件加速" />
+								<TextBlock Style="{StaticResource Hint}" Text="用显卡绘制分区、桌面图标、搜索框和动画，效果更流畅，但会提高显卡负载和内存占用" />
+							</StackPanel>
+						</CheckBox>
+					</Border>
+				</StackPanel>
+
+				<!-- 桌面 -->
+				<StackPanel x:Name="DesktopPage" Visibility="Collapsed">
+					<TextBlock Style="{StaticResource PageTitle}" Text="桌面" />
+					<TextBlock Style="{StaticResource Hint}" Text="在桌面空白处的操作。" />
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="鼠标操作" />
 					<Border Style="{StaticResource Card}">
 						<DockPanel>
 							<ComboBox x:Name="DoubleClickTargetBox"
@@ -119,6 +141,8 @@
 							</StackPanel>
 						</CheckBox>
 					</Border>
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="右键菜单" />
 					<Border Style="{StaticResource Card}">
 						<CheckBox x:Name="DesktopMenuBox" Click="Setting_Changed">
 							<StackPanel>
@@ -127,6 +151,13 @@
 							</StackPanel>
 						</CheckBox>
 					</Border>
+				</StackPanel>
+
+				<!-- 分区 -->
+				<StackPanel x:Name="FencesPage" Visibility="Collapsed">
+					<TextBlock Style="{StaticResource PageTitle}" Text="分区" />
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="卷起与展开" />
 					<Border Style="{StaticResource Card}">
 						<CheckBox x:Name="ExpandOnHoverBox" Click="Setting_Changed">
 							<StackPanel>
@@ -135,6 +166,8 @@
 							</StackPanel>
 						</CheckBox>
 					</Border>
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="移动与调整大小" />
 					<Border Style="{StaticResource Card}">
 						<CheckBox x:Name="SnapBox" Click="Setting_Changed">
 							<StackPanel>
@@ -161,6 +194,8 @@
 							</DockPanel>
 						</StackPanel>
 					</Border>
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="映射分区" />
 					<Border Style="{StaticResource Card}">
 						<CheckBox x:Name="ShowHiddenBox" Click="Setting_Changed">
 							<StackPanel>
@@ -227,6 +262,14 @@
 							<ComboBox x:Name="IconSizeBox" Width="150" DockPanel.Dock="Right" SelectionChanged="IconSizeBox_SelectionChanged" />
 							<TextBlock VerticalAlignment="Center" Text="默认图标大小" />
 						</DockPanel>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="ShowIconNamesBox" Click="Setting_Changed">
+							<StackPanel>
+								<TextBlock Text="显示图标名称" />
+								<TextBlock Style="{StaticResource Hint}" Text="分区的图标视图里在图标下面显示名称；关掉后只显示图标、排得更紧凑，鼠标停在图标上仍能看到名称" />
+							</StackPanel>
+						</CheckBox>
 					</Border>
 					<Border Style="{StaticResource Card}">
 						<CheckBox x:Name="TextShadowBox" Click="Setting_Changed">

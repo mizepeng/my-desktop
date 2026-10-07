@@ -31,6 +31,12 @@
 		<SolidColorBrush x:Key="CellSelectedBorder" Color="#99B4DCFF" />
 
 		<Style x:Key="LayerItemContainer" TargetType="ListBoxItem">
+			<Style.Triggers>
+				<!-- 展开了完整名称的图标压在下面的图标之上 -->
+				<DataTrigger Binding="{Binding IsNameExpanded}" Value="True">
+					<Setter Property="Panel.ZIndex" Value="1" />
+				</DataTrigger>
+			</Style.Triggers>
 			<Setter Property="Canvas.Left" Value="{Binding X}" />
 			<Setter Property="Canvas.Top" Value="{Binding Y}" />
 			<Setter Property="Width" Value="{DynamicResource CellWidth}" />
@@ -98,6 +104,10 @@
 				</Grid>
 			</StackPanel>
 			<DataTemplate.Triggers>
+				<!-- 和系统桌面一样，选中时展开完整名称 -->
+				<DataTrigger Binding="{Binding IsNameExpanded}" Value="True">
+					<Setter TargetName="NameText" Property="MaxHeight" Value="{x:Static sys:Double.PositiveInfinity}" />
+				</DataTrigger>
 				<DataTrigger Binding="{Binding IsRenaming}" Value="True">
 					<Setter TargetName="RenameBox" Property="Visibility" Value="Visible" />
 					<Setter TargetName="NameText" Property="Visibility" Value="Hidden" />
@@ -139,13 +149,5 @@
 				</ItemsPanelTemplate>
 			</ListBox.ItemsPanel>
 		</ListBox>
-		<Canvas IsHitTestVisible="False">
-			<!-- 在桌面空白处拖动框选时的选框 -->
-			<Rectangle x:Name="SelectionRect"
-					Visibility="Collapsed"
-					Fill="#333B82F6"
-					Stroke="#CC60A5FA"
-					StrokeThickness="1" />
-		</Canvas>
 	</Grid>
 </Window>

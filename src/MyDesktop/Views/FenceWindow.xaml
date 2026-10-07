@@ -34,8 +34,11 @@
 		</ItemsPanelTemplate>
 
 		<ItemsPanelTemplate x:Key="ListPanel">
-			<StackPanel Orientation="Vertical" />
+			<local:ListColumnsPanel />
 		</ItemsPanelTemplate>
+
+		<!-- 图标视图里是否显示图标名称，按设置在代码里替换 -->
+		<Visibility x:Key="IconNameVisibility">Visible</Visibility>
 
 		<DataTemplate x:Key="IconTemplate" DataType="{x:Type local:FenceItem}">
 			<StackPanel Width="{DynamicResource CellWidth}" ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="700">
@@ -48,6 +51,7 @@
 						RenderOptions.BitmapScalingMode="HighQuality" />
 				<Grid>
 					<TextBlock x:Name="NameText"
+							Visibility="{DynamicResource IconNameVisibility}"
 							Text="{Binding DisplayName}"
 							TextAlignment="Center"
 							TextWrapping="Wrap"
@@ -93,11 +97,14 @@
 						Width="20"
 						Height="20"
 						Margin="2,0,8,0"
+						VerticalAlignment="Top"
 						Stretch="Uniform"
 						RenderOptions.BitmapScalingMode="HighQuality" />
+				<!-- 图标靠上、名称离顶端 2：12 号字在 20 高的图标旁大致居中，且与选中后展开完整名称（FenceStyles.xaml）的第一行位置一致，不会因布局取整差一个像素 -->
 				<TextBlock x:Name="NameText"
 						Grid.Column="1"
-						VerticalAlignment="Center"
+						Margin="0,2,0,0"
+						VerticalAlignment="Top"
 						Text="{Binding DisplayName}"
 						TextTrimming="CharacterEllipsis"
 						Foreground="{DynamicResource FenceForeground}"
@@ -164,6 +171,14 @@
 									ToolTip="返回上一级（Backspace）"
 									Visibility="Collapsed"
 									Click="BackButton_Click" />
+							<!-- 映射分区：系统当前主题的文件夹图标；合并成标签页后改到各自的标签上 -->
+							<Image x:Name="PortalIcon"
+									Width="16"
+									Height="16"
+									Margin="0,0,6,0"
+									VerticalAlignment="Center"
+									Visibility="Collapsed"
+									RenderOptions.BitmapScalingMode="HighQuality" />
 							<TextBlock x:Name="BadgeText"
 									Margin="0,0,6,0"
 									VerticalAlignment="Center"
@@ -205,7 +220,18 @@
 							<ItemsControl.ItemTemplate>
 								<DataTemplate>
 									<Border x:Name="Tab" Margin="0,4,4,4" Padding="8,0" CornerRadius="5" Background="Transparent">
-										<Grid>
+										<DockPanel>
+											<!-- 映射分区的标签带上映射图标；整组共用的标题栏不再放映射角标，切换标签时标签不会左右跳 -->
+											<Image x:Name="TabGlyph"
+													Width="16"
+													Height="16"
+													Margin="0,0,5,0"
+													VerticalAlignment="Center"
+													Visibility="Collapsed"
+													Opacity="0.6"
+													Source="{Binding FolderIcon}"
+													RenderOptions.BitmapScalingMode="HighQuality" />
+											<Grid>
 											<TextBlock x:Name="TabText"
 													VerticalAlignment="Center"
 													FontSize="13"
@@ -230,14 +256,24 @@
 													<RotateTransform Angle="-90" />
 												</TextBlock.LayoutTransform>
 											</TextBlock>
-										</Grid>
+											</Grid>
+										</DockPanel>
 									</Border>
 									<DataTemplate.Triggers>
+										<DataTrigger Binding="{Binding IsPortal}" Value="True">
+											<Setter TargetName="TabGlyph" Property="Visibility" Value="Visible" />
+										</DataTrigger>
 										<DataTrigger Binding="{Binding IsVertical}" Value="True">
 											<Setter TargetName="Tab" Property="Margin" Value="0,3,4,3" />
 											<Setter TargetName="Tab" Property="Padding" Value="6,0" />
 											<Setter TargetName="TabText" Property="Visibility" Value="Collapsed" />
 											<Setter TargetName="TabVerticalText" Property="Visibility" Value="Visible" />
+											<!-- 竖放的标题栏整体转了 90°，图标转回来保持正立 -->
+											<Setter TargetName="TabGlyph" Property="LayoutTransform">
+												<Setter.Value>
+													<RotateTransform Angle="-90" />
+												</Setter.Value>
+											</Setter>
 										</DataTrigger>
 										<Trigger SourceName="Tab" Property="IsMouseOver" Value="True">
 											<Setter TargetName="Tab" Property="Background" Value="{DynamicResource FenceHover}" />
@@ -246,6 +282,7 @@
 											<Setter TargetName="Tab" Property="Background" Value="{DynamicResource FenceSelected}" />
 											<Setter TargetName="TabText" Property="Opacity" Value="1" />
 											<Setter TargetName="TabVerticalText" Property="Opacity" Value="1" />
+											<Setter TargetName="TabGlyph" Property="Opacity" Value="1" />
 										</DataTrigger>
 									</DataTemplate.Triggers>
 								</DataTemplate>
@@ -299,13 +336,6 @@
 							Text="拖放文件到这里"
 							Foreground="{DynamicResource FenceForeground}" />
 					<Canvas IsHitTestVisible="False">
-						<Rectangle x:Name="SelectionRect"
-								Visibility="Collapsed"
-								RadiusX="2"
-								RadiusY="2"
-								Fill="#333B82F6"
-								Stroke="#CC60A5FA"
-								StrokeThickness="1" />
 						<!-- 拖动调整顺序时的插入位置 -->
 						<Rectangle x:Name="InsertMarker"
 								Visibility="Collapsed"

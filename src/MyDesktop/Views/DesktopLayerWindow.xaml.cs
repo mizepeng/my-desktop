@@ -40,6 +40,8 @@ internal partial class DesktopLayerWindow : Window
 	FenceItem? _pressedItem;
 	bool _deferSelection;
 	HashSet<FenceItem> _bandBase = [];
+	// 展开了完整名称的图标（选中的里面最后选中的那个）
+	FenceItem? _expandedName;
 
 	// 拖入
 	int _dragVersion;
@@ -387,6 +389,13 @@ internal partial class DesktopLayerWindow : Window
 	/// </summary>
 	void ItemsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
 	{
+		var expanded = ItemOps.ExpandSelectedName(ItemsList, e, _expandedName, true);
+		if (expanded != _expandedName)
+		{
+			_expandedName = expanded;
+			// 展开、收起名称改变了图标占的范围，判断点没点在图标上要跟着更新
+			_takeover.RefreshHitRects();
+		}
 		if (e.AddedItems.Count > 0 && (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == 0)
 		{
 			_takeover.OnLayerSelected();
@@ -433,23 +442,11 @@ internal partial class DesktopLayerWindow : Window
 	}
 
 	/// <summary>
-	/// 框选范围变化（屏幕物理像素）：画出选框在本层内的部分，并选中与之相交的图标。
+	/// 框选范围变化（屏幕物理像素）：选中与之相交的图标。选框本身由 DesktopTakeover 画在单独的窗口里。
 	/// </summary>
 	public void UpdateBand(RECT rect)
 	{
 		var local = new Rect((rect.Left - _workArea.Left) / _scale, (rect.Top - _workArea.Top) / _scale, rect.Width / _scale, rect.Height / _scale);
-		if (local.IntersectsWith(new Rect(0, 0, ActualWidth, ActualHeight)))
-		{
-			Canvas.SetLeft(SelectionRect, local.X);
-			Canvas.SetTop(SelectionRect, local.Y);
-			SelectionRect.Width = local.Width;
-			SelectionRect.Height = local.Height;
-			SelectionRect.Visibility = Visibility.Visible;
-		}
-		else
-		{
-			SelectionRect.Visibility = Visibility.Collapsed;
-		}
 		foreach (var item in _items)
 		{
 			if (ItemsList.ItemContainerGenerator.ContainerFromItem(item) is not ListBoxItem container || ItemBounds(item) is not Rect bounds)
@@ -466,7 +463,6 @@ internal partial class DesktopLayerWindow : Window
 
 	public void EndBand()
 	{
-		SelectionRect.Visibility = Visibility.Collapsed;
 		_bandBase = [];
 	}
 

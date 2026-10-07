@@ -67,17 +67,18 @@ internal static class DesktopMenuServer
 	}
 
 	/// <summary>
-	/// 向主程序查询「双击桌面隐藏」的状态；主程序没在运行或没及时响应时返回 false。
+	/// 向主程序查询「双击桌面隐藏」的状态、是否在桌面右键菜单中显示；主程序没在运行或没及时响应时返回 false。
 	/// </summary>
-	static bool TryQueryState(out HideTarget target, out bool doubleClickEnabled)
+	static bool TryQueryState(out HideTarget target, out bool doubleClickEnabled, out bool desktopMenu)
 	{
 		target = HideTarget.All;
 		doubleClickEnabled = false;
+		desktopMenu = false;
 		var window = FindMainWindow();
 		return window != IntPtr.Zero
 				&& SendMessageTimeout(window, RegisterWindowMessage(AppCommands.StateMessageName), IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG,
 						StateQueryTimeoutMs, out var result) != IntPtr.Zero
-				&& AppCommands.TryDecodeState((int)result, out target, out doubleClickEnabled);
+				&& AppCommands.TryDecodeState((int)result, out target, out doubleClickEnabled, out desktopMenu);
 	}
 
 	[ComVisible(true)]
@@ -188,8 +189,11 @@ internal static class DesktopMenuServer
 
 		public override int GetState(IntPtr items, bool okToBeSlow, out uint state)
 		{
-			// 扩展注册在「目录背景」上，文件夹空白处右键也会询问，这里只放行桌面
-			state = IsDesktop(items) && FindMainWindow() != IntPtr.Zero ? ECS_ENABLED : ECS_HIDDEN;
+			// 扩展注册在「目录背景」上，文件夹空白处右键也会询问，这里只放行桌面。
+			// 设置里关掉桌面右键菜单后立即隐藏：后台注销扩展包要好几秒，已经启动的本服务进程也可能还在被资源管理器调用；
+			// 主程序一时没应答时照常显示
+			bool shown = IsDesktop(items) && FindMainWindow() != IntPtr.Zero && !(TryQueryState(out _, out _, out bool desktopMenu) && !desktopMenu);
+			state = shown ? ECS_ENABLED : ECS_HIDDEN;
 			return 0;
 		}
 
@@ -202,7 +206,7 @@ internal static class DesktopMenuServer
 		public override int EnumSubCommands(out IntPtr enumerator)
 		{
 			// 子菜单生成时取一次主程序状态，用来勾选「双击桌面隐藏」的当前选项
-			bool known = TryQueryState(out var target, out bool doubleClickEnabled);
+			bool known = TryQueryState(out var target, out bool doubleClickEnabled, out _);
 			return Enumerate(
 			[
 				new ActionCommand("新建分区", AppCommand.NewFence, false),

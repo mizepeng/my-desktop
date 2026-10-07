@@ -244,6 +244,36 @@ internal static class ItemOps
 		return desktop ? ShellItemSet.CreateDesktop(keys) : ShellItemSet.Create(keys);
 	}
 
+	/// <summary>
+	/// 选择变化后决定哪个图标展开完整名称：刚选中的里面最后一个，它不再选中时换成还选中的里面最后一个，都没有就不展开。
+	/// </summary>
+	/// <param name="enabled">为 false 时（列表视图）不展开，原来展开的收起。</param>
+	/// <returns>现在展开名称的图标，调用方记住它，下次传回来。</returns>
+	public static FenceItem? ExpandSelectedName(ListBox list, SelectionChangedEventArgs e, FenceItem? expanded, bool enabled)
+	{
+		var next = e.AddedItems.Count > 0 ? e.AddedItems[e.AddedItems.Count - 1] as FenceItem : expanded;
+		if (next == null || !list.SelectedItems.Contains(next))
+		{
+			next = list.SelectedItems.Count > 0 ? list.SelectedItems[list.SelectedItems.Count - 1] as FenceItem : null;
+		}
+		if (!enabled)
+		{
+			next = null;
+		}
+		if (next != expanded)
+		{
+			if (expanded != null)
+			{
+				expanded.IsNameExpanded = false;
+			}
+			if (next != null)
+			{
+				next.IsNameExpanded = true;
+			}
+		}
+		return next;
+	}
+
 	public static void Open(IntPtr hwnd, IEnumerable<FenceItem> items, bool desktop)
 	{
 		foreach (var item in items)

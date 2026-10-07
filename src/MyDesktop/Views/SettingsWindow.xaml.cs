@@ -69,6 +69,8 @@ internal partial class SettingsWindow : Window
 		TextShadowBox.IsChecked = Settings.TextShadow;
 		BlurBox.IsChecked = Settings.DefaultBlur;
 		ShortcutArrowBox.IsChecked = Settings.ShowShortcutArrows;
+		ShowIconNamesBox.IsChecked = Settings.ShowIconNames;
+		HardwareAccelerationBox.IsChecked = Settings.HardwareAcceleration;
 		AutoUpdateBox.IsChecked = Settings.AutoCheckUpdates;
 		OpacitySlider.Value = Math.Round(Settings.DefaultOpacity * 100);
 		RadiusSlider.Value = Settings.CornerRadius;
@@ -116,7 +118,7 @@ internal partial class SettingsWindow : Window
 		{
 			return;
 		}
-		var pages = new[] { GeneralPage, AppearancePage, RulesPage, BackupPage, AboutPage };
+		var pages = new[] { GeneralPage, DesktopPage, FencesPage, AppearancePage, RulesPage, BackupPage, AboutPage };
 		for (int i = 0; i < pages.Length; i++)
 		{
 			pages[i].Visibility = i == NavList.SelectedIndex ? Visibility.Visible : Visibility.Collapsed;
@@ -219,6 +221,10 @@ internal partial class SettingsWindow : Window
 		bool arrowsChanged = Settings.ShowShortcutArrows != arrows;
 		bool desktopMenu = DesktopMenuBox.IsChecked == true;
 		bool desktopMenuChanged = Settings.DesktopContextMenu != desktopMenu;
+		bool names = ShowIconNamesBox.IsChecked == true;
+		bool namesChanged = Settings.ShowIconNames != names;
+		bool hardware = HardwareAccelerationBox.IsChecked == true;
+		bool hardwareChanged = Settings.HardwareAcceleration != hardware;
 		Settings.DoubleClickToHide = DoubleClickBox.IsChecked == true;
 		Settings.DrawToCreate = DrawToCreateBox.IsChecked == true;
 		Settings.ExpandOnHover = ExpandOnHoverBox.IsChecked == true;
@@ -230,6 +236,8 @@ internal partial class SettingsWindow : Window
 		Settings.DefaultBlur = blur;
 		Settings.ShowShortcutArrows = arrows;
 		Settings.DesktopContextMenu = desktopMenu;
+		Settings.ShowIconNames = names;
+		Settings.HardwareAcceleration = hardware;
 		Settings.AutoCheckUpdates = AutoUpdateBox.IsChecked == true;
 		_manager.ApplyMouseHookSettings();
 		_manager.Organizer.ApplyWatchSetting();
@@ -248,6 +256,14 @@ internal partial class SettingsWindow : Window
 		if (arrowsChanged)
 		{
 			_manager.ApplyShortcutArrows();
+		}
+		if (namesChanged)
+		{
+			_manager.RefreshAllViewMode();
+		}
+		if (hardwareChanged)
+		{
+			FenceManager.ApplyRenderMode(hardware);
 		}
 		_manager.SaveSoon();
 	}

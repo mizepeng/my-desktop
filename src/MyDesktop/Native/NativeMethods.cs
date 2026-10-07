@@ -13,6 +13,7 @@ internal static class NativeMethods
 	public const int GWL_EXSTYLE = -20;
 	public const int GWLP_HWNDPARENT = -8;
 
+	public const long WS_POPUP = 0x80000000L;
 	public const long WS_MINIMIZEBOX = 0x00020000L;
 	public const long WS_MAXIMIZEBOX = 0x00010000L;
 	public const long WS_EX_TOPMOST = 0x00000008L;
@@ -179,6 +180,10 @@ internal static class NativeMethods
 	public const uint NIF_INFO = 0x10;
 	public const uint NIIF_INFO = 0x01;
 
+	public const uint SHGFI_ICON = 0x0100;
+	public const uint SHGFI_SMALLICON = 0x0001;
+	public const uint SHGFI_USEFILEATTRIBUTES = 0x0010;
+	public const uint FILE_ATTRIBUTE_DIRECTORY = 0x10;
 	public const uint SHGFI_DISPLAYNAME = 0x0200;
 	public const uint SHGFI_TYPENAME = 0x0400;
 
@@ -218,6 +223,13 @@ internal static class NativeMethods
 
 	[DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
 	public static extern IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value);
+
+	[DllImport("user32.dll", EntryPoint = "CreateWindowExW", CharSet = CharSet.Unicode, SetLastError = true)]
+	public static extern IntPtr CreateWindowEx(uint exStyle, string className, string? windowName, uint style, int x, int y, int width, int height,
+			IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);
+
+	[DllImport("user32.dll")]
+	public static extern bool DestroyWindow(IntPtr hwnd);
 
 	[DllImport("user32.dll", SetLastError = true)]
 	public static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int cx, int cy, uint flags);
@@ -421,6 +433,17 @@ internal static class NativeMethods
 
 	[DllImport("gdi32.dll")]
 	public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+
+	[DllImport("gdi32.dll")]
+	public static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
+
+	public const byte AC_SRC_OVER = 0x00;
+	public const byte AC_SRC_ALPHA = 0x01;
+	public const uint ULW_ALPHA = 0x00000002;
+
+	[DllImport("user32.dll", SetLastError = true)]
+	public static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr screenDc, ref POINT destination, ref SIZE size, IntPtr sourceDc, ref POINT source,
+			uint colorKey, ref BLENDFUNCTION blend, uint flags);
 
 	[DllImport("gdi32.dll")]
 	public static extern bool DeleteDC(IntPtr hdc);
@@ -634,6 +657,15 @@ internal struct RECT
 	public readonly bool Contains(POINT p) => p.X >= Left && p.X < Right && p.Y >= Top && p.Y < Bottom;
 
 	public readonly RECT Inflate(int size) => new(Left - size, Top - size, Right + size, Bottom + size);
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct BLENDFUNCTION
+{
+	public byte BlendOp;
+	public byte BlendFlags;
+	public byte SourceConstantAlpha;
+	public byte AlphaFormat;
 }
 
 [StructLayout(LayoutKind.Sequential)]

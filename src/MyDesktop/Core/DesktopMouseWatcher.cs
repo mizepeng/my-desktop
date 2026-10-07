@@ -210,6 +210,8 @@ internal sealed class DesktopMouseWatcher : IDisposable
 		{
 			IsBackground = true,
 			Name = "DesktopMouseHook",
+			// 鼠标、键盘事件都要等钩子返回才往下传，系统忙（比如在玩游戏）时也要尽快轮到钩子线程，免得输入延迟
+			Priority = ThreadPriority.Highest,
 		};
 		_thread.Start();
 		ready.Wait();
@@ -363,7 +365,16 @@ internal sealed class DesktopMouseWatcher : IDisposable
 		// 回调由系统直接调用，异常必须就地捕获，否则会终止进程
 		try
 		{
-			if (code >= 0 && HandleMouse((int)wParam, Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam)))
+			// 每个鼠标事件都要等钩子返回才交给前台程序（包括游戏），高回报率鼠标每秒移动上千次：
+			// 没在拖动时的移动、滚轮等用不到的消息直接放行，连事件内容都不读
+			int message = (int)wParam;
+			bool relevant = message switch
+			{
+				WM_MOUSEMOVE => _leftDown || _rightDown,
+				WM_LBUTTONDOWN or WM_LBUTTONUP or WM_RBUTTONDOWN or WM_RBUTTONUP => true,
+				_ => false,
+			};
+			if (code >= 0 && relevant && HandleMouse(message, Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam)))
 			{
 				return new IntPtr(1);
 			}

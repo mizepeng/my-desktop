@@ -88,6 +88,8 @@ internal partial class FenceWindow : Window
 	DrawFrameWindow? _detachPreview;
 	// 拖着图标停留的别的标签，停够一会儿就切过去
 	FenceWindow? _hoverTab;
+	// 展开了完整名称的图标（选中的里面最后选中的那个）
+	FenceItem? _expandedName;
 	readonly DispatcherTimer _tabHoverTimer;
 
 	// 标题栏当前摆在哪一侧，没变时不重排布局
@@ -98,6 +100,9 @@ internal partial class FenceWindow : Window
 	FenceItem? _pressedItem;
 	bool _deferSelection;
 	bool _rubberBand;
+	// 框选已越过拖动阈值、正在显示选框
+	bool _rubberShown;
+	DrawFrameWindow? _marquee;
 	HashSet<FenceItem> _rubberBase = [];
 
 	// 拖入：本程序发起的拖动取其项目标识（系统图标没有文件路径）和其中的文件，外部拖动两者都是文件路径
@@ -161,6 +166,10 @@ internal partial class FenceWindow : Window
 		public bool IsActive => isActive;
 
 		public bool IsVertical => isVertical;
+
+		public bool IsPortal => window.Model.IsPortal;
+
+		public ImageSource? FolderIcon => window.Model.IsPortal ? ShellIconLoader.FolderIcon : null;
 	}
 
 	public FenceSettings Model { get; }
@@ -255,7 +264,8 @@ internal partial class FenceWindow : Window
 		_collapseTimer.Stop();
 		_buttonsTimer.Stop();
 		_tabHoverTimer.Stop();
-		_detachPreview?.Close();
+		_detachPreview?.Dispose();
+		_marquee?.Dispose();
 		Close();
 	}
 
@@ -1135,6 +1145,7 @@ internal partial class FenceWindow : Window
 		bool vertical = _titleEdge is RollEdge.Left or RollEdge.Right;
 		TabStrip.ItemsSource = tabs.Count > 1 ? tabs.Select(window => new FenceTab(window, window == this, vertical)).ToList() : null;
 		ShowTitleText(TitleEditor.Visibility != Visibility.Visible);
+		UpdateBadges();
 	}
 
 	/// <summary>
@@ -1340,7 +1351,15 @@ internal partial class FenceWindow : Window
 		bool list = Model.View == FenceView.List;
 		double iconDip = EffectiveIconSize.ToDip();
 		Resources["IconSize"] = iconDip;
-		Resources["CellWidth"] = iconDip + 44;
+		// 不显示名称时格子只留出图标和一点边距
+		Resources["CellWidth"] = Settings.ShowIconNames ? iconDip + 44 : iconDip + 16;
+		Resources["IconNameVisibility"] = Settings.ShowIconNames ? Visibility.Visible : Visibility.Collapsed;
+		// 图标视图不显示名称时也不展开（列表视图总是显示名称）
+		if (!list && !Settings.ShowIconNames && _expandedName != null)
+		{
+			_expandedName.IsNameExpanded = false;
+			_expandedName = null;
+		}
 		ItemsList.ItemsPanel = (ItemsPanelTemplate)FindResource(list ? "ListPanel" : "IconsPanel");
 		ItemsList.ItemTemplate = (DataTemplate)FindResource(list ? "ListTemplate" : "IconTemplate");
 		ItemsList.ItemContainerStyle = (Style)FindResource(list ? "FenceListItemContainer" : "FenceItemContainer");
@@ -1358,11 +1377,20 @@ internal partial class FenceWindow : Window
 		VerticalTitleText.Text = ToVerticalText(TitleText.Text);
 		VerticalTitleText.ToolTip = TitleText.ToolTip;
 		BackButton.Visibility = _subFolder == null ? Visibility.Collapsed : Visibility.Visible;
+		UpdateBadges();
+	}
+
+	/// <summary>
+	/// 标题栏左侧的角标：映射分区的文件夹图标、锁定。合并成标签页后文件夹图标改到各自的标签上，这里只剩整组一致的锁定。
+	/// </summary>
+	void UpdateBadges()
+	{
+		bool portal = Model.IsPortal && TabStrip.ItemsSource == null;
+		PortalIcon.Source = portal ? ShellIconLoader.FolderIcon : null;
+		PortalIcon.Visibility = portal ? Visibility.Visible : Visibility.Collapsed;
+		// 竖放的标题栏整体转了 90°，图标转回来保持正立
+		PortalIcon.LayoutTransform = _titleEdge is RollEdge.Left or RollEdge.Right ? new RotateTransform(-90) : Transform.Identity;
 		var badges = new List<string>();
-		if (Model.IsPortal)
-		{
-			badges.Add("");
-		}
 		if (Model.Locked)
 		{
 			badges.Add("");
@@ -1920,6 +1948,8 @@ internal partial class FenceWindow : Window
 	/// </summary>
 	void ItemsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
 	{
+		// 图标视图不显示名称时不展开
+		_expandedName = ItemOps.ExpandSelectedName(ItemsList, e, _expandedName, Model.View == FenceView.List || Settings.ShowIconNames);
 		if (e.AddedItems.Count > 0 && !IsAdditive)
 		{
 			_manager.OnSelectionScopeActivated(this);
@@ -2069,19 +2099,22 @@ internal partial class FenceWindow : Window
 
 	void UpdateRubberBand(Point current)
 	{
-		if (SelectionRect.Visibility != Visibility.Visible)
+		if (!_rubberShown)
 		{
 			if (!ExceedsDragThreshold(current))
 			{
 				return;
 			}
-			SelectionRect.Visibility = Visibility.Visible;
+			_rubberShown = true;
 		}
 		var rect = new Rect(_pressPoint, current);
-		Canvas.SetLeft(SelectionRect, rect.X);
-		Canvas.SetTop(SelectionRect, rect.Y);
-		SelectionRect.Width = rect.Width;
-		SelectionRect.Height = rect.Height;
+		// 选框画在单独的小窗口里，不让整个分区跟着鼠标重画（见 DrawFrameWindow）；伸出放图标区域的部分不画
+		var area = ItemOps.ScreenRect(ContentHost);
+		var from = ContentHost.PointToScreen(rect.TopLeft);
+		var to = ContentHost.PointToScreen(rect.BottomRight);
+		_marquee ??= DrawFrameWindow.CreateMarquee();
+		_marquee.ShowAt(new RECT(Math.Max(area.Left, (int)Math.Round(from.X)), Math.Max(area.Top, (int)Math.Round(from.Y)),
+				Math.Min(area.Right, (int)Math.Round(to.X)), Math.Min(area.Bottom, (int)Math.Round(to.Y))));
 		foreach (var item in _items)
 		{
 			if (ItemsList.ItemContainerGenerator.ContainerFromItem(item) is not ListBoxItem container || !container.IsVisible)
@@ -2100,7 +2133,8 @@ internal partial class FenceWindow : Window
 	void EndRubberBand()
 	{
 		_rubberBand = false;
-		SelectionRect.Visibility = Visibility.Collapsed;
+		_rubberShown = false;
+		_marquee?.Hide();
 		ItemsList.ReleaseMouseCapture();
 	}
 
@@ -2208,7 +2242,7 @@ internal partial class FenceWindow : Window
 		_tabDetaching = !TitleBarRect().Inflate(slack).Contains(cursor);
 		if (_tabDetaching)
 		{
-			_detachPreview ??= new DrawFrameWindow();
+			_detachPreview ??= DrawFrameWindow.CreateFrame();
 			_detachPreview.ShowAt(tab.Window.LayoutBoundsOf(tab.Window.DetachedBoundsAt(cursor)));
 			return;
 		}
@@ -3131,7 +3165,8 @@ internal partial class FenceWindow : Window
 	int GetInsertIndex(Point position, out Rect? marker)
 	{
 		marker = null;
-		bool list = Model.View == FenceView.List;
+		// 列表视图只有一列时上下插入（横线），排成多列后和图标视图一样左右插入（竖线）
+		bool list = Model.View == FenceView.List && ListColumns() <= 1;
 		Rect? previous = null;
 		for (int i = 0; i < _items.Count; i++)
 		{
@@ -3168,6 +3203,16 @@ internal partial class FenceWindow : Window
 			marker = list ? new Rect(last.Left, last.Bottom - 1.5, last.Width, 3) : new Rect(last.Right - 1.5, last.Top, 3, last.Height);
 		}
 		return _items.Count;
+	}
+
+	/// <summary>
+	/// 列表视图现在排成几列。
+	/// </summary>
+	int ListColumns()
+	{
+		return ItemsList.ItemContainerGenerator.ContainerFromIndex(0) is ListBoxItem container && VisualTreeHelper.GetParent(container) is ListColumnsPanel panel
+				? panel.Columns
+				: 1;
 	}
 
 	/// <summary>

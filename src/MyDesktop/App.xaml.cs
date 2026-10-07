@@ -49,6 +49,7 @@ public partial class App : Application
 		SystemTheme.ApplyToMenus();
 		Log.Info($"启动 {typeof(App).Assembly.GetName().Version}，数据目录：{AppPaths.DataDir}");
 		var settings = SettingsStore.Load(out bool firstRun);
+		FenceManager.ApplyRenderMode(settings.HardwareAcceleration);
 		Manager = new FenceManager(settings);
 		StartWhenDesktopReady(Manager, firstRun, command);
 	}

@@ -72,6 +72,12 @@
 	</Style>
 
 	<Style x:Key="FenceItemContainer" TargetType="ListBoxItem">
+		<Style.Triggers>
+			<!-- 展开了完整名称的图标压在下面的图标之上 -->
+			<DataTrigger Binding="{Binding IsNameExpanded}" Value="True">
+				<Setter Property="Panel.ZIndex" Value="1" />
+			</DataTrigger>
+		</Style.Triggers>
 		<Setter Property="FocusVisualStyle" Value="{x:Null}" />
 		<Setter Property="Margin" Value="1" />
 		<Setter Property="Padding" Value="3,5,3,4" />
@@ -79,14 +85,60 @@
 		<Setter Property="Template">
 			<Setter.Value>
 				<ControlTemplate TargetType="ListBoxItem">
-					<Border x:Name="Bd"
-							CornerRadius="5"
-							Background="Transparent"
-							BorderBrush="Transparent"
-							BorderThickness="1"
-							Padding="{TemplateBinding Padding}">
-						<ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" />
-					</Border>
+					<Grid>
+						<Border x:Name="Bd"
+								CornerRadius="5"
+								Background="Transparent"
+								BorderBrush="Transparent"
+								BorderThickness="1"
+								Padding="{TemplateBinding Padding}">
+							<ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" />
+						</Border>
+						<!-- 选中时和系统桌面一样展开完整名称：整个格子连同选中底色往下延伸，盖在下面的图标上，不改变格子大小 -->
+						<Canvas x:Name="Expanded" Visibility="Collapsed">
+							<Border Width="{Binding ActualWidth, ElementName=Bd}"
+									CornerRadius="5"
+									BorderThickness="1"
+									Padding="{TemplateBinding Padding}"
+									Background="{DynamicResource FenceSelected}"
+									BorderBrush="{DynamicResource FenceSelectedBorder}"
+									ToolTip="{Binding ToolTipText}"
+									ToolTipService.InitialShowDelay="700">
+								<Grid>
+									<StackPanel x:Name="ExpandedIconView">
+										<Image x:Name="ExpandedIcon"
+												Source="{Binding Icon}"
+												Width="{DynamicResource IconSize}"
+												Height="{DynamicResource IconSize}"
+												Margin="0,0,0,4"
+												Stretch="Uniform"
+												RenderOptions.BitmapScalingMode="HighQuality" />
+										<TextBlock Text="{Binding DisplayName}"
+												TextAlignment="Center"
+												TextWrapping="Wrap"
+												Foreground="{DynamicResource FenceForeground}"
+												Effect="{DynamicResource TextShadow}" />
+									</StackPanel>
+									<!-- 列表视图：和列表的一行（FenceWindow.xaml 的 ListTemplate）一样图标在左、名称离顶端 2，名称在右边折行 -->
+									<DockPanel x:Name="ExpandedListView" Visibility="Collapsed">
+										<Image x:Name="ExpandedListIcon"
+												Source="{Binding Icon}"
+												Width="20"
+												Height="20"
+												Margin="2,0,8,0"
+												VerticalAlignment="Top"
+												Stretch="Uniform"
+												RenderOptions.BitmapScalingMode="HighQuality" />
+										<TextBlock Margin="0,2,0,0"
+												Text="{Binding DisplayName}"
+												TextWrapping="Wrap"
+												Foreground="{DynamicResource FenceForeground}"
+												Effect="{DynamicResource TextShadow}" />
+									</DockPanel>
+								</Grid>
+							</Border>
+						</Canvas>
+					</Grid>
 					<ControlTemplate.Triggers>
 						<Trigger Property="IsMouseOver" Value="True">
 							<Setter TargetName="Bd" Property="Background" Value="{DynamicResource FenceHover}" />
@@ -100,6 +152,26 @@
 							<Setter TargetName="Bd" Property="Background" Value="{DynamicResource FenceSelected}" />
 							<Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource FenceSelectedBorder}" />
 						</DataTrigger>
+						<MultiDataTrigger>
+							<MultiDataTrigger.Conditions>
+								<Condition Binding="{Binding IsNameExpanded}" Value="True" />
+								<Condition Binding="{Binding IsRenaming}" Value="False" />
+							</MultiDataTrigger.Conditions>
+							<Setter TargetName="Expanded" Property="Visibility" Value="Visible" />
+							<Setter TargetName="Bd" Property="Visibility" Value="Hidden" />
+						</MultiDataTrigger>
+						<!-- 列表视图的容器样式把 Tag 设为 List -->
+						<Trigger Property="Tag" Value="List">
+							<Setter TargetName="ExpandedIconView" Property="Visibility" Value="Collapsed" />
+							<Setter TargetName="ExpandedListView" Property="Visibility" Value="Visible" />
+						</Trigger>
+						<DataTrigger Binding="{Binding IsCut}" Value="True">
+							<Setter TargetName="ExpandedIcon" Property="Opacity" Value="0.5" />
+							<Setter TargetName="ExpandedListIcon" Property="Opacity" Value="0.5" />
+						</DataTrigger>
+						<DataTrigger Binding="{Binding IsInFlight}" Value="True">
+							<Setter TargetName="Expanded" Property="Opacity" Value="0" />
+						</DataTrigger>
 					</ControlTemplate.Triggers>
 				</ControlTemplate>
 			</Setter.Value>
@@ -109,6 +181,8 @@
 	<Style x:Key="FenceListItemContainer" TargetType="ListBoxItem" BasedOn="{StaticResource FenceItemContainer}">
 		<Setter Property="Margin" Value="0,0,0,1" />
 		<Setter Property="Padding" Value="4,3" />
+		<!-- 展开完整名称时按列表的一行排 -->
+		<Setter Property="Tag" Value="List" />
 	</Style>
 
 	<Style x:Key="FenceTitleButton" TargetType="Button">

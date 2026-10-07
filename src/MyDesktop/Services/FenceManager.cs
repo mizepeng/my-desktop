@@ -124,7 +124,7 @@ internal sealed class FenceManager
 	{
 		_tray = new TrayIcon("MyDesktop 桌面分区", AppCommands.MessageName, AppCommands.StateMessageName)
 		{
-			StateProvider = () => AppCommands.EncodeState(Settings.DoubleClickTarget, Settings.DoubleClickToHide),
+			StateProvider = () => AppCommands.EncodeState(Settings.DoubleClickTarget, Settings.DoubleClickToHide, Settings.DesktopContextMenu),
 		};
 		_tray.LeftClick += ShowSettings;
 		_tray.RightClick += ShowTrayMenu;
@@ -179,6 +179,12 @@ internal sealed class FenceManager
 		{
 			SaveSoon();
 		}
+		// 打开分区之前就监视前台切换和层级变化：安装程序关闭等让桌面窗口提到最前的变化，要是发生在打开分区的那一会儿，
+		// 分区会被压在桌面下面没人纠正，要等看门狗或点一下桌面才露出来
+		_foregroundHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, _foregroundCallback, 0, 0,
+				WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+		_reorderHook = SetWinEventHook(EVENT_OBJECT_REORDER, EVENT_OBJECT_REORDER, IntPtr.Zero, _reorderCallback, 0, 0,
+				WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 		// 系统关掉了「显示桌面图标」时桌面上没有图标可以飞
 		_flyInAtStartup = !DesktopHost.IconsHiddenBySystem();
 		foreach (var model in Settings.Fences.ToList())
@@ -201,11 +207,18 @@ internal sealed class FenceManager
 		Organizer.ApplyWatchSetting();
 		WatchElevationSettings();
 		DesktopMenu.Apply(Settings.DesktopContextMenu);
-		_foregroundHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, _foregroundCallback, 0, 0,
-				WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-		_reorderHook = SetWinEventHook(EVENT_OBJECT_REORDER, EVENT_OBJECT_REORDER, IntPtr.Zero, _reorderCallback, 0, 0,
-				WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 		_watchdogTimer.Start();
+		// 启动这一阵子别的程序（比如刚装完点「完成」的安装程序）还在关闭、切换前台，稍后再校正一次层级
+		_zOrderTimer.Stop();
+		_zOrderTimer.Start();
+		// 启动一分钟、各种加载和动画都结束后记一次内存，排查占用时对照
+		var memoryLog = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
+		memoryLog.Tick += (_, _) =>
+		{
+			memoryLog.Stop();
+			LogMemory();
+		};
+		memoryLog.Start();
 		// 用 --data 启动的测试实例不自动检查更新，免得和正式实例重复提示
 		if (!AppPaths.IsCustomDataDir)
 		{
@@ -217,6 +230,15 @@ internal sealed class FenceManager
 		{
 			_dispatcher.InvokeAsync(ShowWelcome, DispatcherPriority.Background);
 		}
+	}
+
+	void LogMemory()
+	{
+		using var process = Process.GetCurrentProcess();
+		var gc = GC.GetGCMemoryInfo();
+		Log.Info($"内存：私有 {process.PrivateMemorySize64 / 1048576} MB，工作集 {process.WorkingSet64 / 1048576} MB，"
+				+ $"托管堆 {GC.GetTotalMemory(false) / 1048576} MB（已提交 {gc.TotalCommittedBytes / 1048576} MB），"
+				+ $"分区窗口 {_windows.Count} 个，硬件加速{(Settings.HardwareAcceleration ? "开" : "关")}");
 	}
 
 	/// <summary>
@@ -254,8 +276,8 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 让用户看得到启动动画：开机自启时程序可能在登录界面还没退出时就运行了，先等登录界面（LogonUI）退出、桌面淡入；
-	/// 再等分区里的图标加载好，图像还没出来的图标飞不起来。然后才接管桌面，在那之前系统桌面上的图标照常显示。
+	/// 让用户看得到启动动画：开机自启时程序可能在登录界面还没退出时就运行了，先等登录界面（LogonUI）退出、桌面淡入，
+	/// 然后才接管桌面，在那之前系统桌面上的图标照常显示。
 	/// </summary>
 	async Task StartTakeoverWhenReadyAsync()
 	{
@@ -269,11 +291,6 @@ internal sealed class FenceManager
 			}
 			// 登录界面退出后桌面还要淡入一会儿
 			await Task.Delay(1500);
-		}
-		var loading = DateTime.UtcNow;
-		while (!FenceIconsLoaded() && DateTime.UtcNow - loading < TimeSpan.FromSeconds(3))
-		{
-			await Task.Delay(100);
 		}
 		StartTakeover();
 	}
@@ -295,6 +312,19 @@ internal sealed class FenceManager
 			{
 				process.Dispose();
 			}
+		}
+	}
+
+	/// <summary>
+	/// 启动后第一次接管、藏起资源管理器的图标列表之前，等分区里的图标图像加载好（最多 3 秒）：分区读到桌面视图才有图标，
+	/// 接管时才开始加载，图像还没出来的图标飞不起来、只能直接显示。
+	/// </summary>
+	public async Task WaitForFenceIconsAsync()
+	{
+		var started = DateTime.UtcNow;
+		while (_flyInAtStartup && !FenceIconsLoaded() && DateTime.UtcNow - started < TimeSpan.FromSeconds(3))
+		{
+			await Task.Delay(100);
 		}
 	}
 
@@ -329,7 +359,7 @@ internal sealed class FenceManager
 		_searchWindow?.Close();
 		SaveNow();
 		_mouse?.Dispose();
-		_drawFrame?.Close();
+		_drawFrame?.Dispose();
 		Organizer.Dispose();
 		// 退出接管时恢复资源管理器的桌面图标
 		_takeover?.Dispose();
@@ -1302,7 +1332,7 @@ internal sealed class FenceManager
 			_mouse.DoubleClicked += ToggleHidden;
 			_mouse.DrawUpdated += rect =>
 			{
-				_drawFrame ??= new DrawFrameWindow();
+				_drawFrame ??= DrawFrameWindow.CreateFrame();
 				_drawFrame.ShowAt(rect);
 			};
 			_mouse.DrawFinished += OnDrawFinished;
@@ -1405,6 +1435,22 @@ internal sealed class FenceManager
 		foreach (var window in _windows)
 		{
 			window.ApplyAppearance();
+		}
+	}
+
+	/// <summary>
+	/// 硬件加速开关：之后创建的窗口按进程设置，已经打开的窗口逐个改，不用重启。
+	/// </summary>
+	public static void ApplyRenderMode(bool hardware)
+	{
+		var mode = hardware ? RenderMode.Default : RenderMode.SoftwareOnly;
+		RenderOptions.ProcessRenderMode = mode;
+		foreach (var source in PresentationSource.CurrentSources.OfType<HwndSource>())
+		{
+			if (source.CompositionTarget is HwndTarget target)
+			{
+				target.RenderMode = mode;
+			}
 		}
 	}
 

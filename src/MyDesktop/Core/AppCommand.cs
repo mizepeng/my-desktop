@@ -33,21 +33,23 @@ internal static class AppCommands
 	public const string StateMessageName = "MyDesktop.State";
 
 	const int StateValid = 0x100;
+	const int StateDesktopMenu = 0x20;
 	const int StateDoubleClickEnabled = 0x10;
 	const int StateTargetMask = 0xF;
 
 	/// <summary>
-	/// 编码菜单需要的状态：双击隐藏的对象、是否启用双击隐藏；带有效位，区分「查询失败」返回的 0。
+	/// 编码菜单需要的状态：双击隐藏的对象、是否启用双击隐藏、是否在桌面右键菜单中显示；带有效位，区分「查询失败」返回的 0。
 	/// </summary>
-	public static int EncodeState(HideTarget target, bool doubleClickEnabled)
+	public static int EncodeState(HideTarget target, bool doubleClickEnabled, bool desktopMenu)
 	{
-		return StateValid | (doubleClickEnabled ? StateDoubleClickEnabled : 0) | (int)target;
+		return StateValid | (desktopMenu ? StateDesktopMenu : 0) | (doubleClickEnabled ? StateDoubleClickEnabled : 0) | (int)target;
 	}
 
-	public static bool TryDecodeState(int value, out HideTarget target, out bool doubleClickEnabled)
+	public static bool TryDecodeState(int value, out HideTarget target, out bool doubleClickEnabled, out bool desktopMenu)
 	{
 		target = (HideTarget)(value & StateTargetMask);
 		doubleClickEnabled = (value & StateDoubleClickEnabled) != 0;
+		desktopMenu = (value & StateDesktopMenu) != 0;
 		return (value & StateValid) != 0 && Enum.IsDefined(target);
 	}
 

@@ -120,6 +120,16 @@ public sealed class AppSettings
 	/// </summary>
 	public bool ShowShortcutArrows { get; set; } = true;
 
+	/// <summary>
+	/// 分区的图标视图里显示图标名称；关掉后只显示图标、格子变窄，鼠标停在图标上仍能看到名称。
+	/// </summary>
+	public bool ShowIconNames { get; set; } = true;
+
+	/// <summary>
+	/// 硬件加速：用显卡绘制界面。关掉后改用 CPU 绘制，不占显卡、少占内存，也不会在游戏占满显卡时跟着卡。
+	/// </summary>
+	public bool HardwareAcceleration { get; set; } = true;
+
 	public string DefaultColor { get; set; } = "#1E1E1E";
 
 	public double DefaultOpacity { get; set; } = 0.45;

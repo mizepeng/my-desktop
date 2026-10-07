@@ -24,7 +24,8 @@ internal static class ShellIconLoader
 	const uint SIID_SHIELD = 77;
 	const uint SHGSI_ICONLOCATION = 0;
 	const int WorkerCount = 2;
-	const int MaxCacheEntries = 3000;
+	// 缓存满了整个清空重来；常开的分区和桌面一般只有一两百个图标，映射分区里浏览大文件夹时才会涨上去
+	const int MaxCacheEntries = 1000;
 	const int MaxRetries = 2;
 
 	static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(1);
@@ -49,6 +50,35 @@ internal static class ShellIconLoader
 	static readonly ConcurrentDictionary<int, BitmapSource?> Shields = new();
 	static readonly ConcurrentDictionary<int, BitmapSource?> Overlays = new();
 	static readonly Lazy<int> LinkOverlay = new(() => SHGetIconOverlayIndex(null, IDO_SHGIOI_LINK));
+
+	static readonly Lazy<BitmapSource?> FolderIconSource = new(LoadFolderIcon);
+
+	/// <summary>
+	/// 系统当前的文件夹小图标（映射分区的标题栏和标签上用）：只按「文件夹」这个属性向系统要，
+	/// 用户换过图标主题或改过文件夹图标的，拿到的就是那一套。
+	/// </summary>
+	public static BitmapSource? FolderIcon => FolderIconSource.Value;
+
+	static BitmapSource? LoadFolderIcon()
+	{
+		var info = new SHFILEINFO();
+		if (SHGetFileInfo("folder", FILE_ATTRIBUTE_DIRECTORY, ref info, (uint)Marshal.SizeOf<SHFILEINFO>(), SHGFI_ICON | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES) == IntPtr.Zero
+				|| info.hIcon == IntPtr.Zero)
+		{
+			Log.Warn("读取系统文件夹图标失败");
+			return null;
+		}
+		try
+		{
+			var source = Imaging.CreateBitmapSourceFromHIcon(info.hIcon, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+			source.Freeze();
+			return source;
+		}
+		finally
+		{
+			DestroyIcon(info.hIcon);
+		}
+	}
 
 	/// <summary>
 	/// 是否叠加快捷方式小箭头（设置项），改了之后要清空缓存重新加载图标。

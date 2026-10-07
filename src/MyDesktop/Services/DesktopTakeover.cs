@@ -79,6 +79,8 @@ internal sealed class DesktopTakeover : IDisposable
 	readonly HashSet<string> _waitingToFly = new(StringComparer.OrdinalIgnoreCase);
 	// 删除分区时正从分区飞回桌面的图标：已经排在桌面上，落地前先不显示
 	readonly HashSet<string> _arriving = new(StringComparer.OrdinalIgnoreCase);
+	// 桌面空白处框选时的选框
+	DrawFrameWindow? _marquee;
 
 	public DesktopTakeover(FenceManager manager)
 	{
@@ -245,6 +247,7 @@ internal sealed class DesktopTakeover : IDisposable
 		}
 		_layers.Clear();
 		DesktopHost.SetLayers([], []);
+		_marquee?.Dispose();
 		Items.Dispose();
 	}
 
@@ -273,12 +276,13 @@ internal sealed class DesktopTakeover : IDisposable
 		Relayout();
 		ApplyLayerVisibility(false);
 		var timer = new DispatcherTimer { Interval = HideDelay };
-		timer.Tick += (_, _) =>
+		timer.Tick += async (_, _) =>
 		{
 			timer.Stop();
+			// 启动后第一次接管时，分区里的图标从资源管理器图标列表里的原处飞进分区：等图标图像加载好、放好飞行的图标，再藏起列表
+			await _manager.WaitForFenceIconsAsync();
 			if (_active && !_disposed)
 			{
-				// 启动后第一次接管时，分区里的图标从资源管理器图标列表里的原处飞进分区：先放好飞行的图标再藏起列表
 				_manager.OnDesktopTakenOver();
 				DesktopHost.SetIconsVisible(false);
 			}
@@ -822,6 +826,11 @@ internal sealed class DesktopTakeover : IDisposable
 		}
 	}
 
+	/// <summary>
+	/// 图标占的范围变了（如展开了完整名称），排好版后更新判断点击是否落在图标上用的范围。
+	/// </summary>
+	public void RefreshHitRects() => _dispatcher.InvokeAsync(UpdateHitRects, DispatcherPriority.Loaded);
+
 	public void ReloadIcons()
 	{
 		foreach (var layer in _layers)
@@ -881,6 +890,12 @@ internal sealed class DesktopTakeover : IDisposable
 
 	public void OnBandUpdated(RECT rect)
 	{
+		// 选框画在单独的小窗口里，不让整个图标层跟着鼠标重画（见 DrawFrameWindow）
+		if (LayersVisible)
+		{
+			_marquee ??= DrawFrameWindow.CreateMarquee();
+			_marquee.ShowAt(rect);
+		}
 		foreach (var layer in _layers.Where(l => l.IsVisible))
 		{
 			layer.UpdateBand(rect);
@@ -920,6 +935,7 @@ internal sealed class DesktopTakeover : IDisposable
 
 	public void OnBandFinished()
 	{
+		_marquee?.Hide();
 		foreach (var layer in _layers)
 		{
 			layer.EndBand();

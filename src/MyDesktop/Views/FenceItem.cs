@@ -21,6 +21,7 @@ public sealed class FenceItem : INotifyPropertyChanged
 	bool _isCut;
 	bool _isDropTarget;
 	bool _isInFlight;
+	bool _isNameExpanded;
 
 	FenceItem(string fullPath)
 	{
@@ -77,6 +78,15 @@ public sealed class FenceItem : INotifyPropertyChanged
 	{
 		get => _isInFlight;
 		set => Set(ref _isInFlight, value);
+	}
+
+	/// <summary>
+	/// 和系统桌面一样，选中的图标（选中好几个时是最后选中的那个）展开完整名称，不再限两行。
+	/// </summary>
+	public bool IsNameExpanded
+	{
+		get => _isNameExpanded;
+		set => Set(ref _isNameExpanded, value);
 	}
 
 	/// <summary>
