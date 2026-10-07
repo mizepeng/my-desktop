@@ -1,5 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
+using MyDesktop.Native;
+using static MyDesktop.Native.NativeMethods;
 
 namespace MyDesktop.Views;
 
@@ -13,6 +15,9 @@ internal partial class MessageDialog : Window
 	MessageDialog()
 	{
 		InitializeComponent();
+		// 没有 owner 时 CenterScreen 在鼠标所在显示器的工作区里居中、不管放不放得下；高度限制在这个工作区内，放不下时说明区域滚动，按钮始终在屏幕上
+		var (work, scale) = GetMonitorWorkArea(MonitorFromPoint(NativeMethods.GetCursorPos(), MONITOR_DEFAULTTONEAREST));
+		MaxHeight = work.Height / scale;
 	}
 
 	/// <summary>
