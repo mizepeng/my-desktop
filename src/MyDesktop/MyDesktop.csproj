@@ -27,6 +27,12 @@
 	</ItemGroup>
 
 	<ItemGroup>
+		<!-- gen0 预算默认按 CPU 三级缓存大小定，大缓存的 CPU 上很大（9800X3D 的 96 MB 对应 48 MB），GC 一直占着这么多已提交内存；
+			 限到 6 MB（小缓存 CPU 上的默认值），GC 次数变多但每次很短，见 CLAUDE.md「实测得出的约束」 -->
+		<RuntimeHostConfigurationOption Include="System.GC.Gen0MaxBudget" Value="6291456" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<Resource Include="Assets\app.ico" />
 		<Resource Include="Assets\app.png" />
 		<!-- 发行版安装包签名证书的公钥，自动更新时用它核对下载的安装包 -->

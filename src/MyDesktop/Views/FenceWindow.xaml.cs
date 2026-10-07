@@ -115,6 +115,8 @@ internal partial class FenceWindow : Window
 	bool _rubberBand;
 	// 框选已越过拖动阈值、正在显示选框
 	bool _rubberShown;
+	// 按住的是右键：松开时弹出右键菜单
+	bool _rubberRight;
 	DrawFrameWindow? _marquee;
 	HashSet<FenceItem> _rubberBase = [];
 
@@ -1890,6 +1892,9 @@ internal partial class FenceWindow : Window
 	{
 		if (_manager.IsHiddenTab(this))
 		{
+			// 不显示的标签也跟着淡出过，不透明度停在 0：撤掉，否则之后切换到它时整个分区是透明的
+			BeginAnimation(OpacityProperty, null);
+			Opacity = 1;
 			return;
 		}
 		if (!IsVisible)
@@ -2316,7 +2321,7 @@ internal partial class FenceWindow : Window
 
 		if (item == null)
 		{
-			BeginRubberBand();
+			BeginRubberBand(false);
 			e.Handled = true;
 			return;
 		}
@@ -2347,7 +2352,7 @@ internal partial class FenceWindow : Window
 	{
 		if (_rubberBand)
 		{
-			if (e.LeftButton == MouseButtonState.Pressed)
+			if ((_rubberRight ? e.RightButton : e.LeftButton) == MouseButtonState.Pressed)
 			{
 				UpdateRubberBand(e.GetPosition(ContentHost));
 			}
@@ -2406,16 +2411,51 @@ internal partial class FenceWindow : Window
 		_pressedItem = null;
 	}
 
+	/// <summary>
+	/// 和资源管理器一样，在空白处按住右键拖动也是框选，松开时弹出右键菜单（见 ItemsList_MouseRightButtonUp）。
+	/// </summary>
+	void ItemsList_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+	{
+		if (_rubberBand || IsInside<ScrollBar>(e.OriginalSource) || IsInside<TextBox>(e.OriginalSource) || ItemFromSource(e.OriginalSource) != null)
+		{
+			return;
+		}
+		CommitAllRenames();
+		_pressPoint = e.GetPosition(ContentHost);
+		BeginRubberBand(true);
+		e.Handled = true;
+	}
+
 	void ItemsList_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
 	{
 		_clickRename.Cancel();
+		var point = NativeMethods.GetCursorPos();
+		if (_rubberBand && _rubberRight)
+		{
+			bool dragged = _rubberShown;
+			EndRubberBand();
+			// 拖出了选框：框住了图标就弹出它们的右键菜单，没框住就弹出分区菜单；只是单击时照常处理
+			if (dragged)
+			{
+				if (ItemsList.SelectedItems.Count > 0)
+				{
+					var (selected, onDesktop) = _manager.SelectionForShell(this);
+					ShowItemMenu(selected, onDesktop, point, (FenceItem)ItemsList.SelectedItems[0]!);
+				}
+				else
+				{
+					ShowFenceMenu(point);
+				}
+				e.Handled = true;
+				return;
+			}
+		}
 		if (IsInside<ScrollBar>(e.OriginalSource) || IsInside<TextBox>(e.OriginalSource))
 		{
 			return;
 		}
 		CommitAllRenames();
 		var item = ItemFromSource(e.OriginalSource);
-		var point = NativeMethods.GetCursorPos();
 		if (item == null)
 		{
 			ItemsList.UnselectAll();
@@ -2434,7 +2474,8 @@ internal partial class FenceWindow : Window
 		e.Handled = true;
 	}
 
-	void BeginRubberBand()
+	/// <param name="right">按住的是右键。</param>
+	void BeginRubberBand(bool right)
 	{
 		if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == 0)
 		{
@@ -2442,6 +2483,7 @@ internal partial class FenceWindow : Window
 		}
 		_rubberBase = ItemsList.SelectedItems.Cast<FenceItem>().ToHashSet();
 		_rubberBand = true;
+		_rubberRight = right;
 		ItemsList.Focus();
 		ItemsList.CaptureMouse();
 	}

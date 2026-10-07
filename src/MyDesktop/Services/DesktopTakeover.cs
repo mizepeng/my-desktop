@@ -648,7 +648,7 @@ internal sealed class DesktopTakeover : IDisposable
 	#region 图标层与排布
 
 	/// <summary>
-	/// 每个显示器一个图标层，覆盖其工作区。
+	/// 每个显示器一个图标层，左上角在其工作区左上角，只盖住图标所在的范围。
 	/// </summary>
 	void EnsureLayers()
 	{

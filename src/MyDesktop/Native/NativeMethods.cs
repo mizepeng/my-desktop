@@ -457,6 +457,13 @@ internal static class NativeMethods
 	public static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr screenDc, ref POINT destination, ref SIZE size, IntPtr sourceDc, ref POINT source,
 			uint colorKey, ref BLENDFUNCTION blend, uint flags);
 
+	/// <summary>
+	/// 画面不变、只挪位置或改整体透明度时用：size、sourceDc、source 都传 IntPtr.Zero。
+	/// </summary>
+	[DllImport("user32.dll", SetLastError = true)]
+	public static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr screenDc, ref POINT destination, IntPtr size, IntPtr sourceDc, IntPtr source,
+			uint colorKey, ref BLENDFUNCTION blend, uint flags);
+
 	[DllImport("gdi32.dll")]
 	public static extern bool DeleteDC(IntPtr hdc);
 

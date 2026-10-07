@@ -16,6 +16,7 @@ namespace MyDesktop.Services;
 /// 自动更新：从 GitHub 发行版查询最新版本，提示后下载安装包，核对签名后静默安装。
 /// 安装程序会先让正在运行的本程序正常退出，装完再以原来的用户身份重新启动它（安装包参数 /autoupdate=1）。
 /// 启动约 1 分钟后检查一次，之后每天一次；也可以在托盘菜单和设置里手动检查。
+/// 自动检查发现新版本时只在通知区提示，用户点了通知才弹出更新对话框，不打断正在做的事；手动检查直接弹对话框。
 /// </summary>
 internal sealed class Updater
 {
@@ -42,6 +43,7 @@ internal sealed class Updater
 	readonly FenceManager _manager;
 	readonly DispatcherTimer _timer;
 	bool _busy;
+	bool _prompting;
 
 	sealed record Release(Version Version, string Tag, string Notes, string AssetName, string AssetUrl, long AssetSize);
 
@@ -76,7 +78,7 @@ internal sealed class Updater
 	public void Stop() => _timer.Stop();
 
 	/// <summary>
-	/// 检查新版本；手动检查时已是最新或查询失败也给出提示，自动检查时只在有新版本、且没被跳过时提示。
+	/// 检查新版本；手动检查时已是最新或查询失败也给出提示，自动检查时只在有新版本、且没被跳过时在通知区提示。
 	/// </summary>
 	public async Task CheckAsync(bool manual)
 	{
@@ -115,6 +117,34 @@ internal sealed class Updater
 			{
 				return;
 			}
+			if (manual)
+			{
+				Prompt(release);
+			}
+			else
+			{
+				_manager.ShowNotification($"MyDesktop {release.Version.ToString(3)} 已发布", $"当前版本 {CurrentVersion.ToString(3)}，点击查看更新内容并更新。",
+						() => Prompt(release));
+			}
+		}
+		finally
+		{
+			_busy = false;
+		}
+	}
+
+	/// <summary>
+	/// 弹出更新对话框：立即更新、跳过此版本或稍后。已经开着一个时（比如手动检查弹出的）不再弹第二个。
+	/// </summary>
+	void Prompt(Release release)
+	{
+		if (_prompting)
+		{
+			return;
+		}
+		_prompting = true;
+		try
+		{
 			var message = $"MyDesktop {release.Version.ToString(3)} 已发布，当前版本 {CurrentVersion.ToString(3)}。";
 			if (release.Notes.Length > 0)
 			{
@@ -134,7 +164,7 @@ internal sealed class Updater
 		}
 		finally
 		{
-			_busy = false;
+			_prompting = false;
 		}
 	}
 

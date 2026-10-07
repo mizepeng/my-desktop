@@ -1766,6 +1766,11 @@ internal sealed class FenceManager
 		}
 	}
 
+	/// <summary>
+	/// 在通知区弹出通知（系统显示为 Windows 通知）；clicked 是用户点击这条通知时要做的事。
+	/// </summary>
+	public void ShowNotification(string title, string text, Action clicked) => _tray?.ShowBalloon(title, text, clicked);
+
 	#endregion
 
 	#region 内部实现

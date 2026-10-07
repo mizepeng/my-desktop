@@ -15,13 +15,23 @@ using static MyDesktop.Native.NativeMethods;
 namespace MyDesktop.Views;
 
 /// <summary>
-/// 散放图标层：覆盖一个显示器的工作区，画出没有放进分区的桌面图标，位置、大小和间距都取自资源管理器。
-/// 图标之外完全透明，点击穿透到系统桌面，系统的桌面右键菜单（查看、排序方式等）照常可用；
-/// 本程序发起拖动期间整层改为可接收放置，防止落到资源管理器隐藏的图标视图上。
+/// 散放图标层：一个显示器上没有放进分区的桌面图标，位置、大小和间距都取自资源管理器。
+/// 窗口左上角固定在工作区左上角，只盖住图标所在的范围（见 ExtentSize）；图标之外完全透明，点击穿透到系统桌面，
+/// 系统的桌面右键菜单（查看、排序方式等）照常可用。本程序发起拖动期间临时扩成整个工作区并改为可接收放置，防止落到资源管理器隐藏的图标视图上。
 /// </summary>
 internal partial class DesktopLayerWindow : Window
 {
 	const double FadeMilliseconds = 180;
+
+	/// <summary>
+	/// 窗口在图标所占范围的右边、下边多留的边距（DIP），容得下名称的文字阴影。
+	/// </summary>
+	const double EdgeMargin = 8;
+
+	/// <summary>
+	/// 窗口在最下面一行格子之下多留的行数：选中时展开的完整名称、改名框不超出这几行时窗口不用跟着变。
+	/// </summary>
+	const double SpareRows = 2;
 
 	static readonly SolidColorBrush CaptureBackground = Frozen(Color.FromArgb(1, 0, 0, 0));
 
@@ -34,6 +44,12 @@ internal partial class DesktopLayerWindow : Window
 	double _scale = 1;
 	int _iconPixels;
 	bool _allowClose;
+
+	// 窗口范围：格子大小（DIP）用来估计还没排好版的图标；拖动期间扩成整个工作区
+	double _cellWidth;
+	double _cellHeight;
+	bool _capturing;
+	bool _extentPending;
 
 	// 鼠标交互
 	Point _pressPoint;
@@ -64,7 +80,7 @@ internal partial class DesktopLayerWindow : Window
 	public IntPtr Handle => _hwnd;
 
 	/// <summary>
-	/// 覆盖的显示器工作区（屏幕物理像素）。
+	/// 所在显示器的工作区（屏幕物理像素）：窗口左上角固定在这里，图标的坐标以它为原点。
 	/// </summary>
 	public RECT WorkArea => _workArea;
 
@@ -110,16 +126,17 @@ internal partial class DesktopLayerWindow : Window
 	}
 
 	/// <summary>
-	/// 覆盖到显示器工作区（物理像素）。
+	/// 摆到显示器工作区（物理像素）的左上角，大小按图标所在的范围（见 ExtentSize）。
 	/// </summary>
 	public void Place(RECT workArea, double scale)
 	{
 		_workArea = workArea;
 		_scale = scale;
 		new WindowInteropHelper(this).EnsureHandle();
+		var (width, height) = ExtentSize();
 		// 首次定位若跨越不同 DPI 的显示器，WPF 会按新 DPI 缩放窗口，第二次把尺寸校正回物理像素
-		SetWindowPos(_hwnd, IntPtr.Zero, workArea.Left, workArea.Top, workArea.Width, workArea.Height, SWP_NOZORDER | SWP_NOACTIVATE);
-		SetWindowPos(_hwnd, IntPtr.Zero, workArea.Left, workArea.Top, workArea.Width, workArea.Height, SWP_NOZORDER | SWP_NOACTIVATE);
+		SetWindowPos(_hwnd, IntPtr.Zero, workArea.Left, workArea.Top, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+		SetWindowPos(_hwnd, IntPtr.Zero, workArea.Left, workArea.Top, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
 	}
 
 	public void ShowOnDesktop()
@@ -190,11 +207,14 @@ internal partial class DesktopLayerWindow : Window
 	}
 
 	/// <summary>
-	/// 本程序发起拖动期间整层几乎透明而非完全透明，放置落在本层而不是资源管理器隐藏的图标视图上。
+	/// 本程序发起拖动期间整层几乎透明而非完全透明，放置落在本层而不是资源管理器隐藏的图标视图上；
+	/// 这期间窗口临时扩成整个工作区，空白处也能接住放置，结束后缩回图标所在的范围。
 	/// </summary>
 	public void SetCaptureDrops(bool capture)
 	{
 		Background = capture ? CaptureBackground : Brushes.Transparent;
+		_capturing = capture;
+		UpdateExtent();
 	}
 
 	IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -234,6 +254,8 @@ internal partial class DesktopLayerWindow : Window
 	{
 		double scale = _scale;
 		double cellWidth = spacing.X / scale;
+		_cellWidth = cellWidth;
+		_cellHeight = spacing.Y / scale;
 		Resources["IconSize"] = (double)iconSize;
 		Resources["CellWidth"] = cellWidth;
 		// 去掉选中框的边距、边框后留给名称的宽度，与资源管理器的折行位置一致
@@ -264,6 +286,8 @@ internal partial class DesktopLayerWindow : Window
 			fresh.Add(item);
 		}
 		SyncItems(fresh);
+		// 在新位置画出来之前就把窗口调到位，图标挪到原来的范围之外时不会被截掉一帧
+		UpdateExtent();
 		foreach (var item in fresh)
 		{
 			RequestIcon(item);
@@ -375,6 +399,72 @@ internal partial class DesktopLayerWindow : Window
 	}
 
 	public FenceItem? Find(string key) => _items.FirstOrDefault(i => string.Equals(i.FullPath, key, StringComparison.OrdinalIgnoreCase));
+
+	#endregion
+
+	#region 窗口范围
+
+	/// <summary>
+	/// 窗口应有的大小（物理像素）：盖住图标所在的范围再加余量，不超出工作区；本程序发起拖动期间是整个工作区。
+	/// 透明窗口按整窗大小占内存（见 CLAUDE.md），铺满工作区的话只为角落里几个图标就要占几十 MB。
+	/// 图标在窗口里的左上角就是它在画布上的 X、Y。最下面的格子之下留 SpareRows 行，展开的完整名称、改名框在这个范围内时窗口不用变；
+	/// 超出时按已排好版的实际大小算。
+	/// </summary>
+	(int Width, int Height) ExtentSize()
+	{
+		if (_capturing)
+		{
+			return (Math.Max(1, _workArea.Width), Math.Max(1, _workArea.Height));
+		}
+		double right = 0;
+		double cellBottom = 0;
+		double renderedBottom = 0;
+		foreach (var item in _items)
+		{
+			var rendered = ItemsList.ItemContainerGenerator.ContainerFromItem(item) is ListBoxItem container ? container.RenderSize : default;
+			right = Math.Max(right, item.X + Math.Max(_cellWidth, rendered.Width));
+			cellBottom = Math.Max(cellBottom, item.Y + _cellHeight);
+			renderedBottom = Math.Max(renderedBottom, item.Y + rendered.Height);
+		}
+		double bottom = Math.Max(cellBottom + _cellHeight * SpareRows, renderedBottom);
+		int width = (int)Math.Ceiling((right + EdgeMargin) * _scale);
+		int height = (int)Math.Ceiling((bottom + EdgeMargin) * _scale);
+		return (Math.Clamp(width, 1, Math.Max(1, _workArea.Width)), Math.Clamp(height, 1, Math.Max(1, _workArea.Height)));
+	}
+
+	/// <summary>
+	/// 按 ExtentSize 调整窗口大小：左上角不动，只改宽高（同时挪左上角会闪，见 CLAUDE.md）。
+	/// </summary>
+	void UpdateExtent()
+	{
+		if (_hwnd == IntPtr.Zero)
+		{
+			return;
+		}
+		var (width, height) = ExtentSize();
+		var current = GetWindowRect(_hwnd);
+		if (current.Width != width || current.Height != height)
+		{
+			SetWindowPos(_hwnd, IntPtr.Zero, 0, 0, width, height, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+		}
+	}
+
+	/// <summary>
+	/// 图标占的范围变了（展开完整名称、改名框变高、图标大小变化）：在排版过程中触发，等这一轮排完再调整窗口。
+	/// </summary>
+	void ItemContainer_SizeChanged(object sender, SizeChangedEventArgs e)
+	{
+		if (_extentPending)
+		{
+			return;
+		}
+		_extentPending = true;
+		Dispatcher.InvokeAsync(() =>
+		{
+			_extentPending = false;
+			UpdateExtent();
+		}, DispatcherPriority.Loaded);
+	}
 
 	#endregion
 

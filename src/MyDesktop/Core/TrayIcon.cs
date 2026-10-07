@@ -11,6 +11,12 @@ namespace MyDesktop.Core;
 internal sealed class TrayIcon : IDisposable
 {
 	const int WM_TRAYICON = WM_APP + 1;
+
+	/// <summary>
+	/// 用户点击了通知（托盘图标的回调消息，系统把通知显示为 Windows 通知，在通知中心里点也会收到）。
+	/// </summary>
+	const int NIN_BALLOONUSERCLICK = 0x0405;
+
 	const int SPI_SETWORKAREA = 0x002F;
 	const int SPI_SETDESKWALLPAPER = 0x0014;
 	const uint IconId = 1;
@@ -22,6 +28,8 @@ internal sealed class TrayIcon : IDisposable
 	readonly int _stateMessage;
 	readonly string _tooltip;
 	IntPtr _icon;
+	// 用户点击最近一条通知时要做的事，下一条通知会替换它
+	Action? _balloonClicked;
 
 	public event Action? LeftClick;
 	public event Action<POINT>? RightClick;
@@ -77,8 +85,12 @@ internal sealed class TrayIcon : IDisposable
 		AddClipboardFormatListener(Handle);
 	}
 
-	public void ShowBalloon(string title, string text)
+	/// <summary>
+	/// 在通知区弹出通知；clicked 是用户点击这条通知时要做的事，不需要时传 null。
+	/// </summary>
+	public void ShowBalloon(string title, string text, Action? clicked = null)
 	{
+		_balloonClicked = clicked;
 		var data = CreateData(NIF_INFO);
 		data.szInfoTitle = title;
 		data.szInfo = text;
@@ -142,6 +154,11 @@ internal sealed class TrayIcon : IDisposable
 					break;
 				case WM_RBUTTONUP:
 					RightClick?.Invoke(NativeMethods.GetCursorPos());
+					break;
+				case NIN_BALLOONUSERCLICK:
+					var clicked = _balloonClicked;
+					_balloonClicked = null;
+					clicked?.Invoke();
 					break;
 			}
 			handled = true;

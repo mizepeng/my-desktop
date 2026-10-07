@@ -41,6 +41,8 @@
 			<Setter Property="Canvas.Top" Value="{Binding Y}" />
 			<Setter Property="Width" Value="{DynamicResource CellWidth}" />
 			<Setter Property="FocusVisualStyle" Value="{x:Null}" />
+			<!-- 展开完整名称、改名框变高时窗口跟着调整范围 -->
+			<EventSetter Event="SizeChanged" Handler="ItemContainer_SizeChanged" />
 			<Setter Property="Template">
 				<Setter.Value>
 					<ControlTemplate TargetType="ListBoxItem">

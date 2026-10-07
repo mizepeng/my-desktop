@@ -467,6 +467,7 @@
 							PreviewMouseLeftButtonDown="ItemsList_PreviewMouseLeftButtonDown"
 							PreviewMouseMove="ItemsList_PreviewMouseMove"
 							PreviewMouseLeftButtonUp="ItemsList_PreviewMouseLeftButtonUp"
+							PreviewMouseRightButtonDown="ItemsList_PreviewMouseRightButtonDown"
 							MouseRightButtonUp="ItemsList_MouseRightButtonUp"
 							SelectionChanged="ItemsList_SelectionChanged" />
 					<TextBlock x:Name="EmptyHint"
