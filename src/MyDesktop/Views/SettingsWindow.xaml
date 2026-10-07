@@ -36,6 +36,11 @@
 			<Setter Property="Padding" Value="16,12" />
 			<Setter Property="Margin" Value="0,0,0,4" />
 		</Style>
+		<!-- 左侧导航：主题自带的列表项是直角，改成和卡片一样的圆角 -->
+		<Style x:Key="NavItem" TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+			<Setter Property="Margin" Value="0,1" />
+			<Setter Property="Border.CornerRadius" Value="6" />
+		</Style>
 	</Window.Resources>
 
 	<Grid>
@@ -49,7 +54,11 @@
 				<Image Width="30" Height="30" Source="/Assets/app.png" RenderOptions.BitmapScalingMode="HighQuality" />
 				<TextBlock Margin="10,0,0,0" VerticalAlignment="Center" FontSize="18" FontWeight="SemiBold" Text="MyDesktop" />
 			</StackPanel>
-			<ListBox x:Name="NavList" Background="Transparent" BorderThickness="0" SelectionChanged="NavList_SelectionChanged">
+			<ListBox x:Name="NavList"
+					Background="Transparent"
+					BorderThickness="0"
+					ItemContainerStyle="{StaticResource NavItem}"
+					SelectionChanged="NavList_SelectionChanged">
 				<ListBoxItem Content="常规" IsSelected="True" />
 				<ListBoxItem Content="桌面" />
 				<ListBoxItem Content="分区" />
@@ -92,9 +101,9 @@
 										PreviewKeyDown="HotkeyBox_PreviewKeyDown" />
 								<Button Margin="8,0,0,0" Content="清除" Click="ClearHotkey_Click" />
 							</StackPanel>
-							<StackPanel Margin="0,0,12,0">
+							<StackPanel Margin="0,0,12,0" VerticalAlignment="Center">
 								<TextBlock Text="搜索桌面图标的快捷键" />
-								<TextBlock Style="{StaticResource Hint}" Text="按下快捷键弹出搜索框，输入名称、全拼或首字母找到分区里和桌面上的图标，回车打开。点右边的框，按下新的组合键即可修改" />
+								<TextBlock Style="{StaticResource Hint}" Text="只搜索桌面图标（含收进分区的），支持全拼和首字母" />
 								<TextBlock x:Name="HotkeyStatus" Style="{StaticResource Hint}" Foreground="{DynamicResource SystemFillColorCautionBrush}" Visibility="Collapsed" />
 							</StackPanel>
 						</DockPanel>

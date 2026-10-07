@@ -40,6 +40,7 @@ internal partial class DesktopLayerWindow : Window
 	FenceItem? _pressedItem;
 	bool _deferSelection;
 	HashSet<FenceItem> _bandBase = [];
+	readonly ClickToRename _clickRename;
 	// 展开了完整名称的图标（选中的里面最后选中的那个）
 	FenceItem? _expandedName;
 
@@ -53,6 +54,9 @@ internal partial class DesktopLayerWindow : Window
 		Monitor = monitor;
 		InitializeComponent();
 		ItemsList.ItemsSource = _items;
+		// 桌面图标层上点图标时前台可能仍是资源管理器的桌面
+		_clickRename = new ClickToRename(BeginRename, item => (IsActive || DesktopHost.IsDesktopSurface(GetForegroundWindow()))
+				&& ItemsList.SelectedItems.Count == 1 && ItemsList.SelectedItem == item);
 	}
 
 	public IntPtr Monitor { get; }
@@ -478,6 +482,7 @@ internal partial class DesktopLayerWindow : Window
 		}
 		CommitAllRenames();
 		var item = ItemFromSource(e.OriginalSource);
+		_clickRename.Press(e, item, _takeover.AllSelectedItems() is [var only] && only == item);
 		if (item == null)
 		{
 			return;
@@ -543,12 +548,15 @@ internal partial class DesktopLayerWindow : Window
 			ItemsList.UnselectAll();
 			ItemsList.SelectedItem = _pressedItem;
 		}
+		// 没有拖动、抬起时还在按下的图标上：单击的是已选中图标的名称时，过一会儿开始改名
+		_clickRename.Release(_pressedItem);
 		_deferSelection = false;
 		_pressedItem = null;
 	}
 
 	void ItemsList_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
 	{
+		_clickRename.Cancel();
 		if (ItemOps.IsInside<TextBox>(e.OriginalSource))
 		{
 			return;
@@ -740,6 +748,7 @@ internal partial class DesktopLayerWindow : Window
 	protected override void OnPreviewKeyDown(KeyEventArgs e)
 	{
 		base.OnPreviewKeyDown(e);
+		_clickRename.Cancel();
 		if (e.Handled || e.OriginalSource is TextBox)
 		{
 			return;

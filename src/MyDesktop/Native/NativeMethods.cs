@@ -32,6 +32,8 @@ internal static class NativeMethods
 	public const uint SWP_NOSIZE = 0x0001;
 	public const uint SWP_NOMOVE = 0x0002;
 	public const uint SWP_NOZORDER = 0x0004;
+	public const uint SWP_SHOWWINDOW = 0x0040;
+	public const uint SWP_HIDEWINDOW = 0x0080;
 	public const uint SWP_NOACTIVATE = 0x0010;
 
 	public const int SW_HIDE = 0;
@@ -131,6 +133,7 @@ internal static class NativeMethods
 	public const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
 	public const uint MOUSEEVENTF_RIGHTUP = 0x0010;
 	public const int ASFW_ANY = -1;
+	public const int DWMWA_CLOAK = 13;
 	public const int DWMWA_CLOAKED = 14;
 
 	public const uint MONITOR_DEFAULTTONULL = 0;
@@ -263,6 +266,15 @@ internal static class NativeMethods
 
 	[DllImport("dwmapi.dll")]
 	public static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
+
+	[DllImport("dwmapi.dll")]
+	public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+	/// <summary>
+	/// 等到 DWM 下一次把画面送到屏幕上之后才返回，紧接着的改动就会在同一次刷新里生效。
+	/// </summary>
+	[DllImport("dwmapi.dll")]
+	public static extern int DwmFlush();
 
 	[DllImport("user32.dll")]
 	public static extern bool IsWindow(IntPtr hwnd);

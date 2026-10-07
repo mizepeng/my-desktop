@@ -56,6 +56,8 @@ internal sealed class FenceManager
 	bool _shutdown;
 	// 启动后第一次接管桌面图标之前：分区里的图标先不显示，接管那一刻从资源管理器桌面上的原处飞进分区
 	bool _flyInAtStartup;
+	// 正在切换标签的标签组（见 ActivateTabAsync）
+	readonly HashSet<FenceGroup> _switchingGroups = [];
 
 	public FenceManager(AppSettings settings)
 	{
@@ -508,6 +510,7 @@ internal sealed class FenceManager
 	List<HomingIcon> LiftIcons(FenceWindow window)
 	{
 		var fence = window.GetBounds();
+		var insertAfter = FlightInsertAfter();
 		var icons = new List<HomingIcon>();
 		foreach (var item in window.Items)
 		{
@@ -516,7 +519,7 @@ internal sealed class FenceManager
 				continue;
 			}
 			var from = window.GetIconRect(item.FullPath);
-			var flying = new FlyingIcon(image);
+			var flying = new FlyingIcon(image, insertAfter);
 			// 看不到的图标先藏在分区中央，起飞时淡入
 			flying.Place(from ?? FlyingIcon.CenteredIn(fence, 1, 1), from == null ? 0 : 1);
 			flying.Show();
@@ -754,7 +757,7 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 切换到组里的另一个标签：新标签先在当前标签的正下方显示、画好，再隐藏当前标签，切换时不闪。
+	/// 切换到组里的另一个标签：新标签先藏着在当前标签的正下方显示、画好，再在同一次屏幕刷新里换手，切换时不闪。
 	/// </summary>
 	/// <param name="activate">让新标签成为活动窗口；原来的标签是活动窗口时总会这样，免得隐藏它后前台落到别的程序上。</param>
 	public async Task ActivateTabAsync(FenceWindow target, bool activate)
@@ -767,13 +770,33 @@ internal sealed class FenceManager
 		group.Active = target.Model.Id;
 		RefreshTabs(group);
 		SaveSoon();
-		// 分区整体隐藏着时只换记录，重新显示时显示新标签
-		if (current == null || _fencesHidden)
+		// 分区整体隐藏着时只换记录，重新显示时显示新标签；正在切换时由那一次接着换到最后选的标签
+		if (current == null || _fencesHidden || !_switchingGroups.Add(group))
 		{
 			return;
 		}
+		try
+		{
+			await SwitchTabAsync(current, target, activate);
+			// 切换要等几帧，期间又选了别的标签（比如在标签上快速滚动滚轮）：接着换过去
+			while (!_fencesHidden && WindowOf(group.Active) is { } latest && latest != target)
+			{
+				current = target;
+				target = latest;
+				await SwitchTabAsync(current, target, activate);
+			}
+		}
+		finally
+		{
+			_switchingGroups.Remove(group);
+		}
+	}
+
+	async Task SwitchTabAsync(FenceWindow current, FenceWindow target, bool activate)
+	{
 		CopyFrame(current.Model, target.Model);
 		await target.ShowInPlaceOf(current);
+		target.TakeOverFrom(current);
 		if (activate || current.IsActive)
 		{
 			target.Activate();
@@ -781,6 +804,7 @@ internal sealed class FenceManager
 		// 不显示的标签不留选择，免得删除、剪切等操作带上看不见的图标
 		current.ClearSelection();
 		current.Hide();
+		current.SetCloaked(false);
 		BringToFront(target);
 	}
 
@@ -2022,6 +2046,12 @@ internal sealed class FenceManager
 	/// <summary>
 	/// 把分区提到其他分区之上：点击、拖动、悬停展开或固定展开时，正在操作的分区盖住旁边的分区。
 	/// </summary>
+	/// <summary>
+	/// 飞行的图标（整理、启动、删除分区的动画）在层级上排在哪个窗口之后：紧贴在最上面的分区之上、其他程序的窗口之下，
+	/// 和桌面同一层，桌面被别的窗口挡住时动画也被挡住。
+	/// </summary>
+	public IntPtr FlightInsertAfter() => DesktopHost.InsertAfterAbove(_windows.Where(w => w.IsVisible).Select(w => w.Handle));
+
 	public void BringToFront(FenceWindow window)
 	{
 		DesktopHost.BringAboveFences(window.Handle, _windows.Select(w => w.Handle).ToHashSet());

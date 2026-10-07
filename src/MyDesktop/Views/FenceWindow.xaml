@@ -4,6 +4,7 @@
 		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
 		xmlns:sys="clr-namespace:System;assembly=System.Runtime"
 		xmlns:local="clr-namespace:MyDesktop.Views"
+		xmlns:models="clr-namespace:MyDesktop.Models"
 		Title="MyDesktop 分区"
 		WindowStyle="None"
 		AllowsTransparency="True"
@@ -23,7 +24,7 @@
 		<sys:Double x:Key="CellWidth">92</sys:Double>
 		<SolidColorBrush x:Key="FenceForeground" Color="White" />
 		<SolidColorBrush x:Key="FenceHover" Color="#22FFFFFF" />
-		<SolidColorBrush x:Key="FenceSelected" Color="#3DFFFFFF" />
+		<SolidColorBrush x:Key="FenceSelected" Color="#33FFFFFF" />
 		<SolidColorBrush x:Key="FenceSelectedBorder" Color="#59FFFFFF" />
 		<DropShadowEffect x:Key="TextShadow" ShadowDepth="1" BlurRadius="3" Opacity="0.75" Color="Black" />
 
@@ -36,6 +37,49 @@
 		<ItemsPanelTemplate x:Key="ListPanel">
 			<local:ListColumnsPanel />
 		</ItemsPanelTemplate>
+
+		<!-- 详细信息视图和资源管理器一样只排一列 -->
+		<ItemsPanelTemplate x:Key="DetailsPanel">
+			<StackPanel />
+		</ItemsPanelTemplate>
+
+		<!-- 详细信息视图后三列的宽度，按分区宽度在代码里设置，放不下的列宽度为 0 -->
+		<GridLength x:Key="DetailsDateWidth">0</GridLength>
+		<GridLength x:Key="DetailsTypeWidth">0</GridLength>
+		<GridLength x:Key="DetailsSizeWidth">0</GridLength>
+
+		<!-- 详细信息视图的表头格：悬停时有底色，点一下按这一列排序 -->
+		<Style x:Key="DetailsHeaderCell" TargetType="Border">
+			<Setter Property="Background" Value="Transparent" />
+			<Setter Property="CornerRadius" Value="4" />
+			<EventSetter Event="MouseLeftButtonUp" Handler="DetailsHeaderCell_MouseLeftButtonUp" />
+			<Style.Triggers>
+				<Trigger Property="IsMouseOver" Value="True">
+					<Setter Property="Background" Value="{DynamicResource FenceHover}" />
+				</Trigger>
+			</Style.Triggers>
+		</Style>
+		<Style x:Key="DetailsHeaderText" TargetType="TextBlock">
+			<Setter Property="Foreground" Value="{DynamicResource FenceForeground}" />
+			<Setter Property="Opacity" Value="0.7" />
+			<Setter Property="TextTrimming" Value="CharacterEllipsis" />
+		</Style>
+		<Style x:Key="DetailsSortGlyph" TargetType="TextBlock">
+			<Setter Property="Margin" Value="4,0,0,0" />
+			<Setter Property="VerticalAlignment" Value="Center" />
+			<Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
+			<Setter Property="FontSize" Value="8" />
+			<Setter Property="Foreground" Value="{DynamicResource FenceForeground}" />
+			<Setter Property="Opacity" Value="0.7" />
+		</Style>
+		<Style x:Key="DetailsInfoText" TargetType="TextBlock">
+			<Setter Property="Margin" Value="12,2,0,0" />
+			<Setter Property="VerticalAlignment" Value="Top" />
+			<Setter Property="TextTrimming" Value="CharacterEllipsis" />
+			<Setter Property="Foreground" Value="{DynamicResource FenceForeground}" />
+			<Setter Property="Opacity" Value="0.75" />
+			<Setter Property="Effect" Value="{DynamicResource TextShadow}" />
+		</Style>
 
 		<!-- 图标视图里是否显示图标名称，按设置在代码里替换 -->
 		<Visibility x:Key="IconNameVisibility">Visible</Visibility>
@@ -131,6 +175,60 @@
 				<DataTrigger Binding="{Binding IsInFlight}" Value="True">
 					<Setter TargetName="IconImage" Property="Opacity" Value="0" />
 					<Setter TargetName="NameText" Property="Opacity" Value="0" />
+				</DataTrigger>
+			</DataTemplate.Triggers>
+		</DataTemplate>
+
+		<!-- 详细信息视图的一行：图标、名称和列表视图一样，后面是修改日期、类型、大小，列宽与表头（DetailsHeader）一致 -->
+		<DataTemplate x:Key="DetailsTemplate" DataType="{x:Type local:FenceItem}">
+			<Grid x:Name="Row" ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="700">
+				<Grid.ColumnDefinitions>
+					<ColumnDefinition Width="Auto" />
+					<ColumnDefinition Width="*" />
+					<ColumnDefinition Width="{DynamicResource DetailsDateWidth}" />
+					<ColumnDefinition Width="{DynamicResource DetailsTypeWidth}" />
+					<ColumnDefinition Width="{DynamicResource DetailsSizeWidth}" />
+				</Grid.ColumnDefinitions>
+				<Image x:Name="IconImage"
+						Source="{Binding Icon}"
+						Width="20"
+						Height="20"
+						Margin="2,0,8,0"
+						VerticalAlignment="Top"
+						Stretch="Uniform"
+						RenderOptions.BitmapScalingMode="HighQuality" />
+				<TextBlock x:Name="NameText"
+						Grid.Column="1"
+						Margin="0,2,0,0"
+						VerticalAlignment="Top"
+						Text="{Binding DisplayName}"
+						TextTrimming="CharacterEllipsis"
+						Foreground="{DynamicResource FenceForeground}"
+						Effect="{DynamicResource TextShadow}" />
+				<TextBox x:Name="RenameBox"
+						Grid.Column="1"
+						VerticalAlignment="Center"
+						Visibility="Collapsed"
+						Style="{StaticResource RenameBoxStyle}"
+						Text="{Binding RenameText, UpdateSourceTrigger=PropertyChanged}"
+						KeyDown="RenameBox_KeyDown"
+						LostKeyboardFocus="RenameBox_LostKeyboardFocus" />
+				<TextBlock Grid.Column="2" Style="{StaticResource DetailsInfoText}" Text="{Binding ModifiedText}" />
+				<TextBlock Grid.Column="3" Style="{StaticResource DetailsInfoText}" Text="{Binding TypeName}" />
+				<TextBlock Grid.Column="4" Margin="12,2,4,0" Style="{StaticResource DetailsInfoText}" TextAlignment="Right" Text="{Binding SizeText}" />
+			</Grid>
+			<DataTemplate.Triggers>
+				<DataTrigger Binding="{Binding IsRenaming}" Value="True">
+					<Setter TargetName="RenameBox" Property="Visibility" Value="Visible" />
+					<Setter TargetName="NameText" Property="Visibility" Value="Hidden" />
+				</DataTrigger>
+				<!-- 与资源管理器一样，剪切后的图标半透明 -->
+				<DataTrigger Binding="{Binding IsCut}" Value="True">
+					<Setter TargetName="IconImage" Property="Opacity" Value="0.5" />
+				</DataTrigger>
+				<!-- 一键整理时图标还在飞来的路上 -->
+				<DataTrigger Binding="{Binding IsInFlight}" Value="True">
+					<Setter TargetName="Row" Property="Opacity" Value="0" />
 				</DataTrigger>
 			</DataTemplate.Triggers>
 		</DataTemplate>
@@ -315,8 +413,54 @@
 				</Border>
 
 				<Grid x:Name="ContentHost" Grid.Row="1" ClipToBounds="True">
+					<Grid.RowDefinitions>
+						<RowDefinition Height="Auto" />
+						<RowDefinition Height="*" />
+					</Grid.RowDefinitions>
+					<!-- 详细信息视图的表头：和每一行一样宽（宽度由代码按列表可用宽度设置，不含滚动条），左右留出和选中框一样的边距 -->
+					<Border x:Name="DetailsHeader"
+							Margin="4,2,0,2"
+							Padding="5,0"
+							HorizontalAlignment="Left"
+							BorderThickness="0,0,0,1"
+							BorderBrush="{DynamicResource FenceHover}"
+							Visibility="Collapsed">
+						<Grid>
+							<Grid.ColumnDefinitions>
+								<ColumnDefinition Width="*" />
+								<ColumnDefinition Width="{DynamicResource DetailsDateWidth}" />
+								<ColumnDefinition Width="{DynamicResource DetailsTypeWidth}" />
+								<ColumnDefinition Width="{DynamicResource DetailsSizeWidth}" />
+							</Grid.ColumnDefinitions>
+							<Border Padding="2,3,4,4" Style="{StaticResource DetailsHeaderCell}" Tag="{x:Static models:SortField.Name}">
+								<StackPanel Orientation="Horizontal">
+									<TextBlock Style="{StaticResource DetailsHeaderText}" Text="名称" />
+									<TextBlock x:Name="NameSortGlyph" Style="{StaticResource DetailsSortGlyph}" />
+								</StackPanel>
+							</Border>
+							<Border Grid.Column="1" Padding="12,3,4,4" Style="{StaticResource DetailsHeaderCell}" Tag="{x:Static models:SortField.Modified}">
+								<StackPanel Orientation="Horizontal">
+									<TextBlock Style="{StaticResource DetailsHeaderText}" Text="修改日期" />
+									<TextBlock x:Name="ModifiedSortGlyph" Style="{StaticResource DetailsSortGlyph}" />
+								</StackPanel>
+							</Border>
+							<Border Grid.Column="2" Padding="12,3,4,4" Style="{StaticResource DetailsHeaderCell}" Tag="{x:Static models:SortField.Type}">
+								<StackPanel Orientation="Horizontal">
+									<TextBlock Style="{StaticResource DetailsHeaderText}" Text="类型" />
+									<TextBlock x:Name="TypeSortGlyph" Style="{StaticResource DetailsSortGlyph}" />
+								</StackPanel>
+							</Border>
+							<Border Grid.Column="3" Padding="12,3,4,4" Style="{StaticResource DetailsHeaderCell}" Tag="{x:Static models:SortField.Size}">
+								<StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+									<TextBlock x:Name="SizeSortGlyph" Margin="0,0,4,0" Style="{StaticResource DetailsSortGlyph}" />
+									<TextBlock Style="{StaticResource DetailsHeaderText}" Text="大小" />
+								</StackPanel>
+							</Border>
+						</Grid>
+					</Border>
 					<!-- 输入首字母按显示名定位图标 -->
 					<ListBox x:Name="ItemsList"
+							Grid.Row="1"
 							TextSearch.TextPath="DisplayName"
 							Style="{StaticResource FenceListBox}"
 							ItemContainerStyle="{StaticResource FenceItemContainer}"
@@ -326,6 +470,7 @@
 							MouseRightButtonUp="ItemsList_MouseRightButtonUp"
 							SelectionChanged="ItemsList_SelectionChanged" />
 					<TextBlock x:Name="EmptyHint"
+							Grid.Row="1"
 							Margin="12"
 							HorizontalAlignment="Center"
 							VerticalAlignment="Center"
@@ -335,7 +480,7 @@
 							IsHitTestVisible="False"
 							Text="拖放文件到这里"
 							Foreground="{DynamicResource FenceForeground}" />
-					<Canvas IsHitTestVisible="False">
+					<Canvas Grid.RowSpan="2" IsHitTestVisible="False">
 						<!-- 拖动调整顺序时的插入位置 -->
 						<Rectangle x:Name="InsertMarker"
 								Visibility="Collapsed"

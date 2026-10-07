@@ -12,6 +12,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using MyDesktop.Core;
 using MyDesktop.Models;
@@ -28,6 +29,8 @@ namespace MyDesktop.Views;
 internal partial class FenceWindow : Window
 {
 	const double TitleBarDip = 30;
+	// 分区的边框粗细（Frame 的 BorderThickness）
+	const double FrameBorderDip = 1;
 	const double ResizeBorderDip = 5;
 	const double SnapDistanceDip = 12;
 	const double FadeMilliseconds = 180;
@@ -67,6 +70,16 @@ internal partial class FenceWindow : Window
 	string? _subFolder;
 	bool _allowClose;
 	bool _tempExpanded;
+	// 详细信息视图里名称列至少留的宽度，后三列的宽度
+	const double DetailsNameMinWidth = 120;
+	const double DetailsDateWidth = 116;
+	const double DetailsTypeWidth = 110;
+	const double DetailsSizeWidth = 80;
+	// 卷起、展开动画的裁剪区域，没在播时为 null
+	RectangleGeometry? _rollClip;
+	// 卷起、展开要挪窗口左上角时顶替显示的截图（见 MoveBehindStandIn）
+	StandInWindow? _standIn;
+	static readonly Duration RollDuration = TimeSpan.FromMilliseconds(180);
 	bool _menuOpen;
 
 	// 移动/缩放跟踪：按鼠标相对起点的绝对位移计算目标位置
@@ -114,6 +127,7 @@ internal partial class FenceWindow : Window
 	int _insertIndex = -1;
 	readonly DropPreview _dropPreview = new();
 	readonly ItemDropForwarder _forwarder = new();
+	readonly ClickToRename _clickRename;
 
 	public FenceWindow(FenceManager manager, FenceSettings model)
 	{
@@ -121,8 +135,17 @@ internal partial class FenceWindow : Window
 		Model = model;
 		InitializeComponent();
 		ItemsList.ItemsSource = _items;
+		_clickRename = new ClickToRename(BeginRename, item => IsActive && ItemsList.SelectedItems.Count == 1 && ItemsList.SelectedItem == item);
 		// 按在空白处时框选的处理会把事件标记为已处理，仍要收到它才能取消别处的选择
 		ItemsList.AddHandler(PreviewMouseDownEvent, new MouseButtonEventHandler(ItemsList_PreviewMouseDown), true);
+		// 列表可用宽度变了（分区改大小、出现或去掉滚动条）时，详细信息视图重排各列
+		ItemsList.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((_, e) =>
+		{
+			if (e.ViewportWidthChange != 0)
+			{
+				UpdateDetailsColumns();
+			}
+		}));
 		_refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
 		_refreshTimer.Tick += (_, _) =>
 		{
@@ -199,7 +222,7 @@ internal partial class FenceWindow : Window
 
 	IconSizeMode EffectiveIconSize => Model.IconSize ?? Settings.DefaultIconSize;
 
-	double IconDip => Model.View == FenceView.List ? Appearance.ListIconDip : EffectiveIconSize.ToDip();
+	double IconDip => Model.View == FenceView.Icons ? EffectiveIconSize.ToDip() : Appearance.ListIconDip;
 
 	public IReadOnlyList<FenceItem> Items => _items;
 
@@ -260,6 +283,8 @@ internal partial class FenceWindow : Window
 	{
 		_allowClose = true;
 		StopWatcher();
+		_clickRename.Cancel();
+		_standIn?.Dispose();
 		_refreshTimer.Stop();
 		_collapseTimer.Stop();
 		_buttonsTimer.Stop();
@@ -707,7 +732,7 @@ internal partial class FenceWindow : Window
 		// 留 1 像素余量，避免换算取整让刚好吸附到的尺寸少算一行
 		int rows = grid.Heights.Count(h => h <= rect.Height + 1);
 		int columns = grid.Widths.Count(w => w <= rect.Width + 1);
-		bool list = Model.View == FenceView.List;
+		bool list = Model.View != FenceView.Icons;
 		bool rowsFit = grid.Heights.Any(h => Math.Abs(h - rect.Height) <= 1);
 		// 列表视图只有一列，只看行
 		bool columnsFit = list || grid.Widths.Any(w => Math.Abs(w - rect.Width) <= 1);
@@ -953,11 +978,23 @@ internal partial class FenceWindow : Window
 
 	public void ApplyBounds()
 	{
+		// 别处直接摆放（缩放变化、同组同步、切换标签等）时，正在播的卷起、展开动画直接跳到结束
+		StopRollAnimation();
+		PlaceWindow();
+	}
+
+	/// <summary>
+	/// 按卷起状态窗口应占的范围（物理像素）。
+	/// </summary>
+	RECT TargetRect() => !Model.RolledUp ? ExpandedRect : IsCollapsed ? CollapsedRect() : TempExpandedRect();
+
+	void PlaceWindow()
+	{
 		if (_hwnd == IntPtr.Zero)
 		{
 			return;
 		}
-		var rect = !Model.RolledUp ? ExpandedRect : IsCollapsed ? CollapsedRect() : TempExpandedRect();
+		var rect = TargetRect();
 		// WPF 在窗口尺寸变化时会立即重新布局并出一帧：展开时先让内容区可见再放大窗口，否则那一帧只有背景、没有图标；
 		// 收起时先缩小窗口再折叠内容区，否则那一帧是空着的大窗口
 		bool collapsed = IsCollapsed;
@@ -976,7 +1013,219 @@ internal partial class FenceWindow : Window
 		}
 	}
 
-	int CollapsedHeight() => (int)Math.Round((TitleBarDip + 2) * ScaleFactor);
+	/// <summary>
+	/// 卷起、展开（包括悬停临时展开和收回）时带动画：展开时窗口先放大到展开后的范围、只露出标题栏那一条，裁剪区域再伸展开；
+	/// 收起时裁剪区域先缩回那一条，再缩小窗口。内容始终按展开的大小排好，不会边动边重新排版；动画中途反向时从当前位置接着走。
+	/// </summary>
+	void ApplyRollBounds()
+	{
+		bool running = _rollClip != null;
+		bool shownCollapsed = ContentHost.Visibility != Visibility.Visible;
+		if (_hwnd == IntPtr.Zero || !IsVisible || (!running && shownCollapsed == IsCollapsed))
+		{
+			ApplyBounds();
+			return;
+		}
+		double? extent = _rollClip is { } clip ? RevealExtent(clip.Rect) : null;
+		StopRollAnimation();
+		double strip = CollapsedHeight() / ScaleFactor;
+		var root = (FrameworkElement)Content;
+		if (IsCollapsed)
+		{
+			var size = new Size(root.ActualWidth, root.ActualHeight);
+			// 缩回那一条后再缩小窗口；挪窗口前裁剪还在，截图（如果要顶替）和屏幕上看到的一样
+			AnimateReveal(size, extent ?? RevealExtent(size), strip, () => MoveWindow(RevealRect(size, strip), () =>
+			{
+				ClearRollClip();
+				PlaceWindow();
+			}, null));
+		}
+		else
+		{
+			var target = TargetRect();
+			var size = new Size(target.Width / ScaleFactor, target.Height / ScaleFactor);
+			double from = extent ?? strip;
+			// 先设好裁剪再放大窗口（窗口尺寸一变 WPF 就会出一帧），放好后再伸展开
+			MoveWindow(new Rect(0, 0, root.ActualWidth, root.ActualHeight), () =>
+			{
+				SetRollClip(RevealRect(size, from));
+				PlaceWindow();
+			}, () => AnimateReveal(size, from, RevealExtent(size), null));
+		}
+	}
+
+	void AnimateReveal(Size size, double from, double to, Action? completed)
+	{
+		var clip = SetRollClip(RevealRect(size, from));
+		var animation = new RectAnimation(RevealRect(size, from), RevealRect(size, to), RollDuration)
+		{
+			EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+		};
+		// 结束事件在渲染过程中触发，收尾（可能要缩小窗口）挪到之后再做；在那之前裁剪停在终点，画面不变
+		animation.Completed += (_, _) => Dispatcher.BeginInvoke(() =>
+		{
+			// 已被新的动画或直接摆放接替
+			if (_rollClip != clip)
+			{
+				return;
+			}
+			if (completed != null)
+			{
+				completed();
+			}
+			else
+			{
+				ClearRollClip();
+			}
+		});
+		clip.BeginAnimation(RectangleGeometry.RectProperty, animation);
+	}
+
+	RectangleGeometry SetRollClip(Rect rect)
+	{
+		var clip = new RectangleGeometry(rect, Settings.CornerRadius, Settings.CornerRadius);
+		_rollClip = clip;
+		((UIElement)Content).Clip = clip;
+		return clip;
+	}
+
+	void ClearRollClip()
+	{
+		_rollClip = null;
+		((UIElement)Content).Clip = null;
+	}
+
+	void StopRollAnimation()
+	{
+		if (_rollClip == null)
+		{
+			return;
+		}
+		_rollClip.BeginAnimation(RectangleGeometry.RectProperty, null);
+		ClearRollClip();
+	}
+
+	/// <summary>
+	/// 执行 move 摆放窗口，再执行 then；要挪动窗口左上角时（标题栏在下边、右边的分区卷起和展开）先用截图顶替。
+	/// </summary>
+	/// <param name="visible">窗口里现在看得到的部分（DIP），顶替时截这一块。</param>
+	void MoveWindow(Rect visible, Action move, Action? then)
+	{
+		var bounds = GetBounds();
+		var target = TargetRect();
+		// 窗口没显示时（比如动画途中标签被切走）直接挪
+		if (IsVisible && (bounds.Left != target.Left || bounds.Top != target.Top))
+		{
+			MoveBehindStandIn(visible, move);
+		}
+		else
+		{
+			move();
+		}
+		then?.Invoke();
+	}
+
+	/// <summary>
+	/// 透明窗口挪动左上角时，DWM 可能正好在窗口已经挪了、新画面还没给上的那一刻合成一帧，旧画面摆在新位置上闪一下
+	/// （实测：展开时标题栏那一条闪到另一侧，收起时整条消失；标题栏在上边、左边时卷起展开不挪左上角，所以不闪）。
+	/// 所以先用截图在同一次屏幕刷新里顶替分区（分区用 DWM 藏起来），挪好再换回：WPF 在 SetWindowPos 里就同步画好了新的一帧（实测），挪完马上就能换回。
+	/// </summary>
+	void MoveBehindStandIn(Rect visible, Action move)
+	{
+		bool shown = ShowStandIn(visible);
+		move();
+		if (shown)
+		{
+			DwmFlush();
+			SetCloaked(false);
+			_standIn?.Hide();
+		}
+	}
+
+	/// <summary>
+	/// 把分区 visible（DIP）里现在的画面放到截图窗口上，并在同一次屏幕刷新里把分区藏起来；失败时返回 false，分区照常显示。
+	/// </summary>
+	bool ShowStandIn(Rect visible)
+	{
+		try
+		{
+			double scale = ScaleFactor;
+			var bounds = GetBounds();
+			var screen = new RECT(bounds.Left + (int)Math.Round(visible.Left * scale), bounds.Top + (int)Math.Round(visible.Top * scale),
+					bounds.Left + (int)Math.Round(visible.Right * scale), bounds.Top + (int)Math.Round(visible.Bottom * scale));
+			var image = Snapshot(visible, screen.Width, screen.Height);
+			_standIn ??= new StandInWindow();
+			// 截图显示出来和分区藏起来要落在同一次屏幕刷新里：截图带透明度，两个叠着显示会更暗
+			DwmFlush();
+			_standIn.Show(image, screen, _hwnd);
+			SetCloaked(true);
+			return true;
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("卷起、展开时截图顶替失败", ex);
+			_standIn?.Hide();
+			return false;
+		}
+	}
+
+	/// <summary>
+	/// 用 WPF 把窗口里 region（DIP）范围的画面画成图：width × height 物理像素、预乘透明度，和屏幕上的像素一一对应。
+	/// 不截屏幕：动态壁纸（Wallpaper Engine）用 GDI 截屏是黑的，截进去后分区背后会变黑闪一下（实测）；带着透明度，后面的壁纸照常透出来。
+	/// </summary>
+	BitmapSource Snapshot(Rect region, int width, int height)
+	{
+		double scale = ScaleFactor;
+		var visual = new DrawingVisual();
+		using (var context = visual.RenderOpen())
+		{
+			var brush = new VisualBrush((Visual)Content) { Viewbox = region, ViewboxUnits = BrushMappingMode.Absolute, Stretch = Stretch.Fill };
+			context.DrawRectangle(brush, null, new Rect(0, 0, width / scale, height / scale));
+		}
+		var bitmap = new RenderTargetBitmap(width, height, 96 * scale, 96 * scale, PixelFormats.Pbgra32);
+		bitmap.Render(visual);
+		bitmap.Freeze();
+		return bitmap;
+	}
+
+	/// <summary>
+	/// 用 DWM 把窗口藏起来（cloak）或取消：藏着时照常绘制，只是不显示在屏幕上，显示和隐藏都在下一次屏幕刷新时生效。
+	/// </summary>
+	public void SetCloaked(bool cloaked)
+	{
+		if (_hwnd == IntPtr.Zero)
+		{
+			return;
+		}
+		int value = cloaked ? 1 : 0;
+		DwmSetWindowAttribute(_hwnd, DWMWA_CLOAK, ref value, sizeof(int));
+	}
+
+	/// <summary>
+	/// 从标题栏所在的一侧露出 extent 那么高（上下收起时）或那么宽（左右收起时）的范围（DIP）。
+	/// </summary>
+	Rect RevealRect(Size size, double extent) => Model.RollEdge switch
+	{
+		RollEdge.Top => new Rect(0, 0, size.Width, extent),
+		RollEdge.Bottom => new Rect(0, size.Height - extent, size.Width, extent),
+		RollEdge.Left => new Rect(0, 0, extent, size.Height),
+		RollEdge.Right => new Rect(size.Width - extent, 0, extent, size.Height),
+	};
+
+	double RevealExtent(Size size) => IsVerticalRoll ? size.Width : size.Height;
+
+	double RevealExtent(Rect rect) => IsVerticalRoll ? rect.Width : rect.Height;
+
+	/// <summary>
+	/// 收起后剩下那一条的厚度（物理像素）：标题栏和两侧边框按 WPF 布局取整的方式各自取整再相加。
+	/// 不能把 TitleBarDip + 2 乘缩放比例后整体取整：150% 时 1 DIP 的边框取整成 2 像素，三者共 49 像素，整体算只有 48，
+	/// 收起时标题栏被挤偏 1 像素，标题栏在下边、右边的分区展开、收起时就会动一下（在上边、左边时不受影响）。
+	/// </summary>
+	int CollapsedHeight()
+	{
+		double scale = ScaleFactor;
+		return (int)Math.Round(TitleBarDip * scale) + 2 * (int)Math.Round(FrameBorderDip * scale);
+	}
 
 	RECT ExpandedRect => new(Model.X, Model.Y, Model.X + Model.Width, Model.Y + Model.Height);
 
@@ -1064,7 +1313,7 @@ internal partial class FenceWindow : Window
 		{
 			_manager.BringToFront(this);
 		}
-		ApplyBounds();
+		ApplyRollBounds();
 		_manager.SyncGroup(this);
 		_manager.SaveSoon();
 		_manager.OnFenceLayoutChanged();
@@ -1201,26 +1450,47 @@ internal partial class FenceWindow : Window
 	}
 
 	/// <summary>
-	/// 切换标签时接替当前显示的标签：同样的位置和悬停展开状态，先显示在它正下方，等画好再由调用方隐藏它，切换时不闪。
+	/// 切换标签时接替当前显示的标签：同样的位置和悬停展开状态。先用 DWM 藏着（cloak）显示出来、排到它正下方，
+	/// 等画好后由 TakeOverFrom 在同一次屏幕刷新里换手：分区多是半透明的，两个叠着显示时下面那个会透出来，切换时会闪。
 	/// </summary>
 	public async Task ShowInPlaceOf(FenceWindow current)
 	{
 		_tempExpanded = current._tempExpanded;
 		ApplyBounds();
-		Show();
-		// 不显示期间缩放比例变过的话，按现在的比例重新摆放
-		if (HasStaleDpi())
+		SetCloaked(true);
+		try
 		{
-			RefreshDpi();
+			Show();
+			// 不显示期间缩放比例变过的话，按现在的比例重新摆放
+			if (HasStaleDpi())
+			{
+				RefreshDpi();
+			}
+			DesktopHost.PlaceBelow(_hwnd, current.Handle);
+			// 第一帧排版，第二帧图标画出来，再等一帧送到屏幕上
+			await FlyingIcon.NextFrame();
+			await FlyingIcon.NextFrame();
+			await FlyingIcon.NextFrame();
 		}
-		DesktopHost.PlaceBelow(_hwnd, current.Handle);
-		// 第一帧排版，第二帧图标画出来
-		await FlyingIcon.NextFrame();
-		await FlyingIcon.NextFrame();
+		catch
+		{
+			SetCloaked(false);
+			throw;
+		}
 		if (_tempExpanded)
 		{
 			RestartTimer(_collapseTimer);
 		}
+	}
+
+	/// <summary>
+	/// 和 current 在同一次屏幕刷新里换手：自己显示出来，current 藏起来（之后由调用方隐藏它、取消 cloak）。
+	/// </summary>
+	public void TakeOverFrom(FenceWindow current)
+	{
+		DwmFlush();
+		SetCloaked(false);
+		current.SetCloaked(true);
 	}
 
 	/// <summary>
@@ -1279,7 +1549,7 @@ internal partial class FenceWindow : Window
 		TitleBar.Background = Frozen(light ? Color.FromArgb(0x12, 0, 0, 0) : Color.FromArgb(0x30, 0, 0, 0));
 		Resources["FenceForeground"] = Frozen(light ? Color.FromRgb(0x1F, 0x1F, 0x1F) : Colors.White);
 		Resources["FenceHover"] = Frozen(light ? Color.FromArgb(0x14, 0, 0, 0) : Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF));
-		Resources["FenceSelected"] = Frozen(light ? Color.FromArgb(0x26, 0, 0, 0) : Color.FromArgb(0x3D, 0xFF, 0xFF, 0xFF));
+		Resources["FenceSelected"] = Frozen(light ? Color.FromArgb(0x1E, 0, 0, 0) : Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF));
 		Resources["FenceSelectedBorder"] = Frozen(light ? Color.FromArgb(0x40, 0, 0, 0) : Color.FromArgb(0x59, 0xFF, 0xFF, 0xFF));
 		Resources["TextShadow"] = Settings.TextShadow && !light ? TextShadowEffect : null;
 		UpdateRollVisuals();
@@ -1348,24 +1618,100 @@ internal partial class FenceWindow : Window
 
 	public void ApplyViewMode()
 	{
-		bool list = Model.View == FenceView.List;
+		var view = Model.View;
 		double iconDip = EffectiveIconSize.ToDip();
 		Resources["IconSize"] = iconDip;
 		// 不显示名称时格子只留出图标和一点边距
 		Resources["CellWidth"] = Settings.ShowIconNames ? iconDip + 44 : iconDip + 16;
 		Resources["IconNameVisibility"] = Settings.ShowIconNames ? Visibility.Visible : Visibility.Collapsed;
-		// 图标视图不显示名称时也不展开（列表视图总是显示名称）
-		if (!list && !Settings.ShowIconNames && _expandedName != null)
+		// 详细信息视图和不显示名称的图标视图不展开名称
+		if (!CanExpandNames && _expandedName != null)
 		{
 			_expandedName.IsNameExpanded = false;
 			_expandedName = null;
 		}
-		ItemsList.ItemsPanel = (ItemsPanelTemplate)FindResource(list ? "ListPanel" : "IconsPanel");
-		ItemsList.ItemTemplate = (DataTemplate)FindResource(list ? "ListTemplate" : "IconTemplate");
-		ItemsList.ItemContainerStyle = (Style)FindResource(list ? "FenceListItemContainer" : "FenceItemContainer");
+		var (panel, template) = view switch
+		{
+			FenceView.Icons => ("IconsPanel", "IconTemplate"),
+			FenceView.List => ("ListPanel", "ListTemplate"),
+			FenceView.Details => ("DetailsPanel", "DetailsTemplate"),
+		};
+		ItemsList.ItemsPanel = (ItemsPanelTemplate)FindResource(panel);
+		ItemsList.ItemTemplate = (DataTemplate)FindResource(template);
+		ItemsList.ItemContainerStyle = (Style)FindResource(view == FenceView.Icons ? "FenceItemContainer" : "FenceListItemContainer");
+		DetailsHeader.Visibility = view == FenceView.Details ? Visibility.Visible : Visibility.Collapsed;
+		UpdateDetailsColumns();
+		UpdateDetailsHeader();
 		foreach (var item in _items)
 		{
 			RequestIcon(item);
+		}
+	}
+
+	/// <summary>
+	/// 选中时展开完整名称：列表视图总是展开，图标视图要显示名称才展开，详细信息视图和资源管理器一样不展开。
+	/// </summary>
+	bool CanExpandNames => Model.View switch
+	{
+		FenceView.Icons => Settings.ShowIconNames,
+		FenceView.List => true,
+		FenceView.Details => false,
+	};
+
+	/// <summary>
+	/// 详细信息视图的列宽：表头和每一行一样宽（不含滚动条）；名称至少留 DetailsNameMinWidth，放不下时从右往左依次不显示大小、类型、修改日期。
+	/// </summary>
+	void UpdateDetailsColumns()
+	{
+		if (Model.View != FenceView.Details)
+		{
+			return;
+		}
+		_scroller ??= FindDescendant<ScrollViewer>(ItemsList);
+		if (_scroller == null)
+		{
+			return;
+		}
+		double width = _scroller.ViewportWidth;
+		DetailsHeader.Width = width;
+		// 每一行左右各有 5（选中框的边框和内边距），名称前面是 30 宽的图标
+		double rest = width - 10 - 30 - DetailsNameMinWidth;
+		bool date = rest >= DetailsDateWidth;
+		bool type = date && rest >= DetailsDateWidth + DetailsTypeWidth;
+		bool size = type && rest >= DetailsDateWidth + DetailsTypeWidth + DetailsSizeWidth;
+		SetColumnWidth("DetailsDateWidth", date ? DetailsDateWidth : 0);
+		SetColumnWidth("DetailsTypeWidth", type ? DetailsTypeWidth : 0);
+		SetColumnWidth("DetailsSizeWidth", size ? DetailsSizeWidth : 0);
+	}
+
+	void SetColumnWidth(string key, double width)
+	{
+		if (Resources[key] is not GridLength current || current.Value != width)
+		{
+			Resources[key] = new GridLength(width);
+		}
+	}
+
+	/// <summary>
+	/// 表头上按哪一列排序就在列名旁标出升序或降序。
+	/// </summary>
+	void UpdateDetailsHeader()
+	{
+		foreach (var (glyph, field) in new[] { (NameSortGlyph, SortField.Name), (ModifiedSortGlyph, SortField.Modified), (TypeSortGlyph, SortField.Type), (SizeSortGlyph, SortField.Size) })
+		{
+			glyph.Text = Model.SortBy != field ? string.Empty : Model.SortDescending ? "\ue70d" : "\ue70e";
+		}
+	}
+
+	/// <summary>
+	/// 和资源管理器一样点表头按这一列排序，再点一次反过来。
+	/// </summary>
+	void DetailsHeaderCell_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+	{
+		if (sender is FrameworkElement { Tag: SortField field })
+		{
+			SetSort(field, Model.SortBy == field && !Model.SortDescending);
+			e.Handled = true;
 		}
 	}
 
@@ -1464,7 +1810,7 @@ internal partial class FenceWindow : Window
 			_tempExpanded = true;
 			// 展开的部分盖在旁边的分区上面
 			_manager.BringToFront(this);
-			ApplyBounds();
+			ApplyRollBounds();
 		}
 	}
 
@@ -1509,7 +1855,7 @@ internal partial class FenceWindow : Window
 			return;
 		}
 		_tempExpanded = false;
-		ApplyBounds();
+		ApplyRollBounds();
 	}
 
 	static void RestartTimer(DispatcherTimer timer)
@@ -1948,8 +2294,7 @@ internal partial class FenceWindow : Window
 	/// </summary>
 	void ItemsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
 	{
-		// 图标视图不显示名称时不展开
-		_expandedName = ItemOps.ExpandSelectedName(ItemsList, e, _expandedName, Model.View == FenceView.List || Settings.ShowIconNames);
+		_expandedName = ItemOps.ExpandSelectedName(ItemsList, e, _expandedName, CanExpandNames);
 		if (e.AddedItems.Count > 0 && !IsAdditive)
 		{
 			_manager.OnSelectionScopeActivated(this);
@@ -1964,6 +2309,7 @@ internal partial class FenceWindow : Window
 		}
 		CommitAllRenames();
 		var item = ItemFromSource(e.OriginalSource);
+		_clickRename.Press(e, item, _manager.AllSelectedItems() is [var only] && only == item);
 		_pressPoint = e.GetPosition(ContentHost);
 		_pressedItem = item;
 		_deferSelection = false;
@@ -2054,12 +2400,15 @@ internal partial class FenceWindow : Window
 			ItemsList.UnselectAll();
 			ItemsList.SelectedItem = _pressedItem;
 		}
+		// 没有拖动、抬起时还在按下的图标上：单击的是已选中图标的名称时，过一会儿开始改名
+		_clickRename.Release(_pressedItem);
 		_deferSelection = false;
 		_pressedItem = null;
 	}
 
 	void ItemsList_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
 	{
+		_clickRename.Cancel();
 		if (IsInside<ScrollBar>(e.OriginalSource) || IsInside<TextBox>(e.OriginalSource))
 		{
 			return;
@@ -2407,6 +2756,7 @@ internal partial class FenceWindow : Window
 					sub.Add(size.DisplayName(), () => SetView(FenceView.Icons, size), isChecked: Model.View == FenceView.Icons && EffectiveIconSize == size, radio: true);
 				}
 				sub.Add("列表", () => SetView(FenceView.List, Model.IconSize), isChecked: Model.View == FenceView.List, radio: true);
+				sub.Add("详细信息", () => SetView(FenceView.Details, Model.IconSize), isChecked: Model.View == FenceView.Details, radio: true);
 			});
 			menu.AddSubMenu("背景颜色", sub =>
 			{
@@ -2539,6 +2889,7 @@ internal partial class FenceWindow : Window
 		Model.SortBy = field;
 		Model.SortDescending = descending;
 		RefreshItems();
+		UpdateDetailsHeader();
 		_manager.SaveSoon();
 	}
 
@@ -2876,6 +3227,7 @@ internal partial class FenceWindow : Window
 	protected override void OnPreviewKeyDown(KeyEventArgs e)
 	{
 		base.OnPreviewKeyDown(e);
+		_clickRename.Cancel();
 		if (e.Handled || e.OriginalSource is TextBox)
 		{
 			return;
@@ -2904,6 +3256,10 @@ internal partial class FenceWindow : Window
 				break;
 			case Key.F5:
 				RefreshItems();
+				break;
+			case Key.Escape:
+				// 和桌面上一样，按 Esc 取消选中
+				ItemsList.UnselectAll();
 				break;
 			case Key.A when ctrl:
 				// 全选只选这个分区里的，别处的选择取消，免得接着删除时连带别处的图标
@@ -2949,7 +3305,7 @@ internal partial class FenceWindow : Window
 			{
 				_tempExpanded = true;
 				_manager.BringToFront(this);
-				ApplyBounds();
+				ApplyRollBounds();
 			}
 		}
 		e.Effects = ComputeEffect(e);
@@ -3165,8 +3521,8 @@ internal partial class FenceWindow : Window
 	int GetInsertIndex(Point position, out Rect? marker)
 	{
 		marker = null;
-		// 列表视图只有一列时上下插入（横线），排成多列后和图标视图一样左右插入（竖线）
-		bool list = Model.View == FenceView.List && ListColumns() <= 1;
+		// 详细信息视图和只有一列的列表视图上下插入（横线），排成多列后和图标视图一样左右插入（竖线）
+		bool list = Model.View == FenceView.Details || (Model.View == FenceView.List && ListColumns() <= 1);
 		Rect? previous = null;
 		for (int i = 0; i < _items.Count; i++)
 		{

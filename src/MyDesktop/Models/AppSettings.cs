@@ -24,6 +24,10 @@ public enum FenceView
 {
 	Icons,
 	List,
+	/// <summary>
+	/// 和资源管理器的「详细信息」一样一行一项，名称后面是修改日期、类型、大小。
+	/// </summary>
+	Details,
 }
 
 /// <summary>

@@ -108,6 +108,16 @@ public sealed class FenceItem : INotifyPropertyChanged
 
 	public DateTime Modified { get; private set; }
 
+	/// <summary>
+	/// 详细信息视图里的修改日期；此电脑这类系统图标没有。
+	/// </summary>
+	public string ModifiedText => IsVirtual ? string.Empty : $"{Modified:yyyy/M/d HH:mm}";
+
+	/// <summary>
+	/// 详细信息视图里的大小；文件夹和系统图标不显示。
+	/// </summary>
+	public string SizeText => IsFolder || IsVirtual ? string.Empty : FormatSize(Size);
+
 	public ImageSource? Icon
 	{
 		get => _icon;
@@ -229,6 +239,8 @@ public sealed class FenceItem : INotifyPropertyChanged
 		Modified = modified;
 		Size = size;
 		OnPropertyChanged(nameof(ToolTipText));
+		OnPropertyChanged(nameof(ModifiedText));
+		OnPropertyChanged(nameof(SizeText));
 		return true;
 	}
 

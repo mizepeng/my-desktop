@@ -141,6 +141,21 @@ internal static class DesktopHost
 	/// <summary>
 	/// 按当前层级从上到下排列这些窗口（EnumWindows 按层级从上到下枚举顶层窗口）。
 	/// </summary>
+	/// <summary>
+	/// 要把一个窗口摆到 windows（连同图标层）里最上面那个的正上方时 SetWindowPos 用的 hWndInsertAfter：原本紧挨在它上面的窗口；
+	/// 它已经在最上面、或者上面紧挨着的是置顶窗口时，用普通窗口的最上层。
+	/// </summary>
+	public static IntPtr InsertAfterAbove(IEnumerable<IntPtr> windows)
+	{
+		var top = TopToBottom(windows.Concat(_layers.Windows)).FirstOrDefault();
+		if (top == IntPtr.Zero)
+		{
+			return HWND_TOP;
+		}
+		var above = GetWindow(top, GW_HWNDPREV);
+		return above == IntPtr.Zero || (GetWindowLongPtr(above, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0 ? HWND_TOP : above;
+	}
+
 	public static List<IntPtr> TopToBottom(IEnumerable<IntPtr> windows)
 	{
 		var set = windows.Where(h => h != IntPtr.Zero).ToHashSet();

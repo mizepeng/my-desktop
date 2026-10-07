@@ -162,8 +162,10 @@ internal static class ShellIconLoader
 		var factory = (IShellItemImageFactory)Marshal.GetObjectForIUnknown(ptr);
 		try
 		{
-			// 优先取缩略图（图片、视频等），取不到再退回普通图标
-			if (factory.GetImage(new SIZE(size, size), SIIGBF_RESIZETOFIT, out var bitmap) != 0 || bitmap == IntPtr.Zero)
+			// 优先取缩略图（图片、视频等），取不到再退回普通图标。文件夹只取图标：装着文件的文件夹的缩略图是系统自带的黄色文件夹
+			// （露出里面的内容），不随用户换的图标主题变，和空文件夹、分区标签上的文件夹图标对不上
+			uint flags = Directory.Exists(path) ? SIIGBF_ICONONLY : SIIGBF_RESIZETOFIT;
+			if (factory.GetImage(new SIZE(size, size), flags, out var bitmap) != 0 || bitmap == IntPtr.Zero)
 			{
 				if (factory.GetImage(new SIZE(size, size), SIIGBF_ICONONLY, out bitmap) != 0 || bitmap == IntPtr.Zero)
 				{

@@ -80,6 +80,8 @@
 		</Style.Triggers>
 		<Setter Property="FocusVisualStyle" Value="{x:Null}" />
 		<Setter Property="Margin" Value="1" />
+		<!-- 悬停、选中的底色按图标实际内容的大小画，不随同一行里最高的图标拉长 -->
+		<Setter Property="VerticalAlignment" Value="Top" />
 		<Setter Property="Padding" Value="3,5,3,4" />
 		<Setter Property="HorizontalContentAlignment" Value="Stretch" />
 		<Setter Property="Template">
@@ -101,7 +103,6 @@
 									BorderThickness="1"
 									Padding="{TemplateBinding Padding}"
 									Background="{DynamicResource FenceSelected}"
-									BorderBrush="{DynamicResource FenceSelectedBorder}"
 									ToolTip="{Binding ToolTipText}"
 									ToolTipService.InitialShowDelay="700">
 								<Grid>
@@ -143,9 +144,9 @@
 						<Trigger Property="IsMouseOver" Value="True">
 							<Setter TargetName="Bd" Property="Background" Value="{DynamicResource FenceHover}" />
 						</Trigger>
+						<!-- 选中和悬停一样不带边框，底色略亮一点 -->
 						<Trigger Property="IsSelected" Value="True">
 							<Setter TargetName="Bd" Property="Background" Value="{DynamicResource FenceSelected}" />
-							<Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource FenceSelectedBorder}" />
 						</Trigger>
 						<!-- 拖动的内容悬停在这个图标上，松手会交给它处理 -->
 						<DataTrigger Binding="{Binding IsDropTarget}" Value="True">

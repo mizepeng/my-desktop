@@ -10,7 +10,8 @@ using static MyDesktop.Native.NativeMethods;
 namespace MyDesktop.Views;
 
 /// <summary>
-/// 一键整理、删除分区动画里飞行的图标：置顶、鼠标穿透、不抢焦点的小窗口，按屏幕物理像素移动和缩放。
+/// 一键整理、删除分区动画里飞行的图标：鼠标穿透、不抢焦点的小窗口，按屏幕物理像素移动和缩放。
+/// 层级和桌面同一层（紧贴在最上面的分区之上），不置顶：桌面被别的程序挡住时动画也被挡住。
 /// 每个图标一个小窗口，比铺满屏幕的透明窗口省得多（透明窗口每帧都要整块重画）。
 /// </summary>
 internal sealed class FlyingIcon : Window
@@ -31,16 +32,19 @@ internal sealed class FlyingIcon : Window
 	public static readonly TimeSpan Stagger = TimeSpan.FromMilliseconds(40);
 
 	IntPtr _hwnd;
+	readonly IntPtr _insertAfter;
+	bool _placed;
 
-	public FlyingIcon(ImageSource icon)
+	/// <param name="insertAfter">层级上排在这个窗口之后，见 FenceManager.FlightInsertAfter。</param>
+	public FlyingIcon(ImageSource icon, IntPtr insertAfter)
 	{
+		_insertAfter = insertAfter;
 		WindowStyle = WindowStyle.None;
 		AllowsTransparency = true;
 		Background = Brushes.Transparent;
 		ResizeMode = ResizeMode.NoResize;
 		ShowInTaskbar = false;
 		ShowActivated = false;
-		Topmost = true;
 		var image = new Image
 		{
 			Source = icon,
@@ -70,7 +74,10 @@ internal sealed class FlyingIcon : Window
 			_hwnd = new WindowInteropHelper(this).EnsureHandle();
 		}
 		int pad = (int)Math.Round(ShadowPad * GetDpiForWindow(_hwnd) / 96.0);
-		SetWindowPos(_hwnd, HWND_TOPMOST, image.Left - pad, image.Top - pad, image.Width + pad * 2, image.Height + pad * 2, SWP_NOACTIVATE);
+		// 第一次摆放时定好层级，之后每帧只挪位置
+		uint flags = _placed ? SWP_NOACTIVATE | SWP_NOZORDER : SWP_NOACTIVATE;
+		SetWindowPos(_hwnd, _insertAfter, image.Left - pad, image.Top - pad, image.Width + pad * 2, image.Height + pad * 2, flags);
+		_placed = true;
 		Opacity = opacity;
 	}
 

@@ -144,6 +144,7 @@ internal sealed class DesktopOrganizer : IDisposable
 	{
 		var flights = new List<Task>();
 		var windows = _manager.Windows.Where(w => !w.Model.IsPortal).ToList();
+		var insertAfter = _manager.FlightInsertAfter();
 		try
 		{
 			var groupDelay = TimeSpan.Zero;
@@ -158,7 +159,7 @@ internal sealed class DesktopOrganizer : IDisposable
 					{
 						continue;
 					}
-					var flying = new FlyingIcon(icon);
+					var flying = new FlyingIcon(icon, insertAfter);
 					flying.Place(source, 1);
 					flying.Show();
 					flights.Add(FlyInAsync(window, item.FullPath, flying, source, delay));
@@ -225,7 +226,7 @@ internal sealed class DesktopOrganizer : IDisposable
 			await Dispatcher.Yield(DispatcherPriority.Loaded);
 			var target = window.GetIconRect(key);
 			var to = target ?? FlyingIcon.CenteredIn(window.GetBounds(), source.Rect.Width / 2, source.Rect.Height / 2);
-			flying = new FlyingIcon(source.Icon);
+			flying = new FlyingIcon(source.Icon, _manager.FlightInsertAfter());
 			flying.Place(source.Rect, 1);
 			// 桌面原处的图标与飞行的图标同时换手
 			_manager.TakeOff(key);
