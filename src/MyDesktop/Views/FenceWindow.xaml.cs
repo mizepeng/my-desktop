@@ -2034,11 +2034,15 @@ internal partial class FenceWindow : Window
 		{
 			return fresh;
 		}
+		bool showHidden = Settings.ShowHiddenFiles;
+		bool showProtected = showHidden && DesktopHost.ShowsProtectedFiles();
 		try
 		{
 			foreach (var info in new DirectoryInfo(folder).EnumerateFileSystemInfos())
 			{
-				if (!Settings.ShowHiddenFiles && (info.Attributes & (FileAttributes.Hidden | FileAttributes.System)) != 0)
+				// 和资源管理器一样只看隐藏属性，只带系统属性的照常显示；同时带系统属性的是 desktop.ini 这类受保护的文件，还要资源管理器设置了显示它们
+				var attributes = info.Attributes;
+				if ((attributes & FileAttributes.Hidden) != 0 && ((attributes & FileAttributes.System) != 0 ? !showProtected : !showHidden))
 				{
 					continue;
 				}

@@ -167,8 +167,12 @@
 							<Setter TargetName="ExpandedListView" Property="Visibility" Value="Visible" />
 						</Trigger>
 						<DataTrigger Binding="{Binding IsCut}" Value="True">
-							<Setter TargetName="ExpandedIcon" Property="Opacity" Value="0.5" />
-							<Setter TargetName="ExpandedListIcon" Property="Opacity" Value="0.5" />
+							<Setter TargetName="ExpandedIcon" Property="Opacity" Value="0.4" />
+							<Setter TargetName="ExpandedListIcon" Property="Opacity" Value="0.4" />
+						</DataTrigger>
+						<DataTrigger Binding="{Binding IsHidden}" Value="True">
+							<Setter TargetName="ExpandedIcon" Property="Opacity" Value="0.4" />
+							<Setter TargetName="ExpandedListIcon" Property="Opacity" Value="0.4" />
 						</DataTrigger>
 						<DataTrigger Binding="{Binding IsInFlight}" Value="True">
 							<Setter TargetName="Expanded" Property="Opacity" Value="0" />

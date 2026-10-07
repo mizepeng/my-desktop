@@ -103,7 +103,8 @@ public sealed class AppSettings
 	public string? SkippedVersion { get; set; }
 
 	/// <summary>
-	/// 映射分区显示隐藏文件；桌面分区和散放图标跟随资源管理器的「隐藏的项目」设置。
+	/// 映射分区显示隐藏文件，desktop.ini 这类受保护的系统文件另外跟随资源管理器的「隐藏受保护的操作系统文件」；
+	/// 桌面分区和散放图标跟随资源管理器的「隐藏的项目」设置。
 	/// </summary>
 	public bool ShowHiddenFiles { get; set; }
 

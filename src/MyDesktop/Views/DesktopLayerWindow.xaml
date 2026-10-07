@@ -114,9 +114,12 @@
 					<Setter TargetName="RenameBox" Property="Visibility" Value="Visible" />
 					<Setter TargetName="NameText" Property="Visibility" Value="Hidden" />
 				</DataTrigger>
-				<!-- 与资源管理器一样，剪切后的图标半透明 -->
+				<!-- 与资源管理器一样，剪切后的和隐藏的项目图标半透明；透明的图标层在开着自动颜色管理的显示器上显得偏亮，比资源管理器的 0.5 淡一些 -->
 				<DataTrigger Binding="{Binding IsCut}" Value="True">
-					<Setter TargetName="IconImage" Property="Opacity" Value="0.5" />
+					<Setter TargetName="IconImage" Property="Opacity" Value="0.4" />
+				</DataTrigger>
+				<DataTrigger Binding="{Binding IsHidden}" Value="True">
+					<Setter TargetName="IconImage" Property="Opacity" Value="0.4" />
 				</DataTrigger>
 				<!-- 一键整理时已经起飞，原处不再显示；删除分区时正飞回桌面，落地前也不显示 -->
 				<DataTrigger Binding="{Binding IsInFlight}" Value="True">

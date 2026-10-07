@@ -74,6 +74,7 @@ powershell -ExecutionPolicy Bypass -File installer/Build-Installer.ps1
 - 低级鼠标钩子：每个鼠标事件都要等钩子返回才交给前台程序（包括游戏），回调里没在拖动时的移动、滚轮等直接放行、不读事件内容，钩子线程用最高优先级（`Core/DesktopMouseWatcher`）。
 - 装着文件的文件夹，`IShellItemImageFactory` 取缩略图得到的是系统自带的黄色文件夹（露出里面的内容），不随用户换的图标主题变；空文件夹和 `SHGetFileInfo` 取到的是主题里的图标。所以文件夹只取图标（`SIIGBF_ICONONLY`，`ShellIconLoader.Load`）。
 - 用 `dynamic` 调任务计划程序的 COM 接口时，任务不存在抛的是 `FileNotFoundException`（HResult 0x80070002），不是 `COMException`，要按 HResult 判断。
+- 显示器开着自动颜色管理（advanced color）时，半透明窗口里的半透明内容显得比设定的更不透明：用户截图里半透明分区上 0.5 的图标量得约 0.62，0.7、0.75 的文字约 0.75、0.78；同一张截图对比的资源管理器（不透明窗口）里，隐藏项目的图标正好是 0.5。自己建的半透明测试窗口用 GDI 截屏（`CopyFromScreen`）量得的是标准值，量不出这个差别，要看用户截图或肉眼。所以剪切、隐藏的项目图标取 0.4，不是资源管理器的 0.5。
 ## 代码约定
 - 遵循 `.editorconfig`：tab 缩进；含中文的 `.ps1` 必须是 UTF-8 带 BOM（Windows PowerShell 5.1 按系统代码页读取无 BOM 的脚本）。
 - 文本文件一律 LF 换行，由 `.gitattributes`（`* text=auto eol=lf`）统一，不依赖各电脑的 `core.autocrlf`：扩展包清单原样打进 msix，换行符不一致会让不同电脑打出内容不同的同版本扩展包。

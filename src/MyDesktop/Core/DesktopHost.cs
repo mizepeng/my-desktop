@@ -353,4 +353,13 @@ internal static class DesktopHost
 		using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced");
 		return key?.GetValue("HideIcons") is int value && value != 0;
 	}
+
+	/// <summary>
+	/// 资源管理器是否显示受保护的操作系统文件（取消勾选了「隐藏受保护的操作系统文件」），即 desktop.ini 这类同时带隐藏和系统属性的文件。
+	/// </summary>
+	public static bool ShowsProtectedFiles()
+	{
+		using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced");
+		return key?.GetValue("ShowSuperHidden") is int value && value != 0;
+	}
 }

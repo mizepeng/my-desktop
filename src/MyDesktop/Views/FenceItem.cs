@@ -19,6 +19,7 @@ public sealed class FenceItem : INotifyPropertyChanged
 	double _x;
 	double _y;
 	bool _isCut;
+	bool _isHidden;
 	bool _isDropTarget;
 	bool _isInFlight;
 	bool _isNameExpanded;
@@ -60,6 +61,15 @@ public sealed class FenceItem : INotifyPropertyChanged
 	{
 		get => _isCut;
 		set => Set(ref _isCut, value);
+	}
+
+	/// <summary>
+	/// 带隐藏属性的文件或文件夹，与资源管理器一样半透明显示；只带系统属性的不算，资源管理器里也照常显示。
+	/// </summary>
+	public bool IsHidden
+	{
+		get => _isHidden;
+		private set => Set(ref _isHidden, value);
 	}
 
 	/// <summary>
@@ -230,6 +240,8 @@ public sealed class FenceItem : INotifyPropertyChanged
 	/// </summary>
 	public bool Refresh(FileSystemInfo info)
 	{
+		// 改隐藏属性不会改修改时间，也不用重新加载缩略图，所以放在下面的比较之前
+		IsHidden = (info.Attributes & FileAttributes.Hidden) != 0;
 		var modified = info.LastWriteTime;
 		long size = info is FileInfo file ? file.Length : 0;
 		if (modified == Modified && size == Size)

@@ -480,7 +480,8 @@ internal sealed class DesktopTakeover : IDisposable
 	}
 
 	/// <summary>
-	/// 「显示桌面图标」「隐藏的项目」「文件扩展名」等设置都记在这个键里，变化时更新图标层的显示与内容。
+	/// 「显示桌面图标」「隐藏的项目」「文件扩展名」等设置都记在这个键里，变化时更新图标层的显示与内容；
+	/// 映射分区也重新读取，跟着「隐藏受保护的操作系统文件」显示或藏起 desktop.ini 这类文件。
 	/// </summary>
 	void WatchAdvancedSettings()
 	{
@@ -500,6 +501,7 @@ internal sealed class DesktopTakeover : IDisposable
 				}
 				ApplyLayerVisibility(true);
 				Items.RefreshSoon();
+				_manager.RefreshAllItems();
 			});
 		}
 		catch (Exception ex)
