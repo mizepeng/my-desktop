@@ -38,6 +38,10 @@ powershell -ExecutionPolicy Bypass -File installer/Build-Installer.ps1
 - `Views/ItemOps` 汇集分区和图标层共用的项目操作（打开、删除、剪贴板、改名、拖放）。
 - `Services/WallpaperBlur`：分区的毛玻璃背景。在后台线程经 IDesktopWallpaper 读各显示器的壁纸和契合度，按 1/8 尺寸画好并模糊，拼成覆盖整个虚拟屏幕的一张图；分区在背景颜色下面铺一层这张图，按自己的屏幕位置截取。拖动、调整大小时毛玻璃先淡出、松手再淡入：边拖边更新的话，背景要等重绘才跟上，看上去慢半拍。动态壁纸（Progman 或资源管理器的 WorkerW 下出现别的程序的可见窗口）、读不出图片的壁纸（如视频）时不画，分区退回半透明。
 - `Services/SettingsBackup`：整份配置备份到数据目录的 `backups`，一键整理、删除分区、恢复配置之前自动备份，保留最近 30 份。恢复配置时写入新配置后以 `--restart` 重启程序，新进程等旧进程释放单实例互斥体后再启动。
+- 一键整理动画（`DesktopOrganizer.ExecuteAnimatedAsync`）：按规则顺序逐个分区归入，图标由置顶、鼠标穿透的小窗口（`Views/FlyingIcon`）从桌面原处飞进分区的格子。轮到之前图标仍留在桌面（`DesktopTakeover` 的待起飞集合不算已归入），飞行期间分区里先不显示（`FenceItem.IsInFlight`）。自动整理不播动画。删除桌面分区时反过来（`FenceManager.FlyHomeAsync`）：关分区前在每个图标的位置放上飞行的图标，图标层立即重排，回到桌面的图标落地前不显示。
+- 分区之间不重叠：松手时压住了别的分区（卷起的只算收起的那一条），滑到所在显示器上最近的空位，放不下就滑回拖动前的位置（`FenceManager.FindFreeSpot`、`FenceWindow.FinishMoveSize`）；调整大小时被拖动的边止于相邻分区（`FenceWindow.StopAtNeighbors`）；原本就重叠的旧布局等下次拖动时再处理。点击、拖动、悬停展开或固定展开的分区提到其他分区之上（`DesktopHost.BringAboveFences`），置顶、撤销置顶和摆回桌面上方时保持分区之间的上下次序。
+- 搜索桌面图标：全局快捷键注册在托盘的隐藏窗口上（`TrayIcon.SetHotkey`，默认 Alt+Space，`AppSettings.SearchHotkey` 为空表示不用），弹出 `Views/SearchWindow`，候选是各桌面分区和散放图标层里的图标，不含映射分区；没输入时列出常用的，按 `Services/UsageStats` 记录的打开次数（数据目录的 `usage.json`，随时间衰减）排序。`Core/PinyinMatcher` 支持全拼、首字母混输，拼音表 `Assets/pinyin.txt` 由 Unicode 的 Unihan 数据生成（文件开头写明取哪些字段）。
+- `Core/AutoStart`：开机自启是当前用户「登录时」的计划任务（任务计划程序 COM 接口，普通优先级、不限时长）。注册表 Run 项会被资源管理器排队延后，实测比资源管理器晚约 30 秒才启动；安装包勾选开机自启时仍写 Run 项，程序启动时迁移成计划任务，卸载时按名称前缀删除各用户的任务。
 ### 桌面右键菜单
 签名的外部位置稀疏包 `MyDesktop.DesktopMenu`（`ShellExtension/AppxManifest.xml`）加进程外 COM：系统以包身份按需启动 `MyDesktop.exe --shell-extension`（`Core/DesktopMenuServer`，实现 IExplorerCommand）。程序启动时注册扩展包（`Core/DesktopMenuPackage`，注册记录在 `%LOCALAPPDATA%\MyDesktop\desktop-menu-package.txt`），注册失败时退回写当前用户注册表的静态菜单（`Core/DesktopMenu`）。
 ### 安装包与自动更新
@@ -51,6 +55,8 @@ powershell -ExecutionPolicy Bypass -File installer/Build-Installer.ps1
 - 关闭自动排列时，IFolderView 报告的位置是图标图像左边缘、比图标顶端高约 2 DIP 处；自动排列时报告的是格子左上角，两种模式要分别换算（`DesktopTakeover.ToCell`、`ToPosition`）。
 - 系统图像列表对象在本进程里不应答 IImageList 的 QueryInterface，角标按虚表直接调用（`Native/ShellIconLoader`）。
 - 系统提供的模糊（亚克力、云母等）对分区这类几乎总是未激活的窗口不起作用，所以毛玻璃是自己画的（`Services/WallpaperBlur`），前提是分区下面只有壁纸。
+- Shell 返回的位图多数图标自下而上，图片缩略图（实测）等自上而下（用户反馈倒置的 Adobe 2026 程序图标应属此类），而 GetObject 读到的 DIBSECTION 高度一律为正、分不出来；取像素要用 GetDIBits 让系统按实际行序转换（`ShellIconLoader.ToBitmapSource`），直接读内存会把后一种上下颠倒。
+- 用 `dynamic` 调任务计划程序的 COM 接口时，任务不存在抛的是 `FileNotFoundException`（HResult 0x80070002），不是 `COMException`，要按 HResult 判断。
 ## 代码约定
 - 遵循 `.editorconfig`：tab 缩进；含中文的 `.ps1` 必须是 UTF-8 带 BOM（Windows PowerShell 5.1 按系统代码页读取无 BOM 的脚本）。
 - 文本文件一律 LF 换行，由 `.gitattributes`（`* text=auto eol=lf`）统一，不依赖各电脑的 `core.autocrlf`：扩展包清单原样打进 msix，换行符不一致会让不同电脑打出内容不同的同版本扩展包。

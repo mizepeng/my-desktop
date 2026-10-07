@@ -108,6 +108,11 @@ public sealed class AppSettings
 	/// </summary>
 	public bool AutoOrganize { get; set; }
 
+	/// <summary>
+	/// 弹出搜索框（搜索桌面图标）的全局快捷键，如「Alt+Space」；空字符串表示不用快捷键。
+	/// </summary>
+	public string SearchHotkey { get; set; } = "Alt+Space";
+
 	public bool TextShadow { get; set; } = true;
 
 	/// <summary>

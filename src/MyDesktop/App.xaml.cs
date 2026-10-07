@@ -37,8 +37,11 @@ public partial class App : Application
 		bool restart = e.Args.Contains(RestartArgument, StringComparer.OrdinalIgnoreCase);
 		if (!AcquireSingleInstance(restart ? TimeSpan.FromSeconds(20) : TimeSpan.Zero))
 		{
-			// 已有实例在运行：把命令（默认打开设置）转交给它
-			AppCommands.Broadcast(command ?? AppCommand.ShowSettings);
+			// 已有实例在运行：把命令（默认打开设置）转交给它；开机自启重复拉起时（如旧的 Run 项还没迁移）什么也不做
+			if (!e.Args.Contains(AutoStart.Argument, StringComparer.OrdinalIgnoreCase))
+			{
+				AppCommands.Broadcast(command ?? AppCommand.ShowSettings);
+			}
 			Shutdown();
 			return;
 		}

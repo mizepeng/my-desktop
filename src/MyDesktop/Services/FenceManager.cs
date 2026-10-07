@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using MyDesktop.Core;
@@ -42,6 +43,7 @@ internal sealed class FenceManager
 	DesktopMouseWatcher? _mouse;
 	DrawFrameWindow? _drawFrame;
 	SettingsWindow? _settingsWindow;
+	SearchWindow? _searchWindow;
 	DesktopTakeover? _takeover;
 	readonly Dictionary<string, DateTime> _missingMembers = new(StringComparer.OrdinalIgnoreCase);
 	// 剪贴板里被剪切的文件，显示成半透明
@@ -141,9 +143,17 @@ internal sealed class FenceManager
 		_tray.ThemeChanged += SystemTheme.ApplyToMenus;
 		_tray.ClipboardChanged += () => _dispatcher.InvokeAsync(UpdateCutState, DispatcherPriority.Background);
 		_tray.WallpaperChanged += Wallpaper.Refresh;
+		_tray.HotkeyPressed += ToggleSearch;
+		if (!ApplySearchHotkey())
+		{
+			_dispatcher.InvokeAsync(() => _tray?.ShowBalloon($"快捷键 {Settings.SearchHotkey} 已被其他程序占用", "搜索桌面图标的快捷键没有生效，可以在 MyDesktop 设置里换一个。"),
+					DispatcherPriority.Background);
+		}
 		Wallpaper.Changed += RefreshAllAppearance;
 		Wallpaper.Start();
 		NotifyIfUpgraded(firstRun);
+		// 旧版本和安装包写的开机自启 Run 项换成计划任务，不耽误接管桌面
+		_dispatcher.InvokeAsync(AutoStart.MigrateRunValue, DispatcherPriority.Background);
 
 		// 上次异常退出时桌面图标可能停留在隐藏状态，启动时先恢复
 		if (!DesktopHost.IconsHiddenBySystem())
@@ -218,6 +228,7 @@ internal sealed class FenceManager
 		_reorderHook = IntPtr.Zero;
 		// 先关设置窗口，它关闭时会写回未保存的规则修改
 		_settingsWindow?.Close();
+		_searchWindow?.Close();
 		SaveNow();
 		_mouse?.Dispose();
 		_drawFrame?.Close();
@@ -255,6 +266,11 @@ internal sealed class FenceManager
 			FolderPath = portalFolder ?? string.Empty,
 		};
 		var rect = bounds ?? FindFreeSlot(near?.GetBounds());
+		// 画框或在鼠标处新建时压住了别的分区，挪到最近的空位
+		if (bounds != null && FindFreeSpot(null, rect) is RECT spot)
+		{
+			rect = spot;
+		}
 		model.LayoutDpi = GetDpiForRect(rect);
 		model.X = rect.Left;
 		model.Y = rect.Top;
@@ -322,6 +338,8 @@ internal sealed class FenceManager
 			return;
 		}
 		SettingsBackup.Create(Settings, BackupReason.DeleteFence);
+		// 桌面分区里的图标飞回桌面：起点要在关闭分区之前取
+		var homing = !model.IsPortal && window.IsVisible && _takeover?.LayersVisible == true ? LiftIcons(window) : [];
 		_windows.Remove(window);
 		Settings.Fences.Remove(model);
 		foreach (var rule in Settings.Rules.Where(r => r.FenceId == model.Id))
@@ -336,7 +354,90 @@ internal sealed class FenceManager
 		}
 		window.CloseForReal();
 		SaveSoon();
-		_takeover?.RelayoutSoon();
+		if (homing.Count > 0)
+		{
+			_ = FlyHomeAsync(homing);
+		}
+		else
+		{
+			_takeover?.RelayoutSoon();
+		}
+	}
+
+	/// <summary>
+	/// 删除分区动画里飞回桌面的一个图标；From 为空表示在分区里看不到它（要滚动才看得到、分区卷起了），从分区中央淡入起飞。
+	/// </summary>
+	sealed record HomingIcon(string Key, FlyingIcon Icon, RECT? From, RECT Fence);
+
+	/// <summary>
+	/// 分区关闭之前，在分区里每个图标的位置放上飞行的图标接替它；这些图标回到桌面上后，落地前先不显示。
+	/// </summary>
+	List<HomingIcon> LiftIcons(FenceWindow window)
+	{
+		var fence = window.GetBounds();
+		var icons = new List<HomingIcon>();
+		foreach (var item in window.Items)
+		{
+			if (item.Icon is not { } image)
+			{
+				continue;
+			}
+			var from = window.GetIconRect(item.FullPath);
+			var flying = new FlyingIcon(image);
+			// 看不到的图标先藏在分区中央，起飞时淡入
+			flying.Place(from ?? FlyingIcon.CenteredIn(fence, 1, 1), from == null ? 0 : 1);
+			flying.Show();
+			icons.Add(new HomingIcon(item.FullPath, flying, from, fence));
+		}
+		_takeover?.ExpectArrivals(icons.Select(i => i.Key));
+		return icons;
+	}
+
+	/// <summary>
+	/// 删除分区动画：分区关掉后图标停在原处，再依次飞回桌面上的格子，落地后在桌面上显示。
+	/// </summary>
+	async Task FlyHomeAsync(List<HomingIcon> icons)
+	{
+		// 重排出错也要接着让每个图标落地（不飞），否则它们会一直藏着
+		try
+		{
+			_takeover?.RelayoutNow();
+			// 等图标层排好版，才知道每个图标落在哪一格
+			await Dispatcher.Yield(DispatcherPriority.Loaded);
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("删除分区后重排桌面图标出错", ex);
+		}
+		var flights = icons.Select((icon, i) => FlyHomeAsync(icon, FlyingIcon.Stagger * i)).ToList();
+		try
+		{
+			await Task.WhenAll(flights);
+		}
+		catch (Exception ex)
+		{
+			// 只是动画出错，分区已经删除，每个图标结束时都已显示出来
+			Log.Warn("删除分区的动画出错", ex);
+		}
+	}
+
+	async Task FlyHomeAsync(HomingIcon icon, TimeSpan delay)
+	{
+		try
+		{
+			await Task.Delay(delay);
+			// 落点按此刻的排布取；桌面上没有它（文件刚被删掉）或图标层没显示时不飞
+			if (_takeover?.GetIconRect(icon.Key) is RECT target)
+			{
+				var from = icon.From ?? FlyingIcon.CenteredIn(icon.Fence, target.Width, target.Height);
+				await icon.Icon.FlyAsync(from, target, fadeIn: icon.From == null, fadeOut: false);
+			}
+		}
+		finally
+		{
+			icon.Icon.Close();
+			_takeover?.CompleteArrival(icon.Key);
+		}
 	}
 
 	/// <summary>
@@ -368,6 +469,19 @@ internal sealed class FenceManager
 	#endregion
 
 	#region 桌面分区成员
+
+	/// <summary>
+	/// 这些桌面图标此刻在桌面上的位置（物理像素）与图像，一键整理动画的起点；没接管桌面图标或图标层没显示时为空。
+	/// </summary>
+	public Dictionary<string, (RECT Rect, ImageSource Icon)> CaptureDesktopIcons(IEnumerable<string> keys)
+	{
+		return _takeover?.CaptureIcons(keys) ?? new Dictionary<string, (RECT Rect, ImageSource Icon)>(StringComparer.OrdinalIgnoreCase);
+	}
+
+	/// <summary>
+	/// 一键整理动画里图标起飞，桌面原处不再显示。
+	/// </summary>
+	public void TakeOff(string key) => _takeover?.TakeOff(key);
 
 	/// <summary>
 	/// 所有桌面分区的成员，不在其中的桌面项目由散放图标层显示。
@@ -408,10 +522,11 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 桌面上的文件改名后，分区成员与自定义顺序跟着换成新路径，图标留在原分区的原位置。
+	/// 桌面上的文件改名后，分区成员、自定义顺序和打开记录跟着换成新路径，图标留在原分区的原位置。
 	/// </summary>
 	public void OnItemRenamed(string oldPath, string newPath)
 	{
+		UsageStats.Rename(oldPath, newPath);
 		foreach (var model in Settings.Fences.Where(f => !f.IsPortal))
 		{
 			int index = model.Members.FindIndex(k => string.Equals(k, oldPath, StringComparison.OrdinalIgnoreCase));
@@ -1062,11 +1177,75 @@ internal sealed class FenceManager
 		menu.Add("锁定所有分区", () => SetAllLocked(!allLocked), isChecked: allLocked, enabled: _windows.Count > 0);
 		menu.AddSeparator();
 		menu.Add("设置…", ShowSettings, isDefault: true);
-		menu.Add("开机自动启动", () => AutoStart.SetEnabled(!autoStart), isChecked: autoStart);
+		menu.Add("开机自动启动", () => SetAutoStart(!autoStart), isChecked: autoStart);
 		menu.Add("检查更新…", () => _ = Updater.CheckAsync(true));
 		menu.AddSeparator();
 		menu.Add("退出", App.Current.ExitApp);
 		menu.Show(_tray.Handle, point);
+	}
+
+	/// <summary>
+	/// 开关开机自启，失败时提示（计划任务由系统服务管理，可能被组策略等限制）；返回是否成功。
+	/// </summary>
+	public bool SetAutoStart(bool enabled)
+	{
+		try
+		{
+			AutoStart.SetEnabled(enabled);
+			return true;
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("设置开机自启失败", ex);
+			MessageDialog.Show("开机自动启动", $"设置失败：{ex.Message}", "确定");
+			return false;
+		}
+	}
+
+	/// <summary>
+	/// 按设置注册搜索桌面图标的全局快捷键；返回是否成功（没设快捷键也算成功），被其他程序占用时失败。
+	/// </summary>
+	public bool ApplySearchHotkey()
+	{
+		if (_tray == null || _tray.SetHotkey(Hotkey.Parse(Settings.SearchHotkey)))
+		{
+			return true;
+		}
+		Log.Warn($"搜索快捷键 {Settings.SearchHotkey} 注册失败，可能已被其他程序占用");
+		return false;
+	}
+
+	/// <summary>
+	/// 在设置里录入新快捷键期间先注销原来的，免得按下它时弹出搜索框；录完由 ApplySearchHotkey 重新注册。
+	/// </summary>
+	public void SuspendSearchHotkey() => _tray?.SetHotkey(null);
+
+	void ToggleSearch()
+	{
+		_searchWindow ??= new SearchWindow(item => ItemOps.Open(_tray?.Handle ?? IntPtr.Zero, [item], true));
+		if (_searchWindow.IsVisible)
+		{
+			_searchWindow.Dismiss();
+			return;
+		}
+		_searchWindow.Popup(SearchEntries());
+	}
+
+	/// <summary>
+	/// 可以搜索的图标：各桌面分区里的和桌面上散放的；映射分区显示的是文件夹内容，不算桌面图标。
+	/// </summary>
+	List<SearchWindow.Entry> SearchEntries()
+	{
+		var entries = new List<SearchWindow.Entry>();
+		foreach (var window in _windows.Where(w => !w.Model.IsPortal))
+		{
+			entries.AddRange(window.Items.Select(item => new SearchWindow.Entry(item, $"分区：{window.Model.Title}")));
+		}
+		if (_takeover != null)
+		{
+			entries.AddRange(_takeover.LooseItems.Select(item => new SearchWindow.Entry(item, "桌面")));
+		}
+		return entries;
 	}
 
 	void ShowWelcome()
@@ -1366,13 +1545,72 @@ internal sealed class FenceManager
 	{
 		// 先摆好紧贴桌面的散放图标层，分区再压在它们之上
 		_takeover?.KeepLayersAboveDesktop();
-		foreach (var window in _windows)
+		var misplaced = _windows.Where(w => w.IsVisible && DesktopHost.GetInsertAfterAboveDesktop(w.Handle) != null).ToList();
+		if (misplaced.Count == 0)
 		{
-			if (window.IsVisible && DesktopHost.GetInsertAfterAboveDesktop(window.Handle) != null)
+			return;
+		}
+		// 每个都插到紧贴底座的位置，按从上到下的次序插，分区之间的上下次序才不变
+		var order = DesktopHost.TopToBottom(misplaced.Select(w => w.Handle));
+		foreach (var window in misplaced.OrderBy(w => order.IndexOf(w.Handle)))
+		{
+			window.PlaceAboveDesktop();
+		}
+	}
+
+	/// <summary>
+	/// 把分区提到其他分区之上：点击、拖动、悬停展开或固定展开时，正在操作的分区盖住旁边的分区。
+	/// </summary>
+	public void BringToFront(FenceWindow window)
+	{
+		DesktopHost.BringAboveFences(window.Handle, _windows.Select(w => w.Handle).ToHashSet());
+	}
+
+	/// <summary>
+	/// 分区之间不重叠：rect（物理像素）压住了别的分区（卷起的只算收起的那一条）时，在所在显示器的工作区里找最近的空位，
+	/// 与相邻分区留出吸附间距；没压住时原样返回，放不下时返回 null。
+	/// </summary>
+	/// <param name="window">正在摆放的分区，不跟自己比；新建分区时为 null。</param>
+	public RECT? FindFreeSpot(FenceWindow? window, RECT rect)
+	{
+		var others = _windows.Where(w => w != window).Select(w => w.GetLayoutBounds()).ToList();
+		if (!others.Any(o => o.IntersectsWith(rect)))
+		{
+			return rect;
+		}
+		var (work, scale) = GetMonitorWorkArea(MonitorFromRect(ref rect, MONITOR_DEFAULTTONEAREST));
+		int gap = (int)Math.Round(Settings.SnapGap * scale);
+		int width = rect.Width;
+		int height = rect.Height;
+		int maxLeft = Math.Max(work.Left, work.Right - width);
+		int maxTop = Math.Max(work.Top, work.Bottom - height);
+		// 候选位置：贴着各个分区的四边（留出间距）、贴着工作区边缘，以及原位置收进工作区
+		var lefts = new List<int> { Math.Clamp(rect.Left, work.Left, maxLeft), work.Left, maxLeft };
+		var tops = new List<int> { Math.Clamp(rect.Top, work.Top, maxTop), work.Top, maxTop };
+		foreach (var o in others)
+		{
+			lefts.Add(o.Right + gap);
+			lefts.Add(o.Left - gap - width);
+			tops.Add(o.Bottom + gap);
+			tops.Add(o.Top - gap - height);
+		}
+		RECT? best = null;
+		long bestDistance = long.MaxValue;
+		foreach (int left in lefts.Where(x => x >= work.Left && x <= maxLeft).Distinct())
+		{
+			foreach (int top in tops.Where(y => y >= work.Top && y <= maxTop).Distinct())
 			{
-				window.PlaceAboveDesktop();
+				long dx = left - rect.Left;
+				long dy = top - rect.Top;
+				var candidate = new RECT(left, top, left + width, top + height);
+				if (dx * dx + dy * dy < bestDistance && !others.Any(o => o.IntersectsWith(candidate)))
+				{
+					best = candidate;
+					bestDistance = dx * dx + dy * dy;
+				}
 			}
 		}
+		return best;
 	}
 
 	void Watchdog()

@@ -70,17 +70,17 @@ internal static class DesktopHost
 	/// <summary>
 	/// 「显示桌面」把桌面提到最前后，桌面窗口每次被激活都会被系统再提到普通窗口的最上层，盖住紧贴其上的图标层和分区，
 	/// 等层级被纠正才露出来，看上去闪一下。由本程序激活桌面时先把它们临时置顶（Lift），桌面提上来以后再放回去（Unlift）。
-	/// 置顶期间不改写它们的层级；_lifting 表示正在置顶或撤销置顶，放行这期间的层级变化。只在界面线程上读写。
+	/// 置顶期间不改写它们的层级；_lifting 表示正在置顶、撤销置顶或调整分区之间的上下，放行这期间的层级变化。只在界面线程上读写。
 	/// </summary>
 	static bool _lifted;
 	static bool _lifting;
 
 	/// <summary>
-	/// 把图标层和分区临时置顶：先图标层后分区，分区仍压在图标层之上。
+	/// 把图标层和分区临时置顶：先图标层后分区，分区仍压在图标层之上；分区之间按原来的上下次序。
 	/// </summary>
 	public static void Lift(IEnumerable<IntPtr> fences)
 	{
-		SetZOrder(_layers.Windows.Concat(fences), HWND_TOPMOST);
+		SetZOrder(_layers.Windows.Concat(BottomToTop(fences)), HWND_TOPMOST);
 		_lifted = true;
 	}
 
@@ -94,8 +94,67 @@ internal static class DesktopHost
 			return;
 		}
 		_lifted = false;
-		SetZOrder(_layers.Windows.Concat(fences), HWND_NOTOPMOST);
+		SetZOrder(_layers.Windows.Concat(BottomToTop(fences)), HWND_NOTOPMOST);
 	}
+
+	/// <summary>
+	/// 把分区提到其他分区之上（仍在其他程序的窗口之下）：正在操作、悬停展开的分区盖住旁边的分区，
+	/// 否则半透明的分区叠在一起分不清哪个在上，鼠标还会落到看上去在下面的分区上。
+	/// 不在桌面上方那一段里时不管，由 KeepAboveDesktop 摆回。
+	/// </summary>
+	public static void BringAboveFences(IntPtr hwnd, IReadOnlySet<IntPtr> fences)
+	{
+		if (_lifted || GetInsertAfterAboveDesktop(hwnd) != null)
+		{
+			return;
+		}
+		// 从自己往上找这一段里最上面的分区，跨过本程序的其他窗口，遇到其他程序的可见窗口为止
+		var topFence = IntPtr.Zero;
+		uint ownProcess = (uint)Environment.ProcessId;
+		for (var above = GetWindow(hwnd, GW_HWNDPREV); above != IntPtr.Zero; above = GetWindow(above, GW_HWNDPREV))
+		{
+			if (fences.Contains(above))
+			{
+				topFence = above;
+				continue;
+			}
+			GetWindowThreadProcessId(above, out uint process);
+			if (process != ownProcess && IsWindowVisible(above))
+			{
+				break;
+			}
+		}
+		if (topFence == IntPtr.Zero)
+		{
+			return;
+		}
+		// 插到那个分区的上方，即它上面紧挨着的窗口之后
+		var insertAfter = GetWindow(topFence, GW_HWNDPREV);
+		SetZOrder([hwnd], insertAfter == IntPtr.Zero ? HWND_TOP : insertAfter);
+	}
+
+	/// <summary>
+	/// 按当前层级从上到下排列这些窗口（EnumWindows 按层级从上到下枚举顶层窗口）。
+	/// </summary>
+	public static List<IntPtr> TopToBottom(IEnumerable<IntPtr> windows)
+	{
+		var set = windows.Where(h => h != IntPtr.Zero).ToHashSet();
+		var ordered = new List<IntPtr>(set.Count);
+		EnumWindows((hwnd, _) =>
+		{
+			if (set.Contains(hwnd))
+			{
+				ordered.Add(hwnd);
+			}
+			return ordered.Count < set.Count;
+		}, IntPtr.Zero);
+		return ordered;
+	}
+
+	/// <summary>
+	/// 逐个放到同一位置（如置顶窗口的最上层）时按从下到上的次序放，上下次序就保持不变。
+	/// </summary>
+	static IEnumerable<IntPtr> BottomToTop(IEnumerable<IntPtr> windows) => Enumerable.Reverse(TopToBottom(windows));
 
 	static void SetZOrder(IEnumerable<IntPtr> windows, IntPtr insertAfter)
 	{

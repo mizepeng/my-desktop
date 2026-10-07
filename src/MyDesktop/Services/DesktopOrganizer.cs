@@ -1,6 +1,8 @@
+using System.Windows.Media;
 using System.Windows.Threading;
 using MyDesktop.Core;
 using MyDesktop.Models;
+using MyDesktop.Native;
 using MyDesktop.Views;
 
 namespace MyDesktop.Services;
@@ -25,6 +27,11 @@ internal sealed class DesktopOrganizer : IDisposable
 	/// 每 4 秒检查一次，最多等约 2 分钟内容稳定，仍在变化的（如大文件解压）放弃自动整理。
 	/// </summary>
 	const int MaxChecks = 30;
+
+	/// <summary>
+	/// 一键整理动画里各分区依次开始的间隔，同一分区的图标再按 FlyingIcon.Stagger 错开起飞。
+	/// </summary>
+	static readonly TimeSpan GroupStagger = TimeSpan.FromMilliseconds(260);
 
 	sealed class PendingItem
 	{
@@ -64,7 +71,78 @@ internal sealed class DesktopOrganizer : IDisposable
 			return;
 		}
 		SettingsBackup.Create(_manager.Settings, BackupReason.Organize);
-		Execute(plan, false);
+		_ = ExecuteAnimatedAsync(plan);
+	}
+
+	/// <summary>
+	/// 一键整理：按规则顺序逐个分区归入（分区依次出现），图标从桌面上的原处沿弧线飞进分区里的格子，落定后才显示。
+	/// 每个分区轮到时才归入，在那之前它的图标一直留在桌面上原处。
+	/// </summary>
+	async Task ExecuteAnimatedAsync(List<(OrganizeRule Rule, List<string> Paths)> plan)
+	{
+		var flights = new List<Task>();
+		try
+		{
+			foreach (var (rule, paths) in plan)
+			{
+				// 起点要在归入分区之前取：归入后图标就从桌面上消失了
+				var sources = _manager.CaptureDesktopIcons(paths);
+				var window = _manager.GetOrCreateRuleFence(rule, reveal: true);
+				window.ExpectArrivals(sources.Keys);
+				// 先排好飞行再归入：即使归入出错，飞行结束时也会把藏起来的图标显示出来
+				var delay = TimeSpan.Zero;
+				foreach (var (key, source) in sources)
+				{
+					flights.Add(FlyAsync(window, key, source, delay));
+					delay += FlyingIcon.Stagger;
+				}
+				_manager.AssignToFence(window, paths);
+				await Task.Delay(GroupStagger);
+			}
+		}
+		catch (Exception ex)
+		{
+			Log.Error("一键整理出错", ex);
+			MessageDialog.Show("一键整理桌面", $"整理时出错：{ex.Message}", "确定");
+		}
+		try
+		{
+			await Task.WhenAll(flights);
+		}
+		catch (Exception ex)
+		{
+			// 只是动画出错，整理已经完成，飞行结束时图标都已显示出来
+			Log.Warn("一键整理的动画出错", ex);
+		}
+	}
+
+	/// <summary>
+	/// 一个图标从桌面飞进分区；分区里看不到它的格子时（分区小了要滚动、卷起了）飞向分区中央并淡出。
+	/// </summary>
+	async Task FlyAsync(FenceWindow window, string key, (RECT Rect, ImageSource Icon) source, TimeSpan delay)
+	{
+		FlyingIcon? flying = null;
+		try
+		{
+			await Task.Delay(delay);
+			// 等分区排好版，才知道图标落在哪一格
+			await Dispatcher.Yield(DispatcherPriority.Loaded);
+			var target = window.GetIconRect(key);
+			var to = target ?? FlyingIcon.CenteredIn(window.GetBounds(), source.Rect.Width / 2, source.Rect.Height / 2);
+			flying = new FlyingIcon(source.Icon);
+			flying.Place(source.Rect, 1);
+			// 桌面原处的图标与飞行的图标同时换手
+			_manager.TakeOff(key);
+			flying.Show();
+			await flying.FlyAsync(source.Rect, to, fadeIn: false, fadeOut: target == null);
+		}
+		finally
+		{
+			flying?.Close();
+			// 中途出错时也要把图标从桌面上拿走、在分区里显示出来
+			_manager.TakeOff(key);
+			window.CompleteArrival(key);
+		}
 	}
 
 	public void ApplyWatchSetting()

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Windows;
+using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using MyDesktop.Core;
@@ -74,6 +75,10 @@ internal sealed class DesktopTakeover : IDisposable
 	int _hitRectCount = -1;
 	string? _pendingRename;
 	DateTime _pendingRenameUntil;
+	// 一键整理动画里还没起飞的图标：已经归入分区，起飞前仍留在桌面原处显示
+	readonly HashSet<string> _waitingToFly = new(StringComparer.OrdinalIgnoreCase);
+	// 删除分区时正从分区飞回桌面的图标：已经排在桌面上，落地前先不显示
+	readonly HashSet<string> _arriving = new(StringComparer.OrdinalIgnoreCase);
 
 	public DesktopTakeover(FenceManager manager)
 	{
@@ -109,6 +114,89 @@ internal sealed class DesktopTakeover : IDisposable
 	public bool LayersVisible => _active && !_layersHidden && !_dpiRelayoutPending && !DesktopHost.IconsHiddenBySystem();
 
 	public bool IsRenaming => _layers.Any(l => l.IsRenaming);
+
+	/// <summary>
+	/// 桌面上散放（没放进分区）的图标。
+	/// </summary>
+	public IEnumerable<FenceItem> LooseItems => _layers.SelectMany(l => l.Items);
+
+	/// <summary>
+	/// 这些图标此刻在桌面上的位置（物理像素）与图像，一键整理动画的起点；图标层没显示时为空。
+	/// 取到的图标归入分区后仍留在桌面原处，直到 TakeOff 起飞。
+	/// </summary>
+	public Dictionary<string, (RECT Rect, ImageSource Icon)> CaptureIcons(IEnumerable<string> keys)
+	{
+		var result = new Dictionary<string, (RECT Rect, ImageSource Icon)>(StringComparer.OrdinalIgnoreCase);
+		if (!LayersVisible)
+		{
+			return result;
+		}
+		foreach (var key in keys)
+		{
+			foreach (var layer in _layers)
+			{
+				if (layer.GetIcon(key) is { } icon)
+				{
+					result[key] = icon;
+					_waitingToFly.Add(key);
+					break;
+				}
+			}
+		}
+		return result;
+	}
+
+	/// <summary>
+	/// 一键整理动画里图标起飞：桌面原处立即不再显示，随后从图标层移除。
+	/// </summary>
+	public void TakeOff(string key)
+	{
+		_waitingToFly.Remove(key);
+		foreach (var layer in _layers)
+		{
+			if (layer.FindItem(key) is { } item)
+			{
+				item.IsInFlight = true;
+			}
+		}
+		RelayoutSoon();
+	}
+
+	/// <summary>
+	/// 删除分区时这些图标将飞回桌面：回到桌面上后先不显示，落地时再由 CompleteArrival 显示。
+	/// </summary>
+	public void ExpectArrivals(IEnumerable<string> keys) => _arriving.UnionWith(keys);
+
+	public void CompleteArrival(string key)
+	{
+		_arriving.Remove(key);
+		foreach (var layer in _layers)
+		{
+			if (layer.FindItem(key) is { } item)
+			{
+				item.IsInFlight = false;
+			}
+		}
+	}
+
+	/// <summary>
+	/// 图标在桌面上的位置（物理像素），删除分区动画的终点；图标层没显示或桌面上没有这个图标时返回 null。
+	/// </summary>
+	public RECT? GetIconRect(string key)
+	{
+		if (!LayersVisible)
+		{
+			return null;
+		}
+		foreach (var layer in _layers)
+		{
+			if (layer.GetIconRect(key) is RECT rect)
+			{
+				return rect;
+			}
+		}
+		return null;
+	}
 
 	public void Dispose()
 	{
@@ -568,6 +656,15 @@ internal sealed class DesktopTakeover : IDisposable
 		_layoutTimer.Start();
 	}
 
+	/// <summary>
+	/// 立即重新排布，删除分区动画要马上知道图标回到桌面的哪一格。
+	/// </summary>
+	public void RelayoutNow()
+	{
+		_layoutTimer.Stop();
+		Relayout();
+	}
+
 	void Relayout()
 	{
 		var snapshot = Items.Snapshot;
@@ -576,6 +673,7 @@ internal sealed class DesktopTakeover : IDisposable
 			return;
 		}
 		var fenced = _manager.FencedKeys();
+		fenced.ExceptWith(_waitingToFly);
 		var loose = snapshot.Items.Where(e => !fenced.Contains(e.Key)).ToList();
 		var placed = snapshot.AutoArrange
 				? Arrange(snapshot, loose)
@@ -593,6 +691,10 @@ internal sealed class DesktopTakeover : IDisposable
 		foreach (var (layer, items) in groups)
 		{
 			layer.SetItems(items, snapshot.Spacing, snapshot.IconSize);
+			foreach (var item in layer.Items.Where(i => _arriving.Contains(i.FullPath)))
+			{
+				item.IsInFlight = true;
+			}
 		}
 		ApplyCutState();
 		_dispatcher.InvokeAsync(UpdateHitRects, DispatcherPriority.Loaded);

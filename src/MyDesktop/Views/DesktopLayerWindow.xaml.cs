@@ -66,6 +66,30 @@ internal partial class DesktopLayerWindow : Window
 
 	public List<FenceItem> SelectedItems => ItemsList.SelectedItems.Cast<FenceItem>().ToList();
 
+	public FenceItem? FindItem(string key) => _items.FirstOrDefault(i => string.Equals(i.FullPath, key, StringComparison.OrdinalIgnoreCase));
+
+	/// <summary>
+	/// 图标图像在屏幕上的位置（物理像素）与图像，一键整理动画的起点；本层没有这个图标、图标还没加载或没显示时返回 null。
+	/// </summary>
+	public (RECT Rect, ImageSource Icon)? GetIcon(string key)
+	{
+		return FindItem(key)?.Icon is { } icon && GetIconRect(key) is RECT rect ? (rect, icon) : null;
+	}
+
+	/// <summary>
+	/// 图标图像在屏幕上的位置（物理像素），图标还没加载时也有；删除分区动画的终点。本层没有这个图标或没显示时返回 null。
+	/// </summary>
+	public RECT? GetIconRect(string key)
+	{
+		if (!IsVisible || FindItem(key) is not { } item
+				|| ItemsList.ItemContainerGenerator.ContainerFromItem(item) is not ListBoxItem container
+				|| ItemOps.FindChild<Image>(container, "IconImage") is not { IsVisible: true } image)
+		{
+			return null;
+		}
+		return ItemOps.ScreenRect(image);
+	}
+
 	#region 生命周期与位置
 
 	protected override void OnSourceInitialized(EventArgs e)

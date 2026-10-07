@@ -9,6 +9,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using MyDesktop.Core;
 using MyDesktop.Native;
+using MyDesktop.Services;
 using static MyDesktop.Native.NativeMethods;
 using ComIDataObject = System.Runtime.InteropServices.ComTypes.IDataObject;
 
@@ -247,6 +248,11 @@ internal static class ItemOps
 	{
 		foreach (var item in items)
 		{
+			// 给搜索框排「常用」；映射分区里的图标不在搜索范围内，不用记
+			if (desktop)
+			{
+				UsageStats.Add(item.FullPath);
+			}
 			if (item.IsVirtual)
 			{
 				OpenVirtual(hwnd, item, desktop);
@@ -712,6 +718,16 @@ internal static class ItemOps
 			}
 		}
 		return null;
+	}
+
+	/// <summary>
+	/// 界面元素在屏幕上的范围（物理像素）。
+	/// </summary>
+	public static RECT ScreenRect(FrameworkElement element)
+	{
+		var topLeft = element.PointToScreen(new Point(0, 0));
+		var bottomRight = element.PointToScreen(new Point(element.ActualWidth, element.ActualHeight));
+		return new RECT((int)Math.Round(topLeft.X), (int)Math.Round(topLeft.Y), (int)Math.Round(bottomRight.X), (int)Math.Round(bottomRight.Y));
 	}
 
 	public static bool IsInside<T>(object source) where T : DependencyObject

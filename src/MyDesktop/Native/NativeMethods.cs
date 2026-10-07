@@ -22,6 +22,7 @@ internal static class NativeMethods
 	public const long WS_EX_LAYERED = 0x00080000L;
 	public const long WS_EX_NOACTIVATE = 0x08000000L;
 
+	public static readonly IntPtr HWND_TOP = IntPtr.Zero;
 	public static readonly IntPtr HWND_BOTTOM = new(1);
 	public static readonly IntPtr HWND_TOPMOST = new(-1);
 	public static readonly IntPtr HWND_NOTOPMOST = new(-2);
@@ -57,7 +58,15 @@ internal static class NativeMethods
 	public const int WM_ENTERSIZEMOVE = 0x0231;
 	public const int WM_EXITSIZEMOVE = 0x0232;
 	public const int WM_CLIPBOARDUPDATE = 0x031D;
+	public const int WM_HOTKEY = 0x0312;
+	public const int WM_SYSCHAR = 0x0106;
 	public const int WM_APP = 0x8000;
+
+	public const uint MOD_ALT = 0x0001;
+	public const uint MOD_CONTROL = 0x0002;
+	public const uint MOD_SHIFT = 0x0004;
+	public const uint MOD_WIN = 0x0008;
+	public const uint MOD_NOREPEAT = 0x4000;
 
 	public const int SC_MINIMIZE = 0xF020;
 	public const int SC_MAXIMIZE = 0xF030;
@@ -305,6 +314,12 @@ internal static class NativeMethods
 	[DllImport("user32.dll")]
 	public static extern short GetAsyncKeyState(int key);
 
+	[DllImport("user32.dll", SetLastError = true)]
+	public static extern bool RegisterHotKey(IntPtr hwnd, int id, uint modifiers, uint vk);
+
+	[DllImport("user32.dll")]
+	public static extern bool UnregisterHotKey(IntPtr hwnd, int id);
+
 	#endregion
 
 	#region user32：显示器
@@ -400,6 +415,15 @@ internal static class NativeMethods
 
 	[DllImport("gdi32.dll")]
 	public static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFO info, uint usage, out IntPtr bits, IntPtr section, uint offset);
+
+	[DllImport("gdi32.dll")]
+	public static extern int GetDIBits(IntPtr hdc, IntPtr bitmap, uint start, uint lines, byte[] bits, ref BITMAPINFO info, uint usage);
+
+	[DllImport("gdi32.dll")]
+	public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+
+	[DllImport("gdi32.dll")]
+	public static extern bool DeleteDC(IntPtr hdc);
 
 	#endregion
 

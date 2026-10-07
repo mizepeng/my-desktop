@@ -31,6 +31,8 @@
 		<Resource Include="Assets\app.png" />
 		<!-- 发行版安装包签名证书的公钥，自动更新时用它核对下载的安装包 -->
 		<EmbeddedResource Include="..\..\installer\MyDesktop.cer" LogicalName="MyDesktop.cer" />
+		<!-- 搜索桌面图标时按拼音匹配用的汉字拼音表 -->
+		<EmbeddedResource Include="Assets\pinyin.txt" LogicalName="MyDesktop.pinyin.txt" />
 	</ItemGroup>
 
 	<!-- 生成并签名桌面右键菜单扩展包，放在 exe 旁边；没有签名证书时脚本只给出提示（导入方法见 ShellExtension\Pack-DesktopMenu.ps1）。

@@ -74,6 +74,11 @@
 				<DataTrigger Binding="{Binding IsCut}" Value="True">
 					<Setter TargetName="IconImage" Property="Opacity" Value="0.5" />
 				</DataTrigger>
+				<!-- 一键整理时图标还在飞来的路上 -->
+				<DataTrigger Binding="{Binding IsInFlight}" Value="True">
+					<Setter TargetName="IconImage" Property="Opacity" Value="0" />
+					<Setter TargetName="NameText" Property="Opacity" Value="0" />
+				</DataTrigger>
 			</DataTemplate.Triggers>
 		</DataTemplate>
 
@@ -114,6 +119,11 @@
 				<!-- 与资源管理器一样，剪切后的图标半透明 -->
 				<DataTrigger Binding="{Binding IsCut}" Value="True">
 					<Setter TargetName="IconImage" Property="Opacity" Value="0.5" />
+				</DataTrigger>
+				<!-- 一键整理时图标还在飞来的路上 -->
+				<DataTrigger Binding="{Binding IsInFlight}" Value="True">
+					<Setter TargetName="IconImage" Property="Opacity" Value="0" />
+					<Setter TargetName="NameText" Property="Opacity" Value="0" />
 				</DataTrigger>
 			</DataTemplate.Triggers>
 		</DataTemplate>

@@ -20,6 +20,7 @@ public sealed class FenceItem : INotifyPropertyChanged
 	double _y;
 	bool _isCut;
 	bool _isDropTarget;
+	bool _isInFlight;
 
 	FenceItem(string fullPath)
 	{
@@ -67,6 +68,15 @@ public sealed class FenceItem : INotifyPropertyChanged
 	{
 		get => _isDropTarget;
 		set => Set(ref _isDropTarget, value);
+	}
+
+	/// <summary>
+	/// 一键整理、删除分区动画里正在飞行：起飞后原处不再显示，飞到之前落点也先不显示。
+	/// </summary>
+	public bool IsInFlight
+	{
+		get => _isInFlight;
+		set => Set(ref _isInFlight, value);
 	}
 
 	/// <summary>

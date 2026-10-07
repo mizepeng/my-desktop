@@ -319,13 +319,13 @@ internal static class ShellIconLoader
 	}
 
 	/// <summary>
-	/// 直接读取 32 位 DIB 像素以保留透明通道（Imaging.CreateBitmapSourceFromHBitmap 会丢失 alpha）。
+	/// 用 GetDIBits 取出 32 位像素以保留透明通道（Imaging.CreateBitmapSourceFromHBitmap 会丢失 alpha）。
+	/// Shell 返回的位图有的自下而上（多数图标），有的自上而下（缩略图、部分图标），
+	/// GetObject 读到的高度一律是正数、分不出来，直接读内存会把后一种上下颠倒，所以让 GDI 按位图实际的行序转换。
 	/// </summary>
 	static BitmapSource ToBitmapSource(IntPtr bitmap)
 	{
-		if (GetObject(bitmap, Marshal.SizeOf<DIBSECTION>(), out var section) == 0
-				|| section.dsBm.bmBitsPixel != 32
-				|| section.dsBm.bmBits == IntPtr.Zero)
+		if (GetObject(bitmap, Marshal.SizeOf<DIBSECTION>(), out var section) == 0 || section.dsBm.bmBitsPixel != 32)
 		{
 			var fallback = Imaging.CreateBitmapSourceFromHBitmap(bitmap, IntPtr.Zero, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
 			fallback.Freeze();
@@ -336,11 +336,29 @@ internal static class ShellIconLoader
 		int height = section.dsBm.bmHeight;
 		int stride = width * 4;
 		var pixels = new byte[stride * height];
-		bool bottomUp = section.dsBmih.biHeight > 0;
-		for (int y = 0; y < height; y++)
+		var info = new BITMAPINFO
 		{
-			int sourceRow = bottomUp ? height - 1 - y : y;
-			Marshal.Copy(section.dsBm.bmBits + sourceRow * section.dsBm.bmWidthBytes, pixels, y * stride, stride);
+			bmiHeader = new BITMAPINFOHEADER
+			{
+				biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(),
+				biWidth = width,
+				// 高度为负：按自上而下的行序输出
+				biHeight = -height,
+				biPlanes = 1,
+				biBitCount = 32,
+			},
+		};
+		var dc = CreateCompatibleDC(IntPtr.Zero);
+		try
+		{
+			if (GetDIBits(dc, bitmap, 0, (uint)height, pixels, ref info, 0) != height)
+			{
+				throw new InvalidOperationException($"GetDIBits 读取图标像素失败（{width}×{height}）");
+			}
+		}
+		finally
+		{
+			DeleteDC(dc);
 		}
 
 		// Shell 返回的图标通常是非预乘 alpha（存在颜色值大于 alpha 的像素），按预乘解读会让半透明边缘发白；

@@ -56,7 +56,9 @@ Source: "MyDesktop.cer"; DestDir: "{tmp}"; Flags: deleteafterinstall
 Name: "{autoprograms}\MyDesktop 桌面分区"; Filename: "{app}\MyDesktop.exe"
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "MyDesktop"; ValueData: """{app}\MyDesktop.exe"" --autostart"; Tasks: autostart
+; 勾选开机自动启动时写 Run 项，程序启动时把它换成按用户登录时运行的计划任务（安装程序以管理员身份运行，不便替用户创建任务）。
+; 自动更新时不写：用户在程序里关掉开机自启后，静默升级不能又把它打开
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "MyDesktop"; ValueData: """{app}\MyDesktop.exe"" --autostart"; Tasks: autostart; Check: not IsAutoUpdate
 ; 卸载时删除开机自启（程序里也能开关，不论安装时是否勾选都要删），以及没有扩展包时程序退而写入的注册表右键菜单
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "MyDesktop"; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\MyDesktop"; Flags: uninsdeletekey dontcreatekey
@@ -73,6 +75,8 @@ Filename: "{app}\MyDesktop.exe"; Flags: nowait runasoriginaluser; Check: IsAutoU
 Filename: "{app}\MyDesktop.exe"; Parameters: "--command exit"; Flags: runhidden waituntilterminated; RunOnceId: "ExitApp"
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -Command ""Get-AppxPackage -Name MyDesktop.DesktopMenu | Remove-AppxPackage"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveMenuPackage"
 Filename: "{sys}\certutil.exe"; Parameters: "-delstore TrustedPeople {#CertThumbprint}"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveCertificate"
+; 删除各用户的开机自启计划任务（程序按「MyDesktop 开机启动（用户名）」创建）
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -Command ""Get-ScheduledTask -TaskPath '\' -ErrorAction SilentlyContinue | Where-Object TaskName -like 'MyDesktop 开机启动*' | Unregister-ScheduledTask -Confirm:$false"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveAutoStartTask"
 
 [UninstallDelete]
 ; 扩展包的注册记录，不删的话重装同一版本时程序会以为已经注册过

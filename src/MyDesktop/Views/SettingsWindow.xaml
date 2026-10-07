@@ -76,6 +76,27 @@
 					</Border>
 					<Border Style="{StaticResource Card}">
 						<DockPanel>
+							<StackPanel VerticalAlignment="Center" DockPanel.Dock="Right" Orientation="Horizontal">
+								<TextBox x:Name="HotkeyBox"
+										Width="170"
+										VerticalContentAlignment="Center"
+										IsReadOnly="True"
+										IsReadOnlyCaretVisible="False"
+										TextAlignment="Center"
+										GotKeyboardFocus="HotkeyBox_GotKeyboardFocus"
+										LostKeyboardFocus="HotkeyBox_LostKeyboardFocus"
+										PreviewKeyDown="HotkeyBox_PreviewKeyDown" />
+								<Button Margin="8,0,0,0" Content="清除" Click="ClearHotkey_Click" />
+							</StackPanel>
+							<StackPanel Margin="0,0,12,0">
+								<TextBlock Text="搜索桌面图标的快捷键" />
+								<TextBlock Style="{StaticResource Hint}" Text="按下快捷键弹出搜索框，输入名称、全拼或首字母找到分区里和桌面上的图标，回车打开。点右边的框，按下新的组合键即可修改" />
+								<TextBlock x:Name="HotkeyStatus" Style="{StaticResource Hint}" Foreground="{DynamicResource SystemFillColorCautionBrush}" Visibility="Collapsed" />
+							</StackPanel>
+						</DockPanel>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<DockPanel>
 							<ComboBox x:Name="DoubleClickTargetBox"
 									Width="150"
 									VerticalAlignment="Center"

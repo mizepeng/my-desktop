@@ -36,12 +36,16 @@ internal partial class FenceWindow : Window
 	const double MinWidthDip = 120;
 	// 离屏幕边缘这么近算贴着这条边，决定自动卷起方向
 	const double DockDistanceDip = 24;
+	// 松手时压住了别的分区，滑到空位的时长
+	const double SlideMilliseconds = 180;
 
 	static readonly DropShadowEffect TextShadowEffect = CreateShadow();
 	static readonly int[] CustomColors = new int[16];
 
 	readonly FenceManager _manager;
 	readonly ObservableCollection<FenceItem> _items = [];
+	// 一键整理时正从桌面飞来的图标（完整解析名），飞到之前先不显示
+	readonly HashSet<string> _arriving = new(StringComparer.OrdinalIgnoreCase);
 	readonly DispatcherTimer _refreshTimer;
 	readonly DispatcherTimer _collapseTimer;
 	readonly DispatcherTimer _buttonsTimer;
@@ -68,6 +72,8 @@ internal partial class FenceWindow : Window
 	bool _inSizeMove;
 	bool _heightResized;
 	bool _widthResized;
+	// 每次开始拖动加一，松手后的滑动发现它变了就停下
+	int _slideVersion;
 
 	// 标题栏当前摆在哪一侧，没变时不重排布局
 	RollEdge? _titleEdge;
@@ -144,6 +150,8 @@ internal partial class FenceWindow : Window
 	IconSizeMode EffectiveIconSize => Model.IconSize ?? Settings.DefaultIconSize;
 
 	double IconDip => Model.View == FenceView.List ? Appearance.ListIconDip : EffectiveIconSize.ToDip();
+
+	public IReadOnlyList<FenceItem> Items => _items;
 
 	public List<FenceItem> SelectedItems => ItemsList.SelectedItems.Cast<FenceItem>().ToList();
 
@@ -265,6 +273,9 @@ internal partial class FenceWindow : Window
 			}
 			case WM_ENTERSIZEMOVE:
 			{
+				_slideVersion++;
+				// 拖动、调整大小时盖住旁边的分区
+				_manager.BringToFront(this);
 				_dragCursorStart = NativeMethods.GetCursorPos();
 				_dragRectStart = GetBounds();
 				_dragLastRect = null;
@@ -310,13 +321,11 @@ internal partial class FenceWindow : Window
 				_heightResized |= (int)wParam is not (WMSZ_LEFT or WMSZ_RIGHT);
 				_widthResized |= (int)wParam is not (WMSZ_TOP or WMSZ_BOTTOM);
 				var grid = GridSizes();
-				if (Settings.SnapToEdges || Settings.SnapToGrid)
-				{
-					SnapSizing((int)wParam, lParam, grid);
-					handled = true;
-				}
+				// 不吸附时也要接管：被拖动的边要止于相邻分区
+				SnapSizing((int)wParam, lParam, grid);
 				ShowGridHint(Marshal.PtrToStructure<RECT>(lParam), grid);
-				return handled ? new IntPtr(1) : IntPtr.Zero;
+				handled = true;
+				return new IntPtr(1);
 			}
 			case WM_EXITSIZEMOVE:
 			{
@@ -427,7 +436,7 @@ internal partial class FenceWindow : Window
 	}
 
 	/// <summary>
-	/// 与移动同理，被拖动的边按鼠标相对起点的绝对位移计算后再吸附。
+	/// 与移动同理，被拖动的边按鼠标相对起点的绝对位移计算后再吸附，最后止于相邻分区。
 	/// </summary>
 	void SnapSizing(int edge, IntPtr lParam, (List<int> Widths, List<int> Heights) grid)
 	{
@@ -505,8 +514,57 @@ internal partial class FenceWindow : Window
 				rect.Bottom = rect.Top + minHeight;
 			}
 		}
+		// 卷起的分区只占收起的那一条，窗口却可能是悬停展开的样子，松手后再统一处理重叠
+		if (!Model.RolledUp)
+		{
+			StopAtNeighbors(ref rect, left, right, top, bottom);
+		}
 		Marshal.StructureToPtr(rect, lParam, false);
 		_dragLastRect = rect;
+	}
+
+	/// <summary>
+	/// 分区之间不重叠：调整大小时被拖动的边碰到相邻分区就停住（留出吸附间距），最多退回拖动前的位置；
+	/// 拖动前就与之重叠的分区不管。同时压住一个分区的两条边时，退回得少的那条停住。
+	/// </summary>
+	void StopAtNeighbors(ref RECT rect, bool left, bool right, bool top, bool bottom)
+	{
+		var start = _dragRectStart;
+		int gap = (int)Math.Round(Settings.SnapGap * ScaleFactor);
+		foreach (var other in _manager.Windows)
+		{
+			var o = other.GetLayoutBounds();
+			if (other == this || o.IntersectsWith(start) || !o.Inflate(gap).IntersectsWith(rect))
+			{
+				continue;
+			}
+			// 各条边需要退回多少，只算朝这个分区伸过去的边
+			int pullRight = right && o.Left >= start.Right ? rect.Right - Math.Max(start.Right, o.Left - gap) : 0;
+			int pullLeft = left && o.Right <= start.Left ? Math.Min(start.Left, o.Right + gap) - rect.Left : 0;
+			int pullBottom = bottom && o.Top >= start.Bottom ? rect.Bottom - Math.Max(start.Bottom, o.Top - gap) : 0;
+			int pullTop = top && o.Bottom <= start.Top ? Math.Min(start.Top, o.Bottom + gap) - rect.Top : 0;
+			int pull = new[] { pullRight, pullLeft, pullBottom, pullTop }.Where(p => p > 0).DefaultIfEmpty(0).Min();
+			if (pull == 0)
+			{
+				continue;
+			}
+			if (pull == pullRight)
+			{
+				rect.Right -= pull;
+			}
+			else if (pull == pullLeft)
+			{
+				rect.Left += pull;
+			}
+			else if (pull == pullBottom)
+			{
+				rect.Bottom -= pull;
+			}
+			else
+			{
+				rect.Top += pull;
+			}
+		}
 	}
 
 	/// <summary>
@@ -610,7 +668,7 @@ internal partial class FenceWindow : Window
 		Marshal.StructureToPtr(pos, lParam, false);
 	}
 
-	void FinishMoveSize()
+	async void FinishMoveSize()
 	{
 		// 系统若在 WM_EXITSIZEMOVE 之前就做了最终定位，这里补一次校正（取消拖动、回到起点的情况除外）
 		if (_dragLastRect is RECT last)
@@ -627,6 +685,25 @@ internal partial class FenceWindow : Window
 		_dragLastRect = null;
 		_dragFinished = false;
 		SaveBounds();
+		// 分区之间不重叠：松手时压住了别的分区，滑到最近的空位，所在屏幕上放不下时滑回拖动前的位置。
+		// 只单击标题栏、没有移动时不动，原本就重叠的旧布局等下次拖动时再处理
+		var bounds = GetBounds();
+		if (!bounds.Equals(_dragRectStart))
+		{
+			var layout = GetLayoutBounds();
+			var target = _manager.FindFreeSpot(this, layout) is RECT spot
+					? new RECT(bounds.Left + spot.Left - layout.Left, bounds.Top + spot.Top - layout.Top, bounds.Right + spot.Left - layout.Left, bounds.Bottom + spot.Top - layout.Top)
+					: _dragRectStart;
+			if (!target.Equals(bounds))
+			{
+				if (!await SlideTo(target))
+				{
+					// 滑动途中又开始拖动，由那一次收尾
+					return;
+				}
+				SaveBounds();
+			}
+		}
 		_inSizeMove = false;
 		_heightResized = false;
 		_widthResized = false;
@@ -635,6 +712,34 @@ internal partial class FenceWindow : Window
 		if (_tempExpanded)
 		{
 			RestartTimer(_collapseTimer);
+		}
+	}
+
+	/// <summary>
+	/// 先快后慢地滑到 target（物理像素）；途中又开始拖动或分区被删除时停下，返回 false。
+	/// </summary>
+	async Task<bool> SlideTo(RECT target)
+	{
+		int version = ++_slideVersion;
+		var from = GetBounds();
+		var clock = Stopwatch.StartNew();
+		while (true)
+		{
+			double t = Math.Min(1, clock.Elapsed.TotalMilliseconds / SlideMilliseconds);
+			double k = 1 - Math.Pow(1 - t, 3);
+			int Lerp(int a, int b) => a + (int)Math.Round((b - a) * k);
+			int left = Lerp(from.Left, target.Left);
+			int top = Lerp(from.Top, target.Top);
+			SetWindowPos(_hwnd, IntPtr.Zero, left, top, Lerp(from.Right, target.Right) - left, Lerp(from.Bottom, target.Bottom) - top, SWP_NOZORDER | SWP_NOACTIVATE);
+			if (t >= 1)
+			{
+				return true;
+			}
+			await FlyingIcon.NextFrame();
+			if (version != _slideVersion || _allowClose)
+			{
+				return false;
+			}
 		}
 	}
 
@@ -844,6 +949,11 @@ internal partial class FenceWindow : Window
 		Model.RolledUp = !Model.RolledUp;
 		_tempExpanded = false;
 		_collapseTimer.Stop();
+		// 固定展开后可能盖到旁边的分区，放在它们上面
+		if (!Model.RolledUp)
+		{
+			_manager.BringToFront(this);
+		}
 		ApplyBounds();
 		_manager.SaveSoon();
 		_manager.OnFenceLayoutChanged();
@@ -1111,8 +1221,16 @@ internal partial class FenceWindow : Window
 		if (Model.RolledUp && !_tempExpanded && Settings.ExpandOnHover)
 		{
 			_tempExpanded = true;
+			// 展开的部分盖在旁边的分区上面
+			_manager.BringToFront(this);
 			ApplyBounds();
 		}
+	}
+
+	protected override void OnPreviewMouseDown(MouseButtonEventArgs e)
+	{
+		base.OnPreviewMouseDown(e);
+		_manager.BringToFront(this);
 	}
 
 	protected override void OnMouseLeave(MouseEventArgs e)
@@ -1261,6 +1379,7 @@ internal partial class FenceWindow : Window
 		SyncItems(fresh);
 		foreach (var item in fresh)
 		{
+			item.IsInFlight = _arriving.Contains(item.FullPath);
 			RequestIcon(item);
 		}
 		ApplyCutState();
@@ -1376,6 +1495,37 @@ internal partial class FenceWindow : Window
 	}
 
 	public FenceItem? FindItem(string key) => _items.FirstOrDefault(i => string.Equals(i.FullPath, key, StringComparison.OrdinalIgnoreCase));
+
+	/// <summary>
+	/// 一键整理时这些图标将从桌面飞来：归入本分区后先不显示，飞到时再由 CompleteArrival 显示。
+	/// </summary>
+	public void ExpectArrivals(IEnumerable<string> keys) => _arriving.UnionWith(keys);
+
+	public void CompleteArrival(string key)
+	{
+		_arriving.Remove(key);
+		if (FindItem(key) is { } item)
+		{
+			item.IsInFlight = false;
+		}
+	}
+
+	/// <summary>
+	/// 图标图像在屏幕上的位置（物理像素），一键整理动画的终点、删除分区动画的起点；分区没显示、已卷起，或图标不在可见范围内（分区小了要滚动）时返回 null。
+	/// </summary>
+	public RECT? GetIconRect(string key)
+	{
+		if (!IsVisible || IsCollapsed || FindItem(key) is not { } item
+				|| ItemsList.ItemContainerGenerator.ContainerFromItem(item) is not ListBoxItem container
+				|| ItemOps.FindChild<Image>(container, "IconImage") is not { IsVisible: true } image)
+		{
+			return null;
+		}
+		var rect = ItemOps.ScreenRect(image);
+		var viewport = ItemOps.ScreenRect(ContentHost);
+		bool inside = rect.Left >= viewport.Left && rect.Top >= viewport.Top && rect.Right <= viewport.Right && rect.Bottom <= viewport.Bottom;
+		return inside ? rect : null;
+	}
 
 	/// <summary>
 	/// 自定义顺序中记录项目的方式：桌面分区记完整解析名（用户桌面和公共桌面可能有同名文件），映射分区记文件名。
@@ -2424,6 +2574,7 @@ internal partial class FenceWindow : Window
 			if (Model.RolledUp && !_tempExpanded)
 			{
 				_tempExpanded = true;
+				_manager.BringToFront(this);
 				ApplyBounds();
 			}
 		}

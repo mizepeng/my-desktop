@@ -3,10 +3,12 @@ using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using Microsoft.Win32;
 using MyDesktop.Core;
 using MyDesktop.Models;
+using MyDesktop.Native;
 using MyDesktop.Services;
 
 namespace MyDesktop.Views;
@@ -28,12 +30,15 @@ internal partial class SettingsWindow : Window
 		"· 右键分区空白处或点击标题栏的「⋯」打开分区菜单，可修改颜色、排序、视图等",
 		"· 右键文件弹出系统右键菜单；F2 重命名，Delete 删除到回收站",
 		"· 双击桌面空白处可以一键隐藏/显示图标和分区；隐藏哪些可以在这里、托盘菜单或桌面右键菜单里选",
+		"· 按搜索快捷键（默认 Alt+Space，可在「常规」里修改）弹出搜索框，输入名称、全拼或首字母找到桌面上的图标，回车打开",
 		"· 桌面空白处的右键菜单里有 MyDesktop 子菜单",
 	];
 
 	readonly FenceManager _manager;
 	readonly ObservableCollection<OrganizeRule> _rules;
 	bool _loading = true;
+	// 正在录入搜索快捷键：这期间 Alt+空格等组合键不能弹出窗口的系统菜单
+	bool _capturingHotkey;
 
 	public SettingsWindow(FenceManager manager)
 	{
@@ -50,6 +55,7 @@ internal partial class SettingsWindow : Window
 	{
 		_loading = true;
 		AutoStartBox.IsChecked = AutoStart.IsEnabled();
+		HotkeyBox.Text = HotkeyText();
 		DoubleClickBox.IsChecked = Settings.DoubleClickToHide;
 		DoubleClickTargetBox.ItemsSource = Enum.GetValues<HideTarget>().Select(t => t.DisplayName()).ToList();
 		DoubleClickTargetBox.SelectedIndex = (int)Settings.DoubleClickTarget;
@@ -76,13 +82,31 @@ internal partial class SettingsWindow : Window
 		DataDirText.Text = AppPaths.DataDir;
 		TipsText.Text = string.Join("\n", Tips);
 		UpdateSliderTexts();
+		// 快捷键被其他程序占用时，打开设置就能看到提示
+		ApplyHotkey();
 		_loading = false;
+	}
+
+	protected override void OnSourceInitialized(EventArgs e)
+	{
+		base.OnSourceInitialized(e);
+		HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)?.AddHook(WndProc);
 	}
 
 	protected override void OnClosed(EventArgs e)
 	{
 		SaveRules();
 		base.OnClosed(e);
+	}
+
+	IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+	{
+		// 录入快捷键时按下 Alt+某键，系统会接着发 WM_SYSCHAR 弹出窗口菜单或发出提示音，这里吞掉
+		if (_capturingHotkey && msg == NativeMethods.WM_SYSCHAR)
+		{
+			handled = true;
+		}
+		return IntPtr.Zero;
 	}
 
 	void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -108,16 +132,75 @@ internal partial class SettingsWindow : Window
 
 	void AutoStartBox_Click(object sender, RoutedEventArgs e)
 	{
-		try
+		if (!_manager.SetAutoStart(AutoStartBox.IsChecked == true))
 		{
-			AutoStart.SetEnabled(AutoStartBox.IsChecked == true);
-		}
-		catch (Exception ex)
-		{
-			Log.Warn("设置开机自启失败", ex);
-			MessageDialog.Show("开机自动启动", $"设置失败：{ex.Message}", "确定");
 			AutoStartBox.IsChecked = AutoStart.IsEnabled();
 		}
+	}
+
+	string HotkeyText() => string.IsNullOrEmpty(Settings.SearchHotkey) ? "未设置" : Settings.SearchHotkey;
+
+	void HotkeyBox_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+	{
+		_capturingHotkey = true;
+		_manager.SuspendSearchHotkey();
+		HotkeyBox.Text = "请按下组合键";
+	}
+
+	/// <summary>
+	/// 录完（或点了别处）重新注册快捷键，被其他程序占用时在下面提示。
+	/// </summary>
+	void HotkeyBox_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+	{
+		_capturingHotkey = false;
+		HotkeyBox.Text = HotkeyText();
+		ApplyHotkey();
+	}
+
+	void HotkeyBox_PreviewKeyDown(object sender, KeyEventArgs e)
+	{
+		var key = e.Key == Key.System ? e.SystemKey : e.Key;
+		// 单按 Tab 照常切换焦点，免得困在录入框里
+		if (key == Key.Tab && Keyboard.Modifiers == ModifierKeys.None)
+		{
+			return;
+		}
+		e.Handled = true;
+		if (key == Key.Escape)
+		{
+			EndHotkeyCapture();
+			return;
+		}
+		var hotkey = new Hotkey(Keyboard.Modifiers, key);
+		if (!hotkey.IsValid)
+		{
+			// 只按了修饰键，或少了 Ctrl、Alt、Win：先显示已按下的修饰键，等用户按全
+			HotkeyBox.Text = Keyboard.Modifiers == ModifierKeys.None ? "请按下组合键" : Hotkey.ModifiersText(Keyboard.Modifiers);
+			return;
+		}
+		Settings.SearchHotkey = hotkey.ToString();
+		_manager.SaveSoon();
+		EndHotkeyCapture();
+	}
+
+	void ClearHotkey_Click(object sender, RoutedEventArgs e)
+	{
+		Settings.SearchHotkey = string.Empty;
+		_manager.SaveSoon();
+		HotkeyBox.Text = HotkeyText();
+		ApplyHotkey();
+	}
+
+	/// <summary>
+	/// 把焦点从录入框移开，触发重新注册。
+	/// </summary>
+	void EndHotkeyCapture() => Keyboard.Focus(NavList);
+
+	void ApplyHotkey()
+	{
+		bool ok = _manager.ApplySearchHotkey();
+		HotkeyStatus.Text = $"{Settings.SearchHotkey} 已被其他程序占用，请换一个组合键";
+		HotkeyStatus.Visibility = ok ? Visibility.Collapsed : Visibility.Visible;
 	}
 
 	void Setting_Changed(object sender, RoutedEventArgs e)

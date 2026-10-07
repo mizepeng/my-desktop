@@ -14,6 +14,7 @@ internal sealed class TrayIcon : IDisposable
 	const int SPI_SETWORKAREA = 0x002F;
 	const int SPI_SETDESKWALLPAPER = 0x0014;
 	const uint IconId = 1;
+	const int HotkeyId = 1;
 
 	readonly HwndSource _window;
 	readonly int _taskbarCreatedMessage;
@@ -38,6 +39,11 @@ internal sealed class TrayIcon : IDisposable
 	/// 剪贴板内容变化（用来把被剪切的图标显示成半透明）。
 	/// </summary>
 	public event Action? ClipboardChanged;
+
+	/// <summary>
+	/// 按下了 SetHotkey 注册的全局快捷键。
+	/// </summary>
+	public event Action? HotkeyPressed;
 
 	public IntPtr Handle => _window.Handle;
 
@@ -80,8 +86,18 @@ internal sealed class TrayIcon : IDisposable
 		Shell_NotifyIcon(NIM_MODIFY, ref data);
 	}
 
+	/// <summary>
+	/// 注册全局快捷键（只有一个，先注销原来的）；传 null 表示不用快捷键。被其他程序占用时返回 false。
+	/// </summary>
+	public bool SetHotkey(Hotkey? hotkey)
+	{
+		UnregisterHotKey(Handle, HotkeyId);
+		return hotkey is not { } key || RegisterHotKey(Handle, HotkeyId, key.NativeModifiers | MOD_NOREPEAT, key.VirtualKey);
+	}
+
 	public void Dispose()
 	{
+		UnregisterHotKey(Handle, HotkeyId);
 		RemoveClipboardFormatListener(Handle);
 		var data = CreateData(0);
 		Shell_NotifyIcon(NIM_DELETE, ref data);
@@ -153,6 +169,11 @@ internal sealed class TrayIcon : IDisposable
 		else if (msg == WM_CLIPBOARDUPDATE)
 		{
 			ClipboardChanged?.Invoke();
+		}
+		else if (msg == WM_HOTKEY && (int)wParam == HotkeyId)
+		{
+			HotkeyPressed?.Invoke();
+			handled = true;
 		}
 		else if (msg == WM_SETTINGCHANGE)
 		{
