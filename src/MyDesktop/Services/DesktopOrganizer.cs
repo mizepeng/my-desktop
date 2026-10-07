@@ -71,29 +71,38 @@ internal sealed class DesktopOrganizer : IDisposable
 			return;
 		}
 		SettingsBackup.Create(_manager.Settings, BackupReason.Organize);
-		_ = ExecuteAnimatedAsync(plan);
+		_ = ExecuteAnimatedAsync(plan, true);
 	}
 
 	/// <summary>
-	/// 一键整理：按规则顺序逐个分区归入（分区依次出现），图标从桌面上的原处沿弧线飞进分区里的格子，落定后才显示。
+	/// 整理（一键整理和自动整理都是）：按规则顺序逐个分区归入（分区依次出现），图标从桌面上的原处沿弧线飞进分区里的格子，落定后才显示。
 	/// 每个分区轮到时才归入，在那之前它的图标一直留在桌面上原处。
 	/// </summary>
-	async Task ExecuteAnimatedAsync(List<(OrganizeRule Rule, List<string> Paths)> plan)
+	/// <param name="interactive">一键整理：分区隐藏着时恢复显示，出错时提示；自动整理只记日志，不打扰用户的隐藏状态。</param>
+	async Task ExecuteAnimatedAsync(List<(OrganizeRule Rule, List<string> Paths)> plan, bool interactive)
 	{
-		var flights = new List<Task>();
+		var flights = new List<(FenceWindow Window, Task Flight)>();
 		try
 		{
 			foreach (var (rule, paths) in plan)
 			{
 				// 起点要在归入分区之前取：归入后图标就从桌面上消失了
 				var sources = _manager.CaptureDesktopIcons(paths);
-				var window = _manager.GetOrCreateRuleFence(rule, reveal: true);
+				var window = _manager.GetOrCreateRuleFence(rule, reveal: interactive);
+				// 归入的是标签组里没显示的标签：等同组别的标签的图标都落定了再切过去，让用户看到图标飞进这个标签，
+				// 免得飞向上一个标签的图标飞到一半被切走
+				if (interactive && _manager.IsHiddenTab(window))
+				{
+					var tabs = _manager.TabsOf(window);
+					await WhenLanded(flights.Where(f => tabs.Contains(f.Window)).Select(f => f.Flight));
+					await _manager.ActivateTabAsync(window, false);
+				}
 				window.ExpectArrivals(sources.Keys);
 				// 先排好飞行再归入：即使归入出错，飞行结束时也会把藏起来的图标显示出来
 				var delay = TimeSpan.Zero;
 				foreach (var (key, source) in sources)
 				{
-					flights.Add(FlyAsync(window, key, source, delay));
+					flights.Add((window, FlyAsync(window, key, source, delay)));
 					delay += FlyingIcon.Stagger;
 				}
 				_manager.AssignToFence(window, paths);
@@ -102,8 +111,76 @@ internal sealed class DesktopOrganizer : IDisposable
 		}
 		catch (Exception ex)
 		{
-			Log.Error("一键整理出错", ex);
-			MessageDialog.Show("一键整理桌面", $"整理时出错：{ex.Message}", "确定");
+			Log.Error(interactive ? "一键整理出错" : "自动整理出错", ex);
+			if (interactive)
+			{
+				MessageDialog.Show("一键整理桌面", $"整理时出错：{ex.Message}", "确定");
+			}
+		}
+		await WhenLanded(flights.Select(f => f.Flight));
+	}
+
+	/// <summary>
+	/// 等这些飞行都结束。只是动画出错时不影响整理，飞行结束时图标都已显示出来，记日志即可。
+	/// </summary>
+	static async Task WhenLanded(IEnumerable<Task> flights)
+	{
+		try
+		{
+			await Task.WhenAll(flights);
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("整理的动画出错", ex);
+		}
+	}
+
+	/// <summary>
+	/// 启动（包括恢复配置后重启）时接管桌面的那一刻，分区里的图标从资源管理器桌面上的原处飞进分区，节奏与整理相同。
+	/// 资源管理器的图标列表马上要藏起来，所以先在每个图标的原处放上飞行的图标接替它，再按分区依次起飞，落定后在分区里显示；
+	/// 列表里没有它（拿不到起点）或图像还没加载出来的图标不飞，直接显示。
+	/// </summary>
+	public async Task FlyInAtStartupAsync()
+	{
+		var flights = new List<Task>();
+		var windows = _manager.Windows.Where(w => !w.Model.IsPortal).ToList();
+		try
+		{
+			var groupDelay = TimeSpan.Zero;
+			foreach (var window in windows)
+			{
+				var sources = _manager.ExplorerIconRects(window.Model.Members);
+				var keys = new List<string>();
+				var delay = groupDelay;
+				foreach (var item in window.Items.ToList())
+				{
+					if (item.Icon is not ImageSource icon || !sources.TryGetValue(item.FullPath, out var source))
+					{
+						continue;
+					}
+					var flying = new FlyingIcon(icon);
+					flying.Place(source, 1);
+					flying.Show();
+					flights.Add(FlyInAsync(window, item.FullPath, flying, source, delay));
+					keys.Add(item.FullPath);
+					delay += FlyingIcon.Stagger;
+				}
+				window.KeepArrivals(keys);
+				if (keys.Count > 0)
+				{
+					groupDelay += GroupStagger;
+				}
+			}
+			Log.Info($"启动动画：{flights.Count} 个图标飞进分区");
+		}
+		catch (Exception ex)
+		{
+			// 准备动画出错时不能让分区里的图标一直藏着，全部直接显示
+			Log.Error("准备启动动画出错", ex);
+			foreach (var window in windows)
+			{
+				window.KeepArrivals([]);
+			}
 		}
 		try
 		{
@@ -111,8 +188,27 @@ internal sealed class DesktopOrganizer : IDisposable
 		}
 		catch (Exception ex)
 		{
-			// 只是动画出错，整理已经完成，飞行结束时图标都已显示出来
-			Log.Warn("一键整理的动画出错", ex);
+			// 只是动画出错，飞行结束时图标都已显示出来
+			Log.Warn("启动动画出错", ex);
+		}
+	}
+
+	/// <summary>
+	/// 启动动画里一个图标从资源管理器桌面上的原处飞进分区；分区里看不到它的格子时飞向分区中央并淡出。
+	/// </summary>
+	static async Task FlyInAsync(FenceWindow window, string key, FlyingIcon flying, RECT source, TimeSpan delay)
+	{
+		try
+		{
+			await Task.Delay(delay);
+			var target = window.GetIconRect(key);
+			var to = target ?? FlyingIcon.CenteredIn(window.GetBounds(), source.Width / 2, source.Height / 2);
+			await flying.FlyAsync(source, to, fadeIn: false, fadeOut: target == null);
+		}
+		finally
+		{
+			flying.Close();
+			window.CompleteArrival(key);
 		}
 	}
 
@@ -255,21 +351,13 @@ internal sealed class DesktopOrganizer : IDisposable
 		if (ready.Count > 0)
 		{
 			Log.Info($"自动整理 {ready.Count} 个新项目");
-			Execute(BuildPlan(ready), true);
+			_ = ExecuteAnimatedAsync(BuildPlan(ready), false);
 		}
 	}
 
 	bool IsNewItem(FileSystemInfo info)
 	{
 		return _downloaded.Contains(info.FullName) || DateTime.Now - info.CreationTime < NewItemWindow;
-	}
-
-	void Execute(List<(OrganizeRule Rule, List<string> Paths)> plan, bool silent)
-	{
-		foreach (var (rule, paths) in plan)
-		{
-			_manager.AssignToFence(_manager.GetOrCreateRuleFence(rule, reveal: !silent), paths);
-		}
 	}
 
 	/// <summary>

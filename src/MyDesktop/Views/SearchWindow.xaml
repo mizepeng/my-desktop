@@ -23,8 +23,10 @@
 		<SolidColorBrush x:Key="SearchHover" Color="#12FFFFFF" />
 		<SolidColorBrush x:Key="SearchSelected" Color="#24FFFFFF" />
 
+		<!-- 分类标题行（常用、全部）不能点也不能选 -->
 		<Style x:Key="ResultContainer" TargetType="ListBoxItem">
 			<Setter Property="FocusVisualStyle" Value="{x:Null}" />
+			<Setter Property="IsHitTestVisible" Value="{Binding IsSelectable}" />
 			<Setter Property="Template">
 				<Setter.Value>
 					<ControlTemplate TargetType="ListBoxItem">
@@ -38,6 +40,9 @@
 							<Trigger Property="IsSelected" Value="True">
 								<Setter TargetName="Bd" Property="Background" Value="{DynamicResource SearchSelected}" />
 							</Trigger>
+							<DataTrigger Binding="{Binding IsSelectable}" Value="False">
+								<Setter TargetName="Bd" Property="Padding" Value="12,8,12,2" />
+							</DataTrigger>
 						</ControlTemplate.Triggers>
 					</ControlTemplate>
 				</Setter.Value>
@@ -77,34 +82,41 @@
 			</Grid>
 			<Border x:Name="ResultsPanel" BorderBrush="{DynamicResource SearchBorder}" BorderThickness="0,1,0,0" Visibility="Collapsed">
 				<StackPanel Margin="0,6">
-					<TextBlock x:Name="FrequentHeader" Margin="18,4,18,4" FontSize="12" Foreground="{DynamicResource SearchSecondary}" Text="常用" Visibility="Collapsed" />
-					<Grid>
-						<ListBox x:Name="ResultsList"
-								Background="Transparent"
-								BorderThickness="0"
-								Focusable="False"
-								ItemContainerStyle="{StaticResource ResultContainer}"
-								ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-								ScrollViewer.VerticalScrollBarVisibility="Disabled"
-								PreviewMouseLeftButtonUp="ResultsList_PreviewMouseLeftButtonUp">
-							<ListBox.ItemTemplate>
-								<DataTemplate>
-									<Grid>
+					<ListBox x:Name="ResultsList"
+							Background="Transparent"
+							BorderThickness="0"
+							Focusable="False"
+							ItemContainerStyle="{StaticResource ResultContainer}"
+							ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+							ScrollViewer.VerticalScrollBarVisibility="Disabled"
+							PreviewMouseLeftButtonUp="ResultsList_PreviewMouseLeftButtonUp">
+						<ListBox.ItemTemplate>
+							<DataTemplate>
+								<Grid>
+									<TextBlock x:Name="HeaderText" FontSize="12" Foreground="{DynamicResource SearchSecondary}" Text="{Binding Header}" Visibility="Collapsed" />
+									<Grid x:Name="EntryContent">
 										<Grid.ColumnDefinitions>
 											<ColumnDefinition Width="Auto" />
 											<ColumnDefinition Width="*" />
 										</Grid.ColumnDefinitions>
-										<Image Width="32" Height="32" Source="{Binding Item.Icon}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" />
+										<Image Width="32" Height="32" Source="{Binding Entry.Item.Icon}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" />
 										<StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
-											<TextBlock Foreground="{DynamicResource SearchForeground}" Text="{Binding Item.DisplayName}" TextTrimming="CharacterEllipsis" />
-											<TextBlock Margin="0,1,0,0" FontSize="12" Foreground="{DynamicResource SearchSecondary}" Text="{Binding Location}" TextTrimming="CharacterEllipsis" />
+											<TextBlock Foreground="{DynamicResource SearchForeground}" Text="{Binding Entry.Item.DisplayName}" TextTrimming="CharacterEllipsis" />
+											<TextBlock Margin="0,1,0,0" FontSize="12" Foreground="{DynamicResource SearchSecondary}" Text="{Binding Entry.Location}" TextTrimming="CharacterEllipsis" />
 										</StackPanel>
 									</Grid>
-								</DataTemplate>
-							</ListBox.ItemTemplate>
-						</ListBox>
-						<TextBlock x:Name="NoResultText" Margin="18,8" Foreground="{DynamicResource SearchSecondary}" Text="没有找到匹配的图标" Visibility="Collapsed" />
-					</Grid>
+								</Grid>
+								<DataTemplate.Triggers>
+									<DataTrigger Binding="{Binding IsSelectable}" Value="False">
+										<Setter TargetName="HeaderText" Property="Visibility" Value="Visible" />
+										<Setter TargetName="EntryContent" Property="Visibility" Value="Collapsed" />
+									</DataTrigger>
+								</DataTemplate.Triggers>
+							</DataTemplate>
+						</ListBox.ItemTemplate>
+					</ListBox>
+					<TextBlock x:Name="NoResultText" Margin="18,8" Foreground="{DynamicResource SearchSecondary}" Text="没有找到匹配的图标" Visibility="Collapsed" />
+					<TextBlock x:Name="MoreText" Margin="18,6,18,4" FontSize="12" Foreground="{DynamicResource SearchSecondary}" Visibility="Collapsed" />
 				</StackPanel>
 			</Border>
 		</StackPanel>

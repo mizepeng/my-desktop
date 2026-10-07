@@ -180,6 +180,30 @@ internal sealed class DesktopTakeover : IDisposable
 	}
 
 	/// <summary>
+	/// 这些图标在资源管理器图标列表里的图像范围（屏幕物理像素），启动动画的起点：接管之前它们就显示在这些位置。
+	/// 按图标层画图标的方式推算（格子里水平居中、贴着格子上沿），列表里没有的不在结果里。
+	/// </summary>
+	public Dictionary<string, RECT> ExplorerIconRects(IEnumerable<string> keys)
+	{
+		var result = new Dictionary<string, RECT>(StringComparer.OrdinalIgnoreCase);
+		if (Items.Snapshot is not DesktopSnapshot snapshot)
+		{
+			return result;
+		}
+		var wanted = keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+		foreach (var entry in snapshot.Items.Where(e => wanted.Contains(e.Key)))
+		{
+			var cell = ToCell(snapshot, entry.Position);
+			var (_, scale) = GetMonitorWorkArea(MonitorFromPoint(cell, MONITOR_DEFAULTTONEAREST));
+			int size = (int)Math.Round(snapshot.IconSize * scale);
+			int left = cell.X + Math.Max(0, (snapshot.Spacing.X - size) / 2);
+			int top = cell.Y + (int)Math.Round(4 / 3.0 * scale);
+			result[entry.Key] = new RECT(left, top, left + size, top + size);
+		}
+		return result;
+	}
+
+	/// <summary>
 	/// 图标在桌面上的位置（物理像素），删除分区动画的终点；图标层没显示或桌面上没有这个图标时返回 null。
 	/// </summary>
 	public RECT? GetIconRect(string key)
@@ -254,6 +278,8 @@ internal sealed class DesktopTakeover : IDisposable
 			timer.Stop();
 			if (_active && !_disposed)
 			{
+				// 启动后第一次接管时，分区里的图标从资源管理器图标列表里的原处飞进分区：先放好飞行的图标再藏起列表
+				_manager.OnDesktopTakenOver();
 				DesktopHost.SetIconsVisible(false);
 			}
 		};

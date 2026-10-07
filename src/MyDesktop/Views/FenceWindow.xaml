@@ -144,7 +144,11 @@
 						Background="#30000000"
 						CornerRadius="7,7,0,0"
 						MouseLeftButtonDown="TitleBar_MouseLeftButtonDown"
-						MouseRightButtonUp="TitleBar_MouseRightButtonUp">
+						MouseMove="TitleBar_MouseMove"
+						MouseLeftButtonUp="TitleBar_MouseLeftButtonUp"
+						LostMouseCapture="TitleBar_LostMouseCapture"
+						MouseRightButtonUp="TitleBar_MouseRightButtonUp"
+						MouseWheel="TitleBar_MouseWheel">
 					<Grid x:Name="TitleContent" Margin="10,0,4,0">
 						<Grid.ColumnDefinitions>
 							<ColumnDefinition Width="Auto" />
@@ -191,6 +195,62 @@
 								<RotateTransform Angle="-90" />
 							</TextBlock.LayoutTransform>
 						</TextBlock>
+						<!-- 合并成标签页后，标题换成各成员分区的标签；竖放标题栏时标签文字竖排 -->
+						<ItemsControl x:Name="TabStrip" Grid.Column="1" Visibility="Collapsed" Focusable="False">
+							<ItemsControl.ItemsPanel>
+								<ItemsPanelTemplate>
+									<local:TabStripPanel />
+								</ItemsPanelTemplate>
+							</ItemsControl.ItemsPanel>
+							<ItemsControl.ItemTemplate>
+								<DataTemplate>
+									<Border x:Name="Tab" Margin="0,4,4,4" Padding="8,0" CornerRadius="5" Background="Transparent">
+										<Grid>
+											<TextBlock x:Name="TabText"
+													VerticalAlignment="Center"
+													FontSize="13"
+													FontWeight="SemiBold"
+													Opacity="0.6"
+													Text="{Binding Title}"
+													TextTrimming="CharacterEllipsis"
+													Foreground="{DynamicResource FenceForeground}"
+													Effect="{DynamicResource TextShadow}" />
+											<TextBlock x:Name="TabVerticalText"
+													HorizontalAlignment="Left"
+													VerticalAlignment="Center"
+													Visibility="Collapsed"
+													FontSize="13"
+													FontWeight="SemiBold"
+													Opacity="0.6"
+													Text="{Binding VerticalTitle}"
+													TextAlignment="Center"
+													Foreground="{DynamicResource FenceForeground}"
+													Effect="{DynamicResource TextShadow}">
+												<TextBlock.LayoutTransform>
+													<RotateTransform Angle="-90" />
+												</TextBlock.LayoutTransform>
+											</TextBlock>
+										</Grid>
+									</Border>
+									<DataTemplate.Triggers>
+										<DataTrigger Binding="{Binding IsVertical}" Value="True">
+											<Setter TargetName="Tab" Property="Margin" Value="0,3,4,3" />
+											<Setter TargetName="Tab" Property="Padding" Value="6,0" />
+											<Setter TargetName="TabText" Property="Visibility" Value="Collapsed" />
+											<Setter TargetName="TabVerticalText" Property="Visibility" Value="Visible" />
+										</DataTrigger>
+										<Trigger SourceName="Tab" Property="IsMouseOver" Value="True">
+											<Setter TargetName="Tab" Property="Background" Value="{DynamicResource FenceHover}" />
+										</Trigger>
+										<DataTrigger Binding="{Binding IsActive}" Value="True">
+											<Setter TargetName="Tab" Property="Background" Value="{DynamicResource FenceSelected}" />
+											<Setter TargetName="TabText" Property="Opacity" Value="1" />
+											<Setter TargetName="TabVerticalText" Property="Opacity" Value="1" />
+										</DataTrigger>
+									</DataTemplate.Triggers>
+								</DataTemplate>
+							</ItemsControl.ItemTemplate>
+						</ItemsControl>
 						<TextBox x:Name="TitleEditor"
 								Grid.Column="1"
 								Margin="0,0,4,0"
@@ -204,6 +264,16 @@
 							<Button x:Name="RollButton" Style="{StaticResource FenceTitleButton}" Content="&#xE70E;" ToolTip="卷起" Click="RollButton_Click" />
 							<Button x:Name="MenuButton" Style="{StaticResource FenceTitleButton}" Content="&#xE712;" ToolTip="分区菜单" Click="MenuButton_Click" />
 						</StackPanel>
+						<!-- 别的分区拖到这个标题栏上时的提示（只在横放的标题栏上显示文字） -->
+						<Border x:Name="MergeHint"
+								Grid.ColumnSpan="3"
+								Margin="-6,3,0,3"
+								CornerRadius="5"
+								Background="#E63B82F6"
+								IsHitTestVisible="False"
+								Visibility="Collapsed">
+							<TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="13" FontWeight="SemiBold" Foreground="White" Text="松手合并为标签页" />
+						</Border>
 					</Grid>
 				</Border>
 
@@ -245,7 +315,8 @@
 					</Canvas>
 				</Grid>
 
-				<!-- 调整大小时显示能容纳的列数 × 行数 -->
+
+				<!-- 调整大小时显示装得下的列数 × 行数，刚好装满时变成蓝色（代码里设置背景和数字颜色） -->
 				<Border x:Name="GridHint"
 						Grid.RowSpan="2"
 						Grid.ColumnSpan="2"
@@ -253,7 +324,6 @@
 						VerticalAlignment="Center"
 						Padding="14,4"
 						CornerRadius="6"
-						Background="#B3000000"
 						Visibility="Collapsed"
 						IsHitTestVisible="False">
 					<TextBlock x:Name="GridHintText" FontSize="22" FontWeight="SemiBold" Foreground="White" />

@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -40,6 +41,10 @@ internal partial class FenceWindow : Window
 	const double SlideMilliseconds = 180;
 
 	static readonly DropShadowEffect TextShadowEffect = CreateShadow();
+	// 调整大小时列数 × 行数提示：平时半透明黑底；两个方向都刚好装满时蓝底，只有一个方向刚好装满时那个数字用浅蓝色
+	static readonly SolidColorBrush HintBackground = Frozen(Color.FromArgb(0xB3, 0x00, 0x00, 0x00));
+	static readonly SolidColorBrush SnappedHintBackground = Frozen(Color.FromArgb(0xE6, 0x3B, 0x82, 0xF6));
+	static readonly SolidColorBrush SnappedHintText = Frozen(Color.FromRgb(0x60, 0xA5, 0xFA));
 	static readonly int[] CustomColors = new int[16];
 
 	readonly FenceManager _manager;
@@ -74,6 +79,16 @@ internal partial class FenceWindow : Window
 	bool _widthResized;
 	// 每次开始拖动加一，松手后的滑动发现它变了就停下
 	int _slideVersion;
+	// 拖动分区时鼠标所在的、松手就合并进去的分区标题栏
+	FenceWindow? _mergeTarget;
+
+	// 标签页：按住 Shift 拖动的标签、是否已拖出标题栏（松手就拆开）及拆开后位置的预览框
+	FenceTab? _draggedTab;
+	bool _tabDetaching;
+	DrawFrameWindow? _detachPreview;
+	// 拖着图标停留的别的标签，停够一会儿就切过去
+	FenceWindow? _hoverTab;
+	readonly DispatcherTimer _tabHoverTimer;
 
 	// 标题栏当前摆在哪一侧，没变时不重排布局
 	RollEdge? _titleEdge;
@@ -120,6 +135,32 @@ internal partial class FenceWindow : Window
 				ShowTitleButtons(false);
 			}
 		};
+		_tabHoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+		_tabHoverTimer.Tick += (_, _) =>
+		{
+			_tabHoverTimer.Stop();
+			if (_hoverTab is FenceWindow tab && _dragInside)
+			{
+				_hoverTab = null;
+				_ = _manager.ActivateTabAsync(tab, false);
+			}
+		};
+	}
+
+	/// <summary>
+	/// 标题栏上的一个标签，对应标签组里的一个分区。
+	/// </summary>
+	public sealed class FenceTab(FenceWindow window, bool isActive, bool isVertical)
+	{
+		public FenceWindow Window => window;
+
+		public string Title => window.Model.Title;
+
+		public string VerticalTitle => ToVerticalText(window.Model.Title);
+
+		public bool IsActive => isActive;
+
+		public bool IsVertical => isVertical;
 	}
 
 	public FenceSettings Model { get; }
@@ -184,8 +225,12 @@ internal partial class FenceWindow : Window
 		// 首次定位若跨越不同 DPI 的显示器，WPF 会按新 DPI 缩放窗口，第二次把尺寸校正回保存的物理像素
 		ApplyBounds();
 		ApplyBounds();
-		Show();
-		PlaceAboveDesktop();
+		// 标签组里没显示的标签照常加载内容，只是不显示
+		if (!_manager.IsHiddenTab(this))
+		{
+			Show();
+			PlaceAboveDesktop();
+		}
 		OnFolderChanged();
 	}
 
@@ -209,6 +254,8 @@ internal partial class FenceWindow : Window
 		_refreshTimer.Stop();
 		_collapseTimer.Stop();
 		_buttonsTimer.Stop();
+		_tabHoverTimer.Stop();
+		_detachPreview?.Close();
 		Close();
 	}
 
@@ -245,7 +292,17 @@ internal partial class FenceWindow : Window
 	/// <summary>
 	/// 散放图标排布时要避开的范围（物理像素）：按保存的位置和尺寸，卷起时只算收在边上的那一条，不受悬停临时展开影响。
 	/// </summary>
-	public RECT GetLayoutBounds() => Model.RolledUp ? CollapsedRect() : ExpandedRect;
+	public RECT GetLayoutBounds() => LayoutBoundsOf(ExpandedRect);
+
+	/// <summary>
+	/// 展开范围是 expanded 时占的范围：卷起时只算收起的那一条（与 GetLayoutBounds 相同）。
+	/// </summary>
+	public RECT LayoutBoundsOf(RECT expanded) => Model.RolledUp ? CollapsedRect(expanded) : expanded;
+
+	/// <summary>
+	/// 标题栏在屏幕上的范围（物理像素），拖动别的分区到这里松手就合并成标签页。
+	/// </summary>
+	public RECT TitleBarRect() => ItemOps.ScreenRect(TitleBar);
 
 	#endregion
 
@@ -307,6 +364,8 @@ internal partial class FenceWindow : Window
 			case WM_MOVING:
 			{
 				HideBlurWhileMoving();
+				// 鼠标停在别的分区标题栏上时，松手就合并成标签页
+				SetMergeTarget(_manager.MergeTargetAt(this, NativeMethods.GetCursorPos()));
 				if (Settings.SnapToEdges)
 				{
 					SnapMoving(lParam);
@@ -625,7 +684,8 @@ internal partial class FenceWindow : Window
 	}
 
 	/// <summary>
-	/// 调整大小时在分区中央显示当前尺寸能完整容纳的列数 × 行数；没有图标可供测量时不显示。
+	/// 调整大小时在分区中央显示装得下的列数 × 行数（列表视图只显示行数）：两个方向都刚好装满整列、整行时整个提示变蓝，
+	/// 只有一个方向刚好装满时只把那个数字标成蓝色。
 	/// </summary>
 	void ShowGridHint(RECT rect, (List<int> Widths, List<int> Heights) grid)
 	{
@@ -637,9 +697,26 @@ internal partial class FenceWindow : Window
 		// 留 1 像素余量，避免换算取整让刚好吸附到的尺寸少算一行
 		int rows = grid.Heights.Count(h => h <= rect.Height + 1);
 		int columns = grid.Widths.Count(w => w <= rect.Width + 1);
-		GridHintText.Text = Model.View == FenceView.List ? $"{rows} 行" : $"{columns} × {rows}";
+		bool list = Model.View == FenceView.List;
+		bool rowsFit = grid.Heights.Any(h => Math.Abs(h - rect.Height) <= 1);
+		// 列表视图只有一列，只看行
+		bool columnsFit = list || grid.Widths.Any(w => Math.Abs(w - rect.Width) <= 1);
+		bool allFit = rowsFit && columnsFit;
+		GridHint.Background = allFit ? SnappedHintBackground : HintBackground;
+		GridHintText.Inlines.Clear();
+		if (!list)
+		{
+			GridHintText.Inlines.Add(HintRun(columns.ToString(), columnsFit && !allFit));
+			GridHintText.Inlines.Add(new Run(" × "));
+		}
+		GridHintText.Inlines.Add(HintRun(list ? $"{rows} 行" : rows.ToString(), rowsFit && !allFit));
 		GridHint.Visibility = Visibility.Visible;
 	}
+
+	/// <summary>
+	/// 提示里的一个数字，这个方向刚好装满时标成蓝色。
+	/// </summary>
+	static Run HintRun(string text, bool fits) => fits ? new Run(text) { Foreground = SnappedHintText } : new Run(text);
 
 	/// <summary>
 	/// 拖动或缩放结束时，系统会按鼠标位置再定位一次而忽略最后的吸附结果，这里改回拖动中最后显示的位置；
@@ -684,25 +761,17 @@ internal partial class FenceWindow : Window
 		}
 		_dragLastRect = null;
 		_dragFinished = false;
-		SaveBounds();
-		// 分区之间不重叠：松手时压住了别的分区，滑到最近的空位，所在屏幕上放不下时滑回拖动前的位置。
-		// 只单击标题栏、没有移动时不动，原本就重叠的旧布局等下次拖动时再处理
-		var bounds = GetBounds();
-		if (!bounds.Equals(_dragRectStart))
+		var mergeTarget = _mergeTarget;
+		SetMergeTarget(null);
+		// 松手时鼠标在别的分区标题栏上：合并成标签页（按 Esc 取消、回到原处时不合并）
+		if (mergeTarget != null && !GetBounds().Equals(_dragRectStart))
 		{
-			var layout = GetLayoutBounds();
-			var target = _manager.FindFreeSpot(this, layout) is RECT spot
-					? new RECT(bounds.Left + spot.Left - layout.Left, bounds.Top + spot.Top - layout.Top, bounds.Right + spot.Left - layout.Left, bounds.Bottom + spot.Top - layout.Top)
-					: _dragRectStart;
-			if (!target.Equals(bounds))
-			{
-				if (!await SlideTo(target))
-				{
-					// 滑动途中又开始拖动，由那一次收尾
-					return;
-				}
-				SaveBounds();
-			}
+			await _manager.MergeAsync(this, mergeTarget);
+		}
+		else if (!await SaveAndAvoidOverlap())
+		{
+			// 滑动途中又开始拖动，由那一次收尾
+			return;
 		}
 		_inSizeMove = false;
 		_heightResized = false;
@@ -716,9 +785,37 @@ internal partial class FenceWindow : Window
 	}
 
 	/// <summary>
+	/// 保存拖动结果。分区之间不重叠：松手时压住了别的分区，滑到最近的空位，所在屏幕上放不下时滑回拖动前的位置；
+	/// 只单击标题栏、没有移动时不动，原本就重叠的旧布局等下次拖动时再处理。滑动途中又开始拖动时返回 false。
+	/// </summary>
+	async Task<bool> SaveAndAvoidOverlap()
+	{
+		SaveBounds();
+		var bounds = GetBounds();
+		if (bounds.Equals(_dragRectStart))
+		{
+			return true;
+		}
+		var layout = GetLayoutBounds();
+		var target = _manager.FindFreeSpot(this, layout) is RECT spot
+				? new RECT(bounds.Left + spot.Left - layout.Left, bounds.Top + spot.Top - layout.Top, bounds.Right + spot.Left - layout.Left, bounds.Bottom + spot.Top - layout.Top)
+				: _dragRectStart;
+		if (target.Equals(bounds))
+		{
+			return true;
+		}
+		if (!await SlideTo(target))
+		{
+			return false;
+		}
+		SaveBounds();
+		return true;
+	}
+
+	/// <summary>
 	/// 先快后慢地滑到 target（物理像素）；途中又开始拖动或分区被删除时停下，返回 false。
 	/// </summary>
-	async Task<bool> SlideTo(RECT target)
+	public async Task<bool> SlideTo(RECT target)
 	{
 		int version = ++_slideVersion;
 		var from = GetBounds();
@@ -789,6 +886,7 @@ internal partial class FenceWindow : Window
 		}
 		// 用户调整过的位置和大小属于当前所在显示器的缩放比例
 		Model.LayoutDpi = GetDpiForRect(ExpandedRect);
+		_manager.SyncGroup(this);
 		_manager.SaveSoon();
 		_manager.OnFenceLayoutChanged();
 	}
@@ -877,10 +975,11 @@ internal partial class FenceWindow : Window
 	/// <summary>
 	/// 收起后剩下的那一条：沿收向的一侧，宽度（或高度）正好是标题栏。
 	/// </summary>
-	RECT CollapsedRect()
+	RECT CollapsedRect() => CollapsedRect(ExpandedRect);
+
+	RECT CollapsedRect(RECT r)
 	{
 		int thickness = CollapsedHeight();
-		var r = ExpandedRect;
 		return Model.RollEdge switch
 		{
 			RollEdge.Top => new RECT(r.Left, r.Top, r.Right, r.Top + thickness),
@@ -939,6 +1038,7 @@ internal partial class FenceWindow : Window
 		Model.RollDirection = direction;
 		Model.RollEdge = direction ?? AutoRollEdge(ExpandedRect);
 		ApplyBounds();
+		_manager.SyncGroup(this);
 		_manager.OnFenceLayoutChanged();
 		_manager.SaveSoon();
 	}
@@ -955,6 +1055,7 @@ internal partial class FenceWindow : Window
 			_manager.BringToFront(this);
 		}
 		ApplyBounds();
+		_manager.SyncGroup(this);
 		_manager.SaveSoon();
 		_manager.OnFenceLayoutChanged();
 	}
@@ -1010,17 +1111,129 @@ internal partial class FenceWindow : Window
 		Grid.SetColumn(ContentHost, vertical ? 1 - barIndex : 0);
 		TitleContent.LayoutTransform = vertical ? new RotateTransform(90) : Transform.Identity;
 		TitleContent.Margin = vertical ? new Thickness(0, 10, 0, 4) : new Thickness(10, 0, 4, 0);
-		ShowTitleText(TitleEditor.Visibility != Visibility.Visible);
+		UpdateTabs();
 	}
 
 	/// <summary>
-	/// 标题栏竖放时显示竖排标题，否则显示横排标题；改名期间都不显示。
+	/// 合并成标签页时显示标签条，否则标题栏竖放时显示竖排标题、横放时显示横排标题；改名期间都不显示。
 	/// </summary>
 	void ShowTitleText(bool show)
 	{
 		bool vertical = _titleEdge is RollEdge.Left or RollEdge.Right;
-		TitleText.Visibility = vertical ? Visibility.Collapsed : show ? Visibility.Visible : Visibility.Hidden;
-		VerticalTitleText.Visibility = vertical && show ? Visibility.Visible : Visibility.Collapsed;
+		bool tabbed = TabStrip.ItemsSource != null;
+		TabStrip.Visibility = !tabbed ? Visibility.Collapsed : show ? Visibility.Visible : Visibility.Hidden;
+		TitleText.Visibility = tabbed || vertical ? Visibility.Collapsed : show ? Visibility.Visible : Visibility.Hidden;
+		VerticalTitleText.Visibility = !tabbed && vertical && show ? Visibility.Visible : Visibility.Collapsed;
+	}
+
+	/// <summary>
+	/// 按所在的标签组刷新标题栏：在组里时显示各成员分区的标签，自己的那个高亮；不在组里时显示标题。
+	/// </summary>
+	public void UpdateTabs()
+	{
+		var tabs = _manager.TabsOf(this);
+		bool vertical = _titleEdge is RollEdge.Left or RollEdge.Right;
+		TabStrip.ItemsSource = tabs.Count > 1 ? tabs.Select(window => new FenceTab(window, window == this, vertical)).ToList() : null;
+		ShowTitleText(TitleEditor.Visibility != Visibility.Visible);
+	}
+
+	/// <summary>
+	/// 鼠标事件发生在哪个标签上；不在标签上时返回 null。
+	/// </summary>
+	static FenceTab? TabAt(object source)
+	{
+		for (var element = source as DependencyObject; element != null; element = element is Visual ? VisualTreeHelper.GetParent(element) : LogicalTreeHelper.GetParent(element))
+		{
+			if (element is FrameworkElement { DataContext: FenceTab tab })
+			{
+				return tab;
+			}
+		}
+		return null;
+	}
+
+	/// <summary>
+	/// 鼠标沿标签条落在第几个标签的位置（超出两端算第一个或最后一个），按住 Shift 拖动标签时据此调整顺序；
+	/// 标签刚重排、还没排好版时返回 -1。
+	/// </summary>
+	int TabIndexAt(POINT cursor)
+	{
+		bool vertical = _titleEdge is RollEdge.Left or RollEdge.Right;
+		int count = TabStrip.Items.Count;
+		for (int i = 0; i < count; i++)
+		{
+			if (TabStrip.ItemContainerGenerator.ContainerFromIndex(i) is not FrameworkElement { IsLoaded: true } container)
+			{
+				return -1;
+			}
+			// 竖放的标题栏整体旋转了 90°，两角换算到屏幕上后取靠后的一端
+			var a = container.PointToScreen(new Point(0, 0));
+			var b = container.PointToScreen(new Point(container.ActualWidth, container.ActualHeight));
+			double end = vertical ? Math.Max(a.Y, b.Y) : Math.Max(a.X, b.X);
+			if ((vertical ? cursor.Y : cursor.X) < end)
+			{
+				return i;
+			}
+		}
+		return count - 1;
+	}
+
+	/// <summary>
+	/// 拖出去拆开时的展开范围（物理像素）：标题栏中间对着鼠标，收进鼠标所在显示器的工作区。
+	/// </summary>
+	public RECT DetachedBoundsAt(POINT cursor)
+	{
+		var (work, scale) = GetMonitorWorkArea(MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST));
+		int left = Math.Clamp(cursor.X - Model.Width / 2, work.Left, Math.Max(work.Left, work.Right - Model.Width));
+		int top = Math.Clamp(cursor.Y - (int)Math.Round(TitleBarDip / 2 * scale), work.Top, Math.Max(work.Top, work.Bottom - Model.Height));
+		return new RECT(left, top, left + Model.Width, top + Model.Height);
+	}
+
+	/// <summary>
+	/// 切换标签时接替当前显示的标签：同样的位置和悬停展开状态，先显示在它正下方，等画好再由调用方隐藏它，切换时不闪。
+	/// </summary>
+	public async Task ShowInPlaceOf(FenceWindow current)
+	{
+		_tempExpanded = current._tempExpanded;
+		ApplyBounds();
+		Show();
+		// 不显示期间缩放比例变过的话，按现在的比例重新摆放
+		if (HasStaleDpi())
+		{
+			RefreshDpi();
+		}
+		DesktopHost.PlaceBelow(_hwnd, current.Handle);
+		// 第一帧排版，第二帧图标画出来
+		await FlyingIcon.NextFrame();
+		await FlyingIcon.NextFrame();
+		if (_tempExpanded)
+		{
+			RestartTimer(_collapseTimer);
+		}
+	}
+
+	/// <summary>
+	/// 拖动分区经过别的分区标题栏时，标出松手会合并进去的那个。
+	/// </summary>
+	void SetMergeTarget(FenceWindow? target)
+	{
+		if (target == _mergeTarget)
+		{
+			return;
+		}
+		_mergeTarget?.ShowMergeHint(false);
+		_mergeTarget = target;
+		target?.ShowMergeHint(true);
+	}
+
+	/// <summary>
+	/// 别的分区拖到本分区标题栏上时：边框高亮，横放的标题栏上提示松手合并（竖放的标题栏太窄，只高亮边框）。
+	/// </summary>
+	public void ShowMergeHint(bool on)
+	{
+		SetDropHighlight(on);
+		bool vertical = _titleEdge is RollEdge.Left or RollEdge.Right;
+		MergeHint.Visibility = on && !vertical ? Visibility.Visible : Visibility.Collapsed;
 	}
 
 	/// <summary>
@@ -1301,6 +1514,10 @@ internal partial class FenceWindow : Window
 
 	public void FadeIn()
 	{
+		if (_manager.IsHiddenTab(this))
+		{
+			return;
+		}
 		if (!IsVisible)
 		{
 			BeginAnimation(OpacityProperty, null);
@@ -1507,6 +1724,18 @@ internal partial class FenceWindow : Window
 		if (FindItem(key) is { } item)
 		{
 			item.IsInFlight = false;
+		}
+	}
+
+	/// <summary>
+	/// 只留下这些还要飞来的图标，其余等着飞来的都直接显示（启动动画里没有起点或图像的图标不飞）。
+	/// </summary>
+	public void KeepArrivals(IEnumerable<string> keys)
+	{
+		_arriving.IntersectWith(keys);
+		foreach (var item in _items)
+		{
+			item.IsInFlight = _arriving.Contains(item.FullPath);
 		}
 	}
 
@@ -1919,6 +2148,10 @@ internal partial class FenceWindow : Window
 
 	#region 标题栏
 
+	/// <summary>
+	/// 拖标题栏（包括标签）移动整个分区或整组标签；没有拖动、只是点了别的标签时切过去。
+	/// 按住 Shift 拖标签时改为调整标签顺序，拖出标题栏就拆成独立分区。
+	/// </summary>
 	void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
 	{
 		if (TitleEditor.IsVisible)
@@ -1932,28 +2165,121 @@ internal partial class FenceWindow : Window
 			e.Handled = true;
 			return;
 		}
-		if (Model.Locked)
+		e.Handled = true;
+		var tab = TabAt(e.OriginalSource);
+		if (tab != null && !Model.Locked && Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+		{
+			_draggedTab = tab;
+			_tabDetaching = false;
+			TitleBar.CaptureMouse();
+			return;
+		}
+		if (!Model.Locked)
+		{
+			var start = GetBounds();
+			try
+			{
+				DragMove();
+			}
+			catch (InvalidOperationException)
+			{
+				// 鼠标已松开时 DragMove 会抛异常，忽略即可
+			}
+			if (!GetBounds().Equals(start))
+			{
+				return;
+			}
+		}
+		if (tab != null && tab.Window != this)
+		{
+			_ = _manager.ActivateTabAsync(tab.Window, true);
+		}
+	}
+
+	void TitleBar_MouseMove(object sender, MouseEventArgs e)
+	{
+		if (_draggedTab is not FenceTab tab)
 		{
 			return;
 		}
-		try
+		var cursor = NativeMethods.GetCursorPos();
+		// 离开标题栏超过一个标题栏的高度就是要拆出去，预览拆开后的位置
+		int slack = (int)Math.Round(TitleBarDip * ScaleFactor);
+		_tabDetaching = !TitleBarRect().Inflate(slack).Contains(cursor);
+		if (_tabDetaching)
 		{
-			DragMove();
+			_detachPreview ??= new DrawFrameWindow();
+			_detachPreview.ShowAt(tab.Window.LayoutBoundsOf(tab.Window.DetachedBoundsAt(cursor)));
+			return;
 		}
-		catch (InvalidOperationException)
+		_detachPreview?.Hide();
+		if (TabIndexAt(cursor) is int index and >= 0)
 		{
-			// 鼠标已松开时 DragMove 会抛异常，忽略即可
+			_manager.MoveTab(tab.Window, index);
+		}
+	}
+
+	void TitleBar_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+	{
+		if (_draggedTab is not FenceTab tab)
+		{
+			return;
+		}
+		bool detach = _tabDetaching;
+		EndTabDrag();
+		if (detach)
+		{
+			_manager.DetachTab(tab.Window, NativeMethods.GetCursorPos());
 		}
 		e.Handled = true;
 	}
 
-	void TitleBar_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+	void TitleBar_LostMouseCapture(object sender, MouseEventArgs e) => EndTabDrag();
+
+	void EndTabDrag()
+	{
+		_draggedTab = null;
+		_tabDetaching = false;
+		_detachPreview?.Hide();
+		if (TitleBar.IsMouseCaptured)
+		{
+			TitleBar.ReleaseMouseCapture();
+		}
+	}
+
+	async void TitleBar_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
 	{
 		if (TitleEditor.IsVisible)
 		{
 			return;
 		}
-		ShowFenceMenu(NativeMethods.GetCursorPos());
+		e.Handled = true;
+		var point = NativeMethods.GetCursorPos();
+		// 右键点的是别的标签：先切过去，菜单作用于那个分区
+		if (TabAt(e.OriginalSource) is FenceTab tab && tab.Window != this)
+		{
+			await _manager.ActivateTabAsync(tab.Window, true);
+			tab.Window.ShowFenceMenu(point);
+			return;
+		}
+		ShowFenceMenu(point);
+	}
+
+	/// <summary>
+	/// 在标签条上滚动滚轮切换标签，到头不循环。
+	/// </summary>
+	void TitleBar_MouseWheel(object sender, MouseWheelEventArgs e)
+	{
+		var tabs = _manager.TabsOf(this);
+		if (tabs.Count < 2)
+		{
+			return;
+		}
+		int index = tabs.IndexOf(this) + (e.Delta > 0 ? -1 : 1);
+		if (index >= 0 && index < tabs.Count)
+		{
+			_ = _manager.ActivateTabAsync(tabs[index], IsActive);
+		}
 		e.Handled = true;
 	}
 
@@ -2078,6 +2404,19 @@ internal partial class FenceWindow : Window
 			});
 			menu.AddSeparator();
 			menu.Add("重命名分区", BeginTitleEdit);
+			var tabs = _manager.TabsOf(this);
+			if (tabs.Count > 1)
+			{
+				int index = tabs.IndexOf(this);
+				bool vertical = _titleEdge is RollEdge.Left or RollEdge.Right;
+				menu.AddSubMenu("标签页", sub =>
+				{
+					sub.Add(vertical ? "上移" : "左移", () => _manager.MoveTab(this, index - 1), enabled: !Model.Locked && index > 0);
+					sub.Add(vertical ? "下移" : "右移", () => _manager.MoveTab(this, index + 1), enabled: !Model.Locked && index < tabs.Count - 1);
+					sub.AddSeparator();
+					sub.Add("拆分为独立分区", () => _manager.DetachTab(this, null), enabled: !Model.Locked);
+				});
+			}
 			menu.Add(Model.RolledUp ? "展开分区" : "卷起分区", ToggleRollUp);
 			menu.AddSubMenu("卷起方向", sub =>
 			{
@@ -2202,6 +2541,7 @@ internal partial class FenceWindow : Window
 	{
 		Model.Locked = !Model.Locked;
 		ApplyLockState();
+		_manager.SyncGroup(this);
 		_manager.SaveSoon();
 	}
 
@@ -2596,7 +2936,30 @@ internal partial class FenceWindow : Window
 		_dragVersion++;
 		e.Effects = ComputeEffect(e);
 		_dropPreview.Over(e);
+		HoverTab(e);
 		e.Handled = true;
+	}
+
+	/// <summary>
+	/// 拖着图标停在别的标签上一会儿就切到那个标签，方便放进去。
+	/// </summary>
+	void HoverTab(DragEventArgs e)
+	{
+		var hovered = TitleBar.InputHitTest(e.GetPosition(TitleBar)) is DependencyObject hit ? TabAt(hit)?.Window : null;
+		if (hovered == this)
+		{
+			hovered = null;
+		}
+		if (hovered == _hoverTab)
+		{
+			return;
+		}
+		_hoverTab = hovered;
+		_tabHoverTimer.Stop();
+		if (hovered != null)
+		{
+			_tabHoverTimer.Start();
+		}
 	}
 
 	/// <summary>
@@ -2703,6 +3066,8 @@ internal partial class FenceWindow : Window
 	void EndDragInside(bool notifyHelper)
 	{
 		_dragInside = false;
+		_hoverTab = null;
+		_tabHoverTimer.Stop();
 		_dropKeys = null;
 		_dropFiles = [];
 		_dropFromDesktop = false;

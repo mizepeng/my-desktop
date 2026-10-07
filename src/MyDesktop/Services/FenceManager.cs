@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -53,6 +54,8 @@ internal sealed class FenceManager
 	bool _iconsHidden;
 	bool _fencesHidden;
 	bool _shutdown;
+	// 启动后第一次接管桌面图标之前：分区里的图标先不显示，接管那一刻从资源管理器桌面上的原处飞进分区
+	bool _flyInAtStartup;
 
 	public FenceManager(AppSettings settings)
 	{
@@ -172,13 +175,27 @@ internal sealed class FenceManager
 		{
 			SaveSoon();
 		}
+		if (NormalizeGroups())
+		{
+			SaveSoon();
+		}
+		// 系统关掉了「显示桌面图标」时桌面上没有图标可以飞
+		_flyInAtStartup = !DesktopHost.IconsHiddenBySystem();
 		foreach (var model in Settings.Fences.ToList())
 		{
 			OpenWindow(model);
 		}
+		RefreshAllTabs();
 		EnsureAllOnScreen();
-		// 读到资源管理器的桌面视图后即接管桌面图标（隐藏系统图标、由图标层画出散放图标）
-		_takeover = new DesktopTakeover(this);
+		// 要播启动动画时先等桌面显示出来、分区里的图标加载好，再接管桌面图标
+		if (_flyInAtStartup)
+		{
+			_ = StartTakeoverWhenReadyAsync();
+		}
+		else
+		{
+			StartTakeover();
+		}
 		UpdateCutState();
 		ApplyMouseHookSettings();
 		Organizer.ApplyWatchSetting();
@@ -201,6 +218,87 @@ internal sealed class FenceManager
 			_dispatcher.InvokeAsync(ShowWelcome, DispatcherPriority.Background);
 		}
 	}
+
+	/// <summary>
+	/// 接管桌面图标：读到资源管理器的桌面视图后隐藏系统图标、由图标层画出散放图标。
+	/// </summary>
+	void StartTakeover()
+	{
+		if (_shutdown)
+		{
+			return;
+		}
+		_takeover = new DesktopTakeover(this);
+		UpdateCutState();
+		ApplyMouseHookSettings();
+		if (!_flyInAtStartup)
+		{
+			return;
+		}
+		// 迟迟接管不了（读不到资源管理器的桌面视图）时不再等，分区里的图标直接显示
+		var timeout = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+		timeout.Tick += (_, _) =>
+		{
+			timeout.Stop();
+			if (_flyInAtStartup)
+			{
+				_flyInAtStartup = false;
+				Log.Warn("30 秒内没能接管桌面图标，分区里的图标不播启动动画");
+				foreach (var window in _windows)
+				{
+					window.KeepArrivals([]);
+				}
+			}
+		};
+		timeout.Start();
+	}
+
+	/// <summary>
+	/// 让用户看得到启动动画：开机自启时程序可能在登录界面还没退出时就运行了，先等登录界面（LogonUI）退出、桌面淡入；
+	/// 再等分区里的图标加载好，图像还没出来的图标飞不起来。然后才接管桌面，在那之前系统桌面上的图标照常显示。
+	/// </summary>
+	async Task StartTakeoverWhenReadyAsync()
+	{
+		var started = DateTime.UtcNow;
+		if (IsLogonScreenShowing())
+		{
+			Log.Info("登录界面还没退出，等桌面显示出来再接管");
+			while (IsLogonScreenShowing() && DateTime.UtcNow - started < TimeSpan.FromSeconds(20))
+			{
+				await Task.Delay(500);
+			}
+			// 登录界面退出后桌面还要淡入一会儿
+			await Task.Delay(1500);
+		}
+		var loading = DateTime.UtcNow;
+		while (!FenceIconsLoaded() && DateTime.UtcNow - loading < TimeSpan.FromSeconds(3))
+		{
+			await Task.Delay(100);
+		}
+		StartTakeover();
+	}
+
+	/// <summary>
+	/// 本会话的登录界面（欢迎、锁屏画面）是否还在显示：登录完成、桌面显示出来后 LogonUI 进程就退出了。
+	/// </summary>
+	static bool IsLogonScreenShowing()
+	{
+		using var current = Process.GetCurrentProcess();
+		var processes = Process.GetProcessesByName("LogonUI");
+		try
+		{
+			return processes.Any(p => p.SessionId == current.SessionId);
+		}
+		finally
+		{
+			foreach (var process in processes)
+			{
+				process.Dispose();
+			}
+		}
+	}
+
+	bool FenceIconsLoaded() => _windows.Where(w => !w.Model.IsPortal).All(w => w.Items.All(i => i.Icon != null));
 
 	public void Shutdown()
 	{
@@ -324,6 +422,10 @@ internal sealed class FenceManager
 	{
 		window.Model.Title = title;
 		window.UpdateTitle();
+		if (GroupOf(window.Model) is FenceGroup group)
+		{
+			RefreshTabs(group);
+		}
 		SaveSoon();
 	}
 
@@ -340,6 +442,7 @@ internal sealed class FenceManager
 		SettingsBackup.Create(Settings, BackupReason.DeleteFence);
 		// 桌面分区里的图标飞回桌面：起点要在关闭分区之前取
 		var homing = !model.IsPortal && window.IsVisible && _takeover?.LayersVisible == true ? LiftIcons(window) : [];
+		LeaveGroup(window);
 		_windows.Remove(window);
 		Settings.Fences.Remove(model);
 		foreach (var rule in Settings.Rules.Where(r => r.FenceId == model.Id))
@@ -450,7 +553,11 @@ internal sealed class FenceManager
 			return;
 		}
 		Log.Warn($"分区窗口意外关闭，正在重建：{window.Model.Title}");
-		_dispatcher.InvokeAsync(() => OpenWindow(window.Model), DispatcherPriority.Background);
+		_dispatcher.InvokeAsync(() =>
+		{
+			OpenWindow(window.Model);
+			RefreshAllTabs();
+		}, DispatcherPriority.Background);
 	}
 
 	/// <summary>
@@ -464,6 +571,278 @@ internal sealed class FenceManager
 		rule.FenceId = window.Model.Id;
 		SaveSoon();
 		return window;
+	}
+
+	#endregion
+
+	#region 标签页
+
+	FenceGroup? GroupOf(FenceSettings model) => Settings.Groups.FirstOrDefault(g => g.Members.Contains(model.Id));
+
+	FenceWindow? WindowOf(Guid id) => _windows.FirstOrDefault(w => w.Model.Id == id);
+
+	/// <summary>
+	/// 分区所在标签组的全部分区窗口，按标签顺序；不在组里时只有它自己。
+	/// </summary>
+	public List<FenceWindow> TabsOf(FenceWindow window)
+	{
+		return GroupOf(window.Model) is FenceGroup group ? group.Members.Select(WindowOf).OfType<FenceWindow>().ToList() : [window];
+	}
+
+	/// <summary>
+	/// 是不是标签组里当前没显示的标签：窗口照常加载内容，只是不显示。
+	/// </summary>
+	public bool IsHiddenTab(FenceWindow window) => GroupOf(window.Model) is FenceGroup group && group.Active != window.Model.Id;
+
+	void RefreshTabs(FenceGroup group)
+	{
+		foreach (var id in group.Members)
+		{
+			WindowOf(id)?.UpdateTabs();
+		}
+	}
+
+	void RefreshAllTabs()
+	{
+		foreach (var group in Settings.Groups)
+		{
+			RefreshTabs(group);
+		}
+	}
+
+	/// <summary>
+	/// 位置、大小、缩放和显示器布局记忆、卷起和锁定：标签组内各分区保持一致的那部分设置。
+	/// </summary>
+	static void CopyFrame(FenceSettings from, FenceSettings to)
+	{
+		(to.X, to.Y, to.Width, to.Height, to.LayoutDpi) = (from.X, from.Y, from.Width, from.Height, from.LayoutDpi);
+		(to.RolledUp, to.RollDirection, to.RollEdge, to.Locked) = (from.RolledUp, from.RollDirection, from.RollEdge, from.Locked);
+		to.BoundsByDpi = new Dictionary<int, FenceBounds>(from.BoundsByDpi);
+		to.LayoutByDisplay = new Dictionary<string, FenceLayout>(from.LayoutByDisplay);
+	}
+
+	/// <summary>
+	/// 标签组里显示着的分区移动、调整大小、卷起或锁定后，同组的其他分区跟着一致（它们不显示，切过去时就在原处）。
+	/// </summary>
+	public void SyncGroup(FenceWindow source)
+	{
+		foreach (var window in TabsOf(source).Where(w => w != source))
+		{
+			CopyFrame(source.Model, window.Model);
+			window.ApplyBounds();
+			window.ApplyLockState();
+		}
+	}
+
+	/// <summary>
+	/// 启动时整理标签组：去掉已不存在或重复归组的分区，不足两个的组解散，组内各分区的框架设置按当前标签统一。
+	/// </summary>
+	/// <returns>配置被改动时返回 true。</returns>
+	bool NormalizeGroups()
+	{
+		bool changed = false;
+		var fences = Settings.Fences.ToDictionary(f => f.Id);
+		var grouped = new HashSet<Guid>();
+		foreach (var group in Settings.Groups.ToList())
+		{
+			var members = new List<Guid>();
+			foreach (var id in group.Members)
+			{
+				if (fences.ContainsKey(id) && grouped.Add(id))
+				{
+					members.Add(id);
+				}
+			}
+			changed |= members.Count != group.Members.Count;
+			group.Members = members;
+			if (members.Count < 2)
+			{
+				Settings.Groups.Remove(group);
+				changed = true;
+				continue;
+			}
+			if (!members.Contains(group.Active))
+			{
+				group.Active = members[0];
+				changed = true;
+			}
+			foreach (var id in members.Where(id => id != group.Active))
+			{
+				CopyFrame(fences[group.Active], fences[id]);
+			}
+		}
+		return changed;
+	}
+
+	/// <summary>
+	/// 拖动分区时鼠标所在的、可以合并进去的分区标题栏：别的、显示着的、没锁定的分区，同组的不算。
+	/// </summary>
+	public FenceWindow? MergeTargetAt(FenceWindow dragged, POINT cursor)
+	{
+		var group = GroupOf(dragged.Model);
+		return _windows.FirstOrDefault(w => w != dragged && w.IsVisible && !w.Model.Locked
+				&& (group == null || !group.Members.Contains(w.Model.Id))
+				&& w.TitleBarRect().Contains(cursor));
+	}
+
+	/// <summary>
+	/// 把拖过来的分区（连同它所在的整组标签）合并进目标分区的标签组，排在最后并切到拖过来的那个：
+	/// 它们套上目标的位置、大小、卷起和锁定，被拖的窗口滑进目标的位置，目标随后隐藏。
+	/// </summary>
+	public async Task MergeAsync(FenceWindow dragged, FenceWindow target)
+	{
+		var incoming = TabsOf(dragged);
+		if (GroupOf(dragged.Model) is FenceGroup old)
+		{
+			Settings.Groups.Remove(old);
+		}
+		if (GroupOf(target.Model) is not FenceGroup group)
+		{
+			group = new FenceGroup { Members = [target.Model.Id] };
+			Settings.Groups.Add(group);
+		}
+		group.Members.AddRange(incoming.Select(w => w.Model.Id));
+		group.Active = dragged.Model.Id;
+		foreach (var window in incoming)
+		{
+			CopyFrame(target.Model, window.Model);
+			if (window != dragged)
+			{
+				window.ApplyBounds();
+			}
+		}
+		Log.Info($"分区「{dragged.Model.Title}」合并到「{target.Model.Title}」的标签组");
+		SaveSoon();
+		await dragged.SlideTo(target.GetBounds());
+		dragged.ApplyBounds();
+		dragged.ApplyLockState();
+		target.ClearSelection();
+		target.Hide();
+		RefreshTabs(group);
+		BringToFront(dragged);
+		_takeover?.RelayoutSoon();
+	}
+
+	/// <summary>
+	/// 切换到组里的另一个标签：新标签先在当前标签的正下方显示、画好，再隐藏当前标签，切换时不闪。
+	/// </summary>
+	/// <param name="activate">让新标签成为活动窗口；原来的标签是活动窗口时总会这样，免得隐藏它后前台落到别的程序上。</param>
+	public async Task ActivateTabAsync(FenceWindow target, bool activate)
+	{
+		if (GroupOf(target.Model) is not FenceGroup group || group.Active == target.Model.Id)
+		{
+			return;
+		}
+		var current = WindowOf(group.Active);
+		group.Active = target.Model.Id;
+		RefreshTabs(group);
+		SaveSoon();
+		// 分区整体隐藏着时只换记录，重新显示时显示新标签
+		if (current == null || _fencesHidden)
+		{
+			return;
+		}
+		CopyFrame(current.Model, target.Model);
+		await target.ShowInPlaceOf(current);
+		if (activate || current.IsActive)
+		{
+			target.Activate();
+		}
+		// 不显示的标签不留选择，免得删除、剪切等操作带上看不见的图标
+		current.ClearSelection();
+		current.Hide();
+		BringToFront(target);
+	}
+
+	/// <summary>
+	/// 调整标签顺序：把分区的标签移到第 index 个。
+	/// </summary>
+	public void MoveTab(FenceWindow window, int index)
+	{
+		if (GroupOf(window.Model) is not FenceGroup group)
+		{
+			return;
+		}
+		int from = group.Members.IndexOf(window.Model.Id);
+		index = Math.Clamp(index, 0, group.Members.Count - 1);
+		if (from == index)
+		{
+			return;
+		}
+		group.Members.RemoveAt(from);
+		group.Members.Insert(index, window.Model.Id);
+		RefreshTabs(group);
+		SaveSoon();
+	}
+
+	/// <summary>
+	/// 把一个标签拆出来成为独立的分区：拖出去时放在松手处（标题栏中间对着鼠标），用菜单拆时放在组的右边，都避开别的分区。
+	/// </summary>
+	public void DetachTab(FenceWindow window, POINT? cursor)
+	{
+		if (GroupOf(window.Model) is null)
+		{
+			return;
+		}
+		LeaveGroup(window);
+		var model = window.Model;
+		if (cursor is POINT point)
+		{
+			var bounds = window.DetachedBoundsAt(point);
+			(model.X, model.Y) = (bounds.Left, bounds.Top);
+		}
+		else
+		{
+			var (work, scale) = GetMonitorWorkArea(MonitorFromPoint(new POINT(model.X + model.Width / 2, model.Y), MONITOR_DEFAULTTONEAREST));
+			model.X = Math.Clamp(model.X + model.Width + (int)Math.Round(Settings.SnapGap * scale), work.Left, Math.Max(work.Left, work.Right - model.Width));
+		}
+		var layout = window.GetLayoutBounds();
+		if (FindFreeSpot(window, layout) is RECT spot)
+		{
+			model.X += spot.Left - layout.Left;
+			model.Y += spot.Top - layout.Top;
+		}
+		model.LayoutDpi = GetDpiForRect(window.GetLayoutBounds());
+		window.ApplyBounds();
+		window.UpdateTabs();
+		if (!_fencesHidden && !window.IsVisible)
+		{
+			window.Show();
+		}
+		BringToFront(window);
+		Log.Info($"分区「{model.Title}」拆出标签组");
+		SaveSoon();
+		_takeover?.RelayoutSoon();
+	}
+
+	/// <summary>
+	/// 分区离开所在的标签组（拆出或删除）：它正显示着时先在原处显示相邻的标签；组里只剩一个分区时解散，剩下的那个照常单独显示。
+	/// </summary>
+	void LeaveGroup(FenceWindow window)
+	{
+		if (GroupOf(window.Model) is not FenceGroup group)
+		{
+			return;
+		}
+		int index = group.Members.IndexOf(window.Model.Id);
+		group.Members.RemoveAt(index);
+		if (group.Active == window.Model.Id)
+		{
+			group.Active = group.Members[Math.Min(index, group.Members.Count - 1)];
+			if (WindowOf(group.Active) is FenceWindow next && !_fencesHidden)
+			{
+				CopyFrame(window.Model, next.Model);
+				next.ApplyBounds();
+				next.Show();
+				BringToFront(next);
+			}
+		}
+		if (group.Members.Count < 2)
+		{
+			Settings.Groups.Remove(group);
+		}
+		RefreshTabs(group);
+		SaveSoon();
 	}
 
 	#endregion
@@ -482,6 +861,27 @@ internal sealed class FenceManager
 	/// 一键整理动画里图标起飞，桌面原处不再显示。
 	/// </summary>
 	public void TakeOff(string key) => _takeover?.TakeOff(key);
+
+	/// <summary>
+	/// 这些图标在资源管理器图标列表里的位置（物理像素），启动动画的起点；没接管桌面图标时为空。
+	/// </summary>
+	public Dictionary<string, RECT> ExplorerIconRects(IEnumerable<string> keys)
+	{
+		return _takeover?.ExplorerIconRects(keys) ?? new Dictionary<string, RECT>(StringComparer.OrdinalIgnoreCase);
+	}
+
+	/// <summary>
+	/// 接管了桌面图标、正要藏起资源管理器的图标列表：启动后的第一次接管，让分区里的图标从列表里的原处飞进分区。
+	/// </summary>
+	public void OnDesktopTakenOver()
+	{
+		if (!_flyInAtStartup)
+		{
+			return;
+		}
+		_flyInAtStartup = false;
+		_ = Organizer.FlyInAtStartupAsync();
+	}
 
 	/// <summary>
 	/// 所有桌面分区的成员，不在其中的桌面项目由散放图标层显示。
@@ -702,11 +1102,20 @@ internal sealed class FenceManager
 		{
 			if (window.FindItem(key) is FenceItem item && !item.IsVirtual)
 			{
-				window.BeginRename(item);
+				_ = BeginRenameAsync(window, item);
 				return true;
 			}
 		}
 		return false;
+	}
+
+	/// <summary>
+	/// 图标在标签组里没显示的标签上时，先切到那个标签再改名。
+	/// </summary>
+	async Task BeginRenameAsync(FenceWindow window, FenceItem item)
+	{
+		await ActivateTabAsync(window, true);
+		window.BeginRename(item);
 	}
 
 	/// <summary>
@@ -1309,7 +1718,8 @@ internal sealed class FenceManager
 		foreach (var window in _windows.ToList())
 		{
 			window.RefreshDpi();
-			if (window.HasStaleDpi())
+			// 标签组里没显示的标签收不到缩放变化，等切过去显示时再按新比例摆放，不用重开
+			if (!IsHiddenTab(window) && window.HasStaleDpi())
 			{
 				Log.Warn($"分区「{window.Model.Title}」没跟上缩放比例变化，重新打开窗口");
 				_windows.Remove(window);
@@ -1317,6 +1727,7 @@ internal sealed class FenceManager
 				OpenWindow(window.Model);
 			}
 		}
+		RefreshAllTabs();
 		_takeover?.RelayoutSoon();
 	}
 
@@ -1494,6 +1905,10 @@ internal sealed class FenceManager
 	{
 		var window = new FenceWindow(this, model);
 		_windows.Add(window);
+		if (_flyInAtStartup && !model.IsPortal)
+		{
+			window.ExpectArrivals(model.Members);
+		}
 		window.ShowOnDesktop();
 		if (_fencesHidden)
 		{
@@ -1573,7 +1988,9 @@ internal sealed class FenceManager
 	/// <param name="window">正在摆放的分区，不跟自己比；新建分区时为 null。</param>
 	public RECT? FindFreeSpot(FenceWindow? window, RECT rect)
 	{
-		var others = _windows.Where(w => w != window).Select(w => w.GetLayoutBounds()).ToList();
+		// 同组的标签叠在同一个位置，不算别的分区
+		var group = window != null ? GroupOf(window.Model) : null;
+		var others = _windows.Where(w => w != window && group?.Members.Contains(w.Model.Id) != true).Select(w => w.GetLayoutBounds()).ToList();
 		if (!others.Any(o => o.IntersectsWith(rect)))
 		{
 			return rect;

@@ -145,7 +145,30 @@ public sealed class AppSettings
 
 	public List<FenceSettings> Fences { get; set; } = [];
 
+	/// <summary>
+	/// 合并成标签页的分区组；不在任何组里的分区单独显示。
+	/// </summary>
+	public List<FenceGroup> Groups { get; set; } = [];
+
 	public List<OrganizeRule> Rules { get; set; } = OrganizeRule.CreateDefaults();
+}
+
+/// <summary>
+/// 合并成标签页的一组分区（至少两个），外框只管显示：
+/// 各成员的图标、映射文件夹、外观、排序和整理规则都还是自己的，拆开后原样恢复；
+/// 位置、大小、卷起和锁定由 FenceManager 在组内保持一致，同一时间只显示当前标签那一个分区。
+/// </summary>
+public sealed class FenceGroup
+{
+	/// <summary>
+	/// 成员分区的 Id，按标签从左到右（竖放标题栏时从上到下）的顺序。
+	/// </summary>
+	public List<Guid> Members { get; set; } = [];
+
+	/// <summary>
+	/// 当前显示的标签。
+	/// </summary>
+	public Guid Active { get; set; }
 }
 
 /// <summary>

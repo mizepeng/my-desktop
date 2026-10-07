@@ -134,6 +134,11 @@ internal static class DesktopHost
 	}
 
 	/// <summary>
+	/// 把窗口放到另一个窗口的正下方：切换标签时新标签先在当前标签下面画好，再隐藏当前标签。
+	/// </summary>
+	public static void PlaceBelow(IntPtr hwnd, IntPtr other) => SetZOrder([hwnd], other);
+
+	/// <summary>
 	/// 按当前层级从上到下排列这些窗口（EnumWindows 按层级从上到下枚举顶层窗口）。
 	/// </summary>
 	public static List<IntPtr> TopToBottom(IEnumerable<IntPtr> windows)
