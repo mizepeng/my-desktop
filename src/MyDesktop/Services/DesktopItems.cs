@@ -145,7 +145,14 @@ internal sealed class DesktopItems : IDisposable
 			watcher.Changed += changed;
 			watcher.Renamed += (_, e) => dispatcher.BeginInvoke(() =>
 			{
-				Renamed?.Invoke(e.OldFullPath, e.FullPath);
+				// 替换快捷方式时更新程序先把旧文件改成备份名（不再以 .lnk 结尾）再写新的，
+				// 这一下不是用户改名，分区应继续指向原路径；备份随后被删除也不该把成员带走。
+				bool replaced = string.Equals(Path.GetExtension(e.OldFullPath), ".lnk", StringComparison.OrdinalIgnoreCase)
+						&& !string.Equals(Path.GetExtension(e.FullPath), ".lnk", StringComparison.OrdinalIgnoreCase);
+				if (!replaced)
+				{
+					Renamed?.Invoke(e.OldFullPath, e.FullPath);
+				}
 				RefreshSoon();
 			});
 			watcher.Error += (_, _) => dispatcher.BeginInvoke(RefreshSoon);

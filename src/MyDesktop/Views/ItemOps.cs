@@ -290,7 +290,11 @@ internal static class ItemOps
 			}
 			try
 			{
-				var startInfo = new ProcessStartInfo(item.FullPath)
+				// 明确目录路径，避免 Shell 给无扩展名的文件夹补上 .lnk 后打开同名快捷方式。
+				var path = item.IsFolder && !Path.EndsInDirectorySeparator(item.FullPath)
+						? item.FullPath + Path.DirectorySeparatorChar
+						: item.FullPath;
+				var startInfo = new ProcessStartInfo(path)
 				{
 					UseShellExecute = true,
 					WorkingDirectory = Path.GetDirectoryName(item.FullPath) ?? string.Empty,
