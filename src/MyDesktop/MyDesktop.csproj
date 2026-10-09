@@ -14,7 +14,7 @@
 		<StartupObject>MyDesktop.Program</StartupObject>
 		<Product>MyDesktop 桌面分区</Product>
 		<Description>Windows 11 桌面分区整理工具</Description>
-		<Version>1.0.10</Version>
+		<Version>1.0.11</Version>
 		<SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
 		<!-- 枚举 switch 表达式漏掉分支时直接编译失败；未命名枚举值的提示无意义，关闭 -->
 		<WarningsAsErrors>$(WarningsAsErrors);CS8509</WarningsAsErrors>
