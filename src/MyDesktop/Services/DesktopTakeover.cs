@@ -552,8 +552,14 @@ internal sealed class DesktopTakeover : IDisposable
 			{
 				return;
 			}
+			// 资源管理器的任务栏、通知区等界面事件很多，先用只看本窗口的条件筛掉，再去找图标视图
+			bool viewShown = eventType == EVENT_OBJECT_SHOW && objectId == OBJID_WINDOW && GetClassName(hwnd) == "SysListView32";
+			if (!viewShown && (hwnd == _handedOffEdit || GetClassName(hwnd) != "Edit"))
+			{
+				return;
+			}
 			var folderView = DesktopHost.FindFolderView();
-			if (eventType == EVENT_OBJECT_SHOW && objectId == OBJID_WINDOW && hwnd == folderView)
+			if (viewShown && hwnd == folderView)
 			{
 				// 缩放比例变化后是我们自己让它显示出来重新排列的，排好之前不要藏回去
 				if (_dpiRelayoutPending)

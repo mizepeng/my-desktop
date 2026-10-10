@@ -13,8 +13,15 @@ namespace MyDesktop.Core;
 internal static class DesktopHost
 {
 	/// <summary>
+	/// 上次在 Progman 之外找到的图标视图宿主（WorkerW）。界面线程和钩子线程都会读写，只存窗口句柄。
+	/// </summary>
+	static IntPtr _workerHost;
+
+	/// <summary>
 	/// 查找承载桌面图标视图（SHELLDLL_DefView）的顶层窗口。通常是 Progman；
-	/// 用过动态壁纸等软件后，图标视图可能被移到某个 WorkerW 中。
+	/// 用过动态壁纸等软件后，图标视图可能被移到某个 WorkerW 中（Win10 换壁纸的淡入动画、幻灯片放映也会这样），直到资源管理器重启。
+	/// 这时要枚举全部顶层窗口才找得到，而本方法在资源管理器的每个界面事件、每次层级调整里都要调用，
+	/// 每次都枚举会让 CPU 一直居高不下（用户反馈 Win10 上持续占用、卡顿），所以记住找到的 WorkerW，它还承载着图标视图就直接用。
 	/// </summary>
 	public static IntPtr FindDesktopWindow()
 	{
@@ -22,6 +29,11 @@ internal static class DesktopHost
 		if (progman != IntPtr.Zero && FindWindowEx(progman, IntPtr.Zero, "SHELLDLL_DefView", null) != IntPtr.Zero)
 		{
 			return progman;
+		}
+		var cached = _workerHost;
+		if (cached != IntPtr.Zero && FindWindowEx(cached, IntPtr.Zero, "SHELLDLL_DefView", null) != IntPtr.Zero)
+		{
+			return cached;
 		}
 		var found = IntPtr.Zero;
 		EnumWindows((hwnd, _) =>
@@ -33,7 +45,13 @@ internal static class DesktopHost
 			found = hwnd;
 			return false;
 		}, IntPtr.Zero);
-		return found != IntPtr.Zero ? found : progman;
+		if (found == IntPtr.Zero)
+		{
+			return progman;
+		}
+		_workerHost = found;
+		Log.Info($"桌面图标视图不在 Progman 里，改在 {GetClassName(found)} 窗口中");
+		return found;
 	}
 
 	/// <summary>

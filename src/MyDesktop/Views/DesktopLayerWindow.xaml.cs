@@ -267,8 +267,14 @@ internal partial class DesktopLayerWindow : Window
 			existing.TryAdd(item.FullPath, item);
 		}
 		var fresh = new List<FenceItem>(placed.Count);
+		var added = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 		foreach (var (entry, cell) in placed)
 		{
+			// 资源管理器的视图偶尔同时列出两个同名项目（比如替换文件的那一会儿），同一个条目放两次会让 SyncItems 移动越界，只取第一个
+			if (!added.Add(entry.Key))
+			{
+				continue;
+			}
 			// 仅大小写不同的改名会命中旧条目，此时按新名称重建
 			if (existing.TryGetValue(entry.Key, out var item) && string.Equals(item.FullPath, entry.Key, StringComparison.Ordinal))
 			{
