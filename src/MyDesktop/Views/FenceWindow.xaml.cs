@@ -478,6 +478,28 @@ internal partial class FenceWindow : Window
 		bool right = !(lengthwiseOnly && vertical) && x >= rect.Right - border;
 		bool top = !(lengthwiseOnly && !vertical) && y < rect.Top + border;
 		bool bottom = !(lengthwiseOnly && !vertical) && y >= rect.Bottom - border;
+		// 标题栏那一侧贴着屏幕边缘时，那条边不当作调整大小的边：鼠标顶到屏幕边缘时要点得到标题栏和标签
+		// （原来这几个像素是调整大小的区域，实测）；贴着屏幕边缘本来也拉不出去，要调大小拖另外几条边
+		var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+		if (GetMonitorInfo(MonitorFromRect(ref rect, MONITOR_DEFAULTTONEAREST), ref info))
+		{
+			var screen = info.rcMonitor;
+			switch (Model.RollEdge)
+			{
+				case RollEdge.Top:
+					top &= rect.Top > screen.Top;
+					break;
+				case RollEdge.Bottom:
+					bottom &= rect.Bottom < screen.Bottom;
+					break;
+				case RollEdge.Left:
+					left &= rect.Left > screen.Left;
+					break;
+				case RollEdge.Right:
+					right &= rect.Right < screen.Right;
+					break;
+			}
+		}
 		if (top)
 		{
 			return left ? HTTOPLEFT : right ? HTTOPRIGHT : HTTOP;
