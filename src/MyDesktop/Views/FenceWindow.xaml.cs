@@ -101,6 +101,9 @@ internal partial class FenceWindow : Window
 	DrawFrameWindow? _detachPreview;
 	// 拖着图标停留的别的标签，停够一会儿就切过去
 	FenceWindow? _hoverTab;
+	// 鼠标停留的别的标签（没拖东西），开了「悬停切换标签」时停够设定的时间就切过去
+	FenceWindow? _mouseTab;
+	readonly DispatcherTimer _mouseTabTimer;
 	// 展开了完整名称的图标（选中的里面最后选中的那个）
 	FenceItem? _expandedName;
 	readonly DispatcherTimer _tabHoverTimer;
@@ -160,7 +163,12 @@ internal partial class FenceWindow : Window
 		_buttonsTimer.Tick += (_, _) =>
 		{
 			_buttonsTimer.Stop();
-			if (!_menuOpen && !IsMouseOver)
+			// 刚切换过来的标签在鼠标动之前收不到 MouseEnter，IsMouseOver 还是 false：鼠标实际还在分区上就过会儿再看
+			if (!_menuOpen && !IsMouseOver && GetBounds().Contains(NativeMethods.GetCursorPos()))
+			{
+				_buttonsTimer.Start();
+			}
+			else if (!_menuOpen && !IsMouseOver)
 			{
 				ShowTitleButtons(false);
 			}
@@ -175,13 +183,27 @@ internal partial class FenceWindow : Window
 				_ = _manager.ActivateTabAsync(tab, false);
 			}
 		};
+		_mouseTabTimer = new DispatcherTimer();
+		_mouseTabTimer.Tick += (_, _) =>
+		{
+			_mouseTabTimer.Stop();
+			var tab = _mouseTab;
+			_mouseTab = null;
+			// 按着鼠标时是在拖分区或标签，不切换
+			if (tab != null && TitleBar.IsMouseOver && Mouse.LeftButton == MouseButtonState.Released && Mouse.RightButton == MouseButtonState.Released)
+			{
+				_ = _manager.ActivateTabAsync(tab, false);
+			}
+		};
 	}
 
 	/// <summary>
 	/// 标题栏上的一个标签，对应标签组里的一个分区。
 	/// </summary>
-	public sealed class FenceTab(FenceWindow window, bool isActive, bool isVertical)
+	public sealed class FenceTab(FenceWindow window, bool isActive, bool isVertical, bool isFilled)
 	{
+		public bool IsFilled => isFilled;
+
 		public FenceWindow Window => window;
 
 		public string Title => window.Model.Title;
@@ -291,6 +313,7 @@ internal partial class FenceWindow : Window
 		_collapseTimer.Stop();
 		_buttonsTimer.Stop();
 		_tabHoverTimer.Stop();
+		_mouseTabTimer.Stop();
 		_detachPreview?.Dispose();
 		_marquee?.Dispose();
 		Close();
@@ -1394,7 +1417,10 @@ internal partial class FenceWindow : Window
 	{
 		var tabs = _manager.TabsOf(this);
 		bool vertical = _titleEdge is RollEdge.Left or RollEdge.Right;
-		TabStrip.ItemsSource = tabs.Count > 1 ? tabs.Select(window => new FenceTab(window, window == this, vertical)).ToList() : null;
+		bool fill = Settings.TabsFillWidth;
+		TabStripPanel.SetFill(TabStrip, fill);
+		TabStripPanel.SetAlignRight(TabStrip, Settings.TabAlignment == TabAlignment.Right);
+		TabStrip.ItemsSource = tabs.Count > 1 ? tabs.Select(window => new FenceTab(window, window == this, vertical, fill)).ToList() : null;
 		ShowTitleText(TitleEditor.Visibility != Visibility.Visible);
 		UpdateBadges();
 	}
@@ -1458,6 +1484,12 @@ internal partial class FenceWindow : Window
 	public async Task ShowInPlaceOf(FenceWindow current)
 	{
 		_tempExpanded = current._tempExpanded;
+		// 标题栏按钮也接着显示：鼠标停在标题栏上切换时，新标签要等鼠标再动才收到 MouseEnter，否则按钮先消失再出现，看上去闪一下
+		if (current.TitleButtons.Opacity > 0)
+		{
+			ShowTitleButtons(true);
+			RestartTimer(_buttonsTimer);
+		}
 		ApplyBounds();
 		SetCloaked(true);
 		try
@@ -2629,6 +2661,7 @@ internal partial class FenceWindow : Window
 	{
 		if (_draggedTab is not FenceTab tab)
 		{
+			HoverTabByMouse(e);
 			return;
 		}
 		var cursor = NativeMethods.GetCursorPos();
@@ -2645,6 +2678,29 @@ internal partial class FenceWindow : Window
 		if (TabIndexAt(cursor) is int index and >= 0)
 		{
 			_manager.MoveTab(tab.Window, index);
+		}
+	}
+
+	/// <summary>
+	/// 开了「悬停切换标签」时，鼠标停在别的标签上一会儿就切过去；移到别处重新计时，离开标题栏不切。
+	/// </summary>
+	void HoverTabByMouse(MouseEventArgs e)
+	{
+		var hovered = Settings.SwitchTabOnHover && e.LeftButton == MouseButtonState.Released ? TabAt(e.OriginalSource)?.Window : null;
+		if (hovered == this)
+		{
+			hovered = null;
+		}
+		if (hovered == _mouseTab)
+		{
+			return;
+		}
+		_mouseTab = hovered;
+		_mouseTabTimer.Stop();
+		if (hovered != null)
+		{
+			_mouseTabTimer.Interval = TimeSpan.FromMilliseconds(Settings.TabHoverDelay);
+			_mouseTabTimer.Start();
 		}
 	}
 

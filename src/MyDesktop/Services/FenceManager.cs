@@ -187,8 +187,9 @@ internal sealed class FenceManager
 				WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 		_reorderHook = SetWinEventHook(EVENT_OBJECT_REORDER, EVENT_OBJECT_REORDER, IntPtr.Zero, _reorderCallback, 0, 0,
 				WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-		// 系统关掉了「显示桌面图标」时桌面上没有图标可以飞
-		_flyInAtStartup = !DesktopHost.IconsHiddenBySystem();
+		ApplyStartupHidden();
+		// 系统关掉了「显示桌面图标」时桌面上没有图标可以飞；启动时就藏起了图标或分区的也不播
+		_flyInAtStartup = !DesktopHost.IconsHiddenBySystem() && !_iconsHidden && !_fencesHidden;
 		foreach (var model in Settings.Fences.ToList())
 		{
 			OpenWindow(model);
@@ -253,6 +254,11 @@ internal sealed class FenceManager
 			return;
 		}
 		_takeover = new DesktopTakeover(this);
+		// 接管之前就藏起了桌面图标（启动时隐藏，或等桌面显示出来期间双击了桌面），图标层接着藏着
+		if (_iconsHidden)
+		{
+			_takeover.SetLayersHidden(true);
+		}
 		UpdateCutState();
 		ApplyMouseHookSettings();
 		if (!_flyInAtStartup)
@@ -635,7 +641,7 @@ internal sealed class FenceManager
 		}
 	}
 
-	void RefreshAllTabs()
+	public void RefreshAllTabs()
 	{
 		foreach (var group in Settings.Groups)
 		{
@@ -768,7 +774,8 @@ internal sealed class FenceManager
 		}
 		var current = WindowOf(group.Active);
 		group.Active = target.Model.Id;
-		RefreshTabs(group);
+		// 不刷新标签条：各分区的标签条都把自己那个标签标为当前，换了当前标签也不用变；
+		// 重建标签条时鼠标停着的标签会丢掉悬停底色，切换前闪一下（实测）
 		SaveSoon();
 		// 分区整体隐藏着时只换记录，重新显示时显示新标签；正在切换时由那一次接着换到最后选的标签
 		if (current == null || _fencesHidden || !_switchingGroups.Add(group))
@@ -1248,13 +1255,34 @@ internal sealed class FenceManager
 
 	void ApplyHidden()
 	{
-		var (icons, fences) = Settings.DoubleClickTarget switch
-		{
-			HideTarget.All => (true, true),
-			HideTarget.Icons => (true, false),
-			HideTarget.Fences => (false, true),
-		};
+		var (icons, fences) = Settings.DoubleClickTarget.Parts();
 		SetHidden(_hidden && icons, _hidden && fences);
+	}
+
+	/// <summary>
+	/// 按「启动时」设置隐藏图标或分区，在打开分区窗口、接管桌面之前调用。隐藏的对象可以和双击隐藏的不同，
+	/// 双击一次全部显示出来，之后照常按「双击桌面隐藏」的对象切换。
+	/// </summary>
+	void ApplyStartupHidden()
+	{
+		// 隐藏后只能双击桌面恢复
+		if (!Settings.DoubleClickToHide)
+		{
+			return;
+		}
+		HideTarget? target = Settings.StartupVisibility switch
+		{
+			StartupVisibility.Show => null,
+			StartupVisibility.Hide => Settings.StartupHideTarget,
+			StartupVisibility.Restore => Settings.LastHidden,
+		};
+		if (target is not HideTarget hidden)
+		{
+			return;
+		}
+		var (icons, fences) = hidden.Parts();
+		_hidden = true;
+		SetHidden(icons, fences);
 	}
 
 	void SetHidden(bool iconsHidden, bool fencesHidden)
@@ -1286,6 +1314,19 @@ internal sealed class FenceManager
 					window.FadeIn();
 				}
 			}
+		}
+		// 记下来，下次启动「和上次退出时一样」时恢复
+		HideTarget? last = (iconsHidden, fencesHidden) switch
+		{
+			(true, true) => HideTarget.All,
+			(true, false) => HideTarget.Icons,
+			(false, true) => HideTarget.Fences,
+			(false, false) => null,
+		};
+		if (Settings.LastHidden != last)
+		{
+			Settings.LastHidden = last;
+			SaveSoon();
 		}
 	}
 

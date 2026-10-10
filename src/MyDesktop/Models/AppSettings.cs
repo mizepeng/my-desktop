@@ -52,6 +52,31 @@ public enum HideTarget
 }
 
 /// <summary>
+/// 程序启动时图标和分区显示还是隐藏。
+/// </summary>
+public enum StartupVisibility
+{
+	Show,
+	/// <summary>
+	/// 按 AppSettings.StartupHideTarget 隐藏。
+	/// </summary>
+	Hide,
+	/// <summary>
+	/// 和上次退出时一样（AppSettings.LastHidden）。
+	/// </summary>
+	Restore,
+}
+
+/// <summary>
+/// 标签不铺满标题栏时靠哪一边排。
+/// </summary>
+public enum TabAlignment
+{
+	Left,
+	Right,
+}
+
+/// <summary>
 /// 全局设置与全部分区布局，序列化为数据目录下的 settings.json。
 /// </summary>
 public sealed class AppSettings
@@ -62,6 +87,41 @@ public sealed class AppSettings
 	/// 双击桌面空白处时隐藏/显示的对象，默认图标和分区一起。
 	/// </summary>
 	public HideTarget DoubleClickTarget { get; set; } = HideTarget.All;
+
+	/// <summary>
+	/// 启动时显示还是隐藏；隐藏后只能双击桌面恢复，所以关掉「双击桌面隐藏」时一律显示。
+	/// </summary>
+	public StartupVisibility StartupVisibility { get; set; } = StartupVisibility.Show;
+
+	/// <summary>
+	/// 启动时隐藏的对象（StartupVisibility 为 Hide 时）。
+	/// </summary>
+	public HideTarget StartupHideTarget { get; set; } = HideTarget.All;
+
+	/// <summary>
+	/// 最近一次隐藏着的对象，null 表示都显示着；每次隐藏或显示时记下，下次启动「和上次退出时一样」据此恢复。
+	/// </summary>
+	public HideTarget? LastHidden { get; set; }
+
+	/// <summary>
+	/// 合并成标签页后，标签平分标题栏的宽度、名称居中。
+	/// </summary>
+	public bool TabsFillWidth { get; set; } = true;
+
+	/// <summary>
+	/// 标签不平分宽度时靠哪一边排。
+	/// </summary>
+	public TabAlignment TabAlignment { get; set; } = TabAlignment.Left;
+
+	/// <summary>
+	/// 鼠标停在标签上一会儿就切换过去，不用点击。
+	/// </summary>
+	public bool SwitchTabOnHover { get; set; } = true;
+
+	/// <summary>
+	/// 鼠标停在标签上多久切换（毫秒）。
+	/// </summary>
+	public int TabHoverDelay { get; set; } = 200;
 
 	public bool ExpandOnHover { get; set; } = true;
 

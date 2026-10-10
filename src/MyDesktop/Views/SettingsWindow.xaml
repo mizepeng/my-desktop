@@ -35,6 +35,12 @@
 			<Setter Property="CornerRadius" Value="6" />
 			<Setter Property="Padding" Value="16,12" />
 			<Setter Property="Margin" Value="0,0,0,4" />
+			<!-- 主题自带的滑块、文字禁用时外观不变（实测），整张卡片调淡才看得出不可用 -->
+			<Style.Triggers>
+				<Trigger Property="IsEnabled" Value="False">
+					<Setter Property="Opacity" Value="0.5" />
+				</Trigger>
+			</Style.Triggers>
 		</Style>
 		<!-- 左侧导航：主题自带的列表项是直角，改成和卡片一样的圆角 -->
 		<Style x:Key="NavItem" TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
@@ -142,6 +148,18 @@
 							</CheckBox>
 						</DockPanel>
 					</Border>
+					<Border Style="{StaticResource Card}" IsEnabled="{Binding IsChecked, ElementName=DoubleClickBox}">
+						<DockPanel>
+							<StackPanel VerticalAlignment="Center" DockPanel.Dock="Right" Orientation="Horizontal">
+								<ComboBox x:Name="StartupVisibilityBox" Width="150" SelectionChanged="StartupBox_SelectionChanged" />
+								<ComboBox x:Name="StartupHideTargetBox" Width="150" Margin="8,0,0,0" SelectionChanged="StartupBox_SelectionChanged" />
+							</StackPanel>
+							<StackPanel Margin="0,0,12,0" VerticalAlignment="Center">
+								<TextBlock Text="启动时" />
+								<TextBlock Style="{StaticResource Hint}" Text="开机或重新打开 MyDesktop 时显示还是隐藏；隐藏后双击桌面空白处恢复" />
+							</StackPanel>
+						</DockPanel>
+					</Border>
 					<Border Style="{StaticResource Card}">
 						<CheckBox x:Name="DrawToCreateBox" Click="Setting_Changed">
 							<StackPanel>
@@ -174,6 +192,42 @@
 								<TextBlock Style="{StaticResource Hint}" Text="双击分区标题栏可以卷起或展开分区" />
 							</StackPanel>
 						</CheckBox>
+					</Border>
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="标签页" />
+					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="TabsFillBox" Click="TabSetting_Changed">
+							<StackPanel>
+								<TextBlock Text="标签平分标题栏的宽度" />
+								<TextBlock Style="{StaticResource Hint}" Text="名称在各自那一格里居中，鼠标不用移很远就能点到" />
+							</StackPanel>
+						</CheckBox>
+					</Border>
+					<Border x:Name="TabAlignmentCard" Style="{StaticResource Card}">
+						<DockPanel>
+							<ComboBox x:Name="TabAlignmentBox" Width="150" VerticalAlignment="Center" DockPanel.Dock="Right" SelectionChanged="TabAlignmentBox_SelectionChanged" />
+							<StackPanel Margin="0,0,12,0" VerticalAlignment="Center">
+								<TextBlock Text="标签靠哪一边排" />
+								<TextBlock Style="{StaticResource Hint}" Text="不平分宽度时生效" />
+							</StackPanel>
+						</DockPanel>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="SwitchTabOnHoverBox" Click="TabSetting_Changed">
+							<StackPanel>
+								<TextBlock Text="鼠标停在标签上时切换" />
+								<TextBlock Style="{StaticResource Hint}" Text="关闭后点击标签切换；在标签上滚动滚轮也能切换" />
+							</StackPanel>
+						</CheckBox>
+					</Border>
+					<Border Style="{StaticResource Card}" IsEnabled="{Binding IsChecked, ElementName=SwitchTabOnHoverBox}">
+						<StackPanel>
+							<TextBlock Text="停留多久切换" />
+							<DockPanel Margin="0,8,0,0">
+								<TextBlock x:Name="TabHoverDelayText" Width="72" VerticalAlignment="Center" DockPanel.Dock="Right" TextAlignment="Right" />
+								<Slider x:Name="TabHoverDelaySlider" IsSnapToTickEnabled="True" Maximum="1000" Minimum="0" TickFrequency="50" ValueChanged="TabHoverDelaySlider_ValueChanged" />
+							</DockPanel>
+						</StackPanel>
 					</Border>
 
 					<TextBlock Style="{StaticResource SectionTitle}" Text="移动与调整大小" />

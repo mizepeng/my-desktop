@@ -327,7 +327,7 @@
 							<ItemsControl.ItemTemplate>
 								<DataTemplate>
 									<Border x:Name="Tab" Margin="0,4,4,4" Padding="8,0" CornerRadius="5" Background="Transparent">
-										<DockPanel>
+										<DockPanel x:Name="TabContent">
 											<!-- 映射分区的标签带上映射图标；整组共用的标题栏不再放映射角标，切换标签时标签不会左右跳 -->
 											<Image x:Name="TabGlyph"
 													Width="16"
@@ -369,6 +369,10 @@
 									<DataTemplate.Triggers>
 										<DataTrigger Binding="{Binding IsPortal}" Value="True">
 											<Setter TargetName="TabGlyph" Property="Visibility" Value="Visible" />
+										</DataTrigger>
+										<!-- 标签平分标题栏时名称在各自那一格里居中 -->
+										<DataTrigger Binding="{Binding IsFilled}" Value="True">
+											<Setter TargetName="TabContent" Property="HorizontalAlignment" Value="Center" />
 										</DataTrigger>
 										<DataTrigger Binding="{Binding IsVertical}" Value="True">
 											<Setter TargetName="Tab" Property="Margin" Value="0,3,4,3" />

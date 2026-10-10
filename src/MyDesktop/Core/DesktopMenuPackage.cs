@@ -48,6 +48,13 @@ internal static class DesktopMenuPackage
 		if (!RunPowerShell(script, out var error))
 		{
 			Log.Warn($"注册桌面右键菜单扩展包失败：{error}");
+			// 更新失败但原来的包还注册着（如同一版本的包内容变了，系统拒绝重装），菜单仍由它提供；
+			// 这时再写注册表菜单，桌面右键菜单里就会出现两个 MyDesktop。不写记录，下次启动再试着更新
+			if (RunPowerShell($"if (-not (Get-AppxPackage -Name {PackageName})) {{ exit 1 }}", out _))
+			{
+				Log.Info("沿用已注册的桌面右键菜单扩展包");
+				return true;
+			}
 			return false;
 		}
 		Directory.CreateDirectory(Path.GetDirectoryName(MarkerPath)!);

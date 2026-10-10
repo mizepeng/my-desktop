@@ -83,6 +83,38 @@ public static class Appearance
 		};
 	}
 
+	public static string DisplayName(this StartupVisibility visibility)
+	{
+		return visibility switch
+		{
+			StartupVisibility.Show => "全部显示",
+			StartupVisibility.Hide => "隐藏",
+			StartupVisibility.Restore => "和上次退出时一样",
+		};
+	}
+
+	public static string DisplayName(this TabAlignment alignment)
+	{
+		return alignment switch
+		{
+			TabAlignment.Left => "靠左",
+			TabAlignment.Right => "靠右",
+		};
+	}
+
+	/// <summary>
+	/// 隐藏这个对象时是否藏起桌面图标、是否藏起分区。
+	/// </summary>
+	public static (bool Icons, bool Fences) Parts(this HideTarget target)
+	{
+		return target switch
+		{
+			HideTarget.All => (true, true),
+			HideTarget.Icons => (true, false),
+			HideTarget.Fences => (false, true),
+		};
+	}
+
 	public static Color ParseColor(string? text, Color fallback)
 	{
 		return TryParseColor(text, out var color) ? color : fallback;

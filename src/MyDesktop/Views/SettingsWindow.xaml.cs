@@ -59,6 +59,17 @@ internal partial class SettingsWindow : Window
 		DoubleClickBox.IsChecked = Settings.DoubleClickToHide;
 		DoubleClickTargetBox.ItemsSource = Enum.GetValues<HideTarget>().Select(t => t.DisplayName()).ToList();
 		DoubleClickTargetBox.SelectedIndex = (int)Settings.DoubleClickTarget;
+		StartupVisibilityBox.ItemsSource = Enum.GetValues<StartupVisibility>().Select(v => v.DisplayName()).ToList();
+		StartupVisibilityBox.SelectedIndex = (int)Settings.StartupVisibility;
+		StartupHideTargetBox.ItemsSource = Enum.GetValues<HideTarget>().Select(t => t.DisplayName()).ToList();
+		StartupHideTargetBox.SelectedIndex = (int)Settings.StartupHideTarget;
+		UpdateStartupHideTargetBox();
+		TabsFillBox.IsChecked = Settings.TabsFillWidth;
+		TabAlignmentBox.ItemsSource = Enum.GetValues<TabAlignment>().Select(a => a.DisplayName()).ToList();
+		TabAlignmentBox.SelectedIndex = (int)Settings.TabAlignment;
+		TabAlignmentCard.IsEnabled = !Settings.TabsFillWidth;
+		SwitchTabOnHoverBox.IsChecked = Settings.SwitchTabOnHover;
+		TabHoverDelaySlider.Value = Settings.TabHoverDelay;
 		DrawToCreateBox.IsChecked = Settings.DrawToCreate;
 		DesktopMenuBox.IsChecked = Settings.DesktopContextMenu;
 		ExpandOnHoverBox.IsChecked = Settings.ExpandOnHover;
@@ -287,6 +298,58 @@ internal partial class SettingsWindow : Window
 		_loading = false;
 	}
 
+	void StartupBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+	{
+		if (_loading || StartupVisibilityBox.SelectedIndex < 0 || StartupHideTargetBox.SelectedIndex < 0)
+		{
+			return;
+		}
+		Settings.StartupVisibility = (StartupVisibility)StartupVisibilityBox.SelectedIndex;
+		Settings.StartupHideTarget = (HideTarget)StartupHideTargetBox.SelectedIndex;
+		UpdateStartupHideTargetBox();
+		_manager.SaveSoon();
+	}
+
+	/// <summary>
+	/// 隐藏哪些只在启动时「隐藏」时可选；「和上次退出时一样」按上次实际隐藏着的来。
+	/// </summary>
+	void UpdateStartupHideTargetBox() => StartupHideTargetBox.IsEnabled = Settings.StartupVisibility == StartupVisibility.Hide;
+
+	void TabSetting_Changed(object sender, RoutedEventArgs e)
+	{
+		if (_loading)
+		{
+			return;
+		}
+		Settings.TabsFillWidth = TabsFillBox.IsChecked == true;
+		Settings.SwitchTabOnHover = SwitchTabOnHoverBox.IsChecked == true;
+		TabAlignmentCard.IsEnabled = !Settings.TabsFillWidth;
+		_manager.RefreshAllTabs();
+		_manager.SaveSoon();
+	}
+
+	void TabAlignmentBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+	{
+		if (_loading || TabAlignmentBox.SelectedIndex < 0)
+		{
+			return;
+		}
+		Settings.TabAlignment = (TabAlignment)TabAlignmentBox.SelectedIndex;
+		_manager.RefreshAllTabs();
+		_manager.SaveSoon();
+	}
+
+	void TabHoverDelaySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+	{
+		if (_loading || TabHoverDelayText == null)
+		{
+			return;
+		}
+		UpdateSliderTexts();
+		Settings.TabHoverDelay = (int)TabHoverDelaySlider.Value;
+		_manager.SaveSoon();
+	}
+
 	void NewFence_Click(object sender, RoutedEventArgs e) => _manager.CreateFence(editTitle: true);
 
 	void NewPortal_Click(object sender, RoutedEventArgs e) => _manager.CreatePortalFence();
@@ -410,6 +473,7 @@ internal partial class SettingsWindow : Window
 		OpacityText.Text = $"{OpacitySlider.Value:0}%";
 		RadiusText.Text = $"{RadiusSlider.Value:0}";
 		SnapGapText.Text = SnapGapSlider.Value == 0 ? "紧贴" : $"{SnapGapSlider.Value:0}";
+		TabHoverDelayText.Text = TabHoverDelaySlider.Value == 0 ? "立即" : $"{TabHoverDelaySlider.Value:0} 毫秒";
 	}
 
 	void IconSizeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
