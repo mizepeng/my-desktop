@@ -26,7 +26,12 @@
 		<SolidColorBrush x:Key="FenceHover" Color="#22FFFFFF" />
 		<SolidColorBrush x:Key="FenceSelected" Color="#33FFFFFF" />
 		<SolidColorBrush x:Key="FenceSelectedBorder" Color="#59FFFFFF" />
-		<DropShadowEffect x:Key="TextShadow" ShadowDepth="1" BlurRadius="3" Opacity="0.75" Color="Black" />
+		<!-- 文字阴影：加在文字副本上的模糊（见 TextShadow），由代码按设置替换 -->
+		<BlurEffect x:Key="TextShadow" Radius="3" />
+		<!-- 以下随字体、字号在代码里更新：标题字号、图标名称两行的最大高度、列表名称离顶端的距离 -->
+		<sys:Double x:Key="TitleFontSize">13</sys:Double>
+		<sys:Double x:Key="NameMaxHeight">34</sys:Double>
+		<Thickness x:Key="ListNameMargin">0,2,0,0</Thickness>
 
 		<Style TargetType="ScrollBar" BasedOn="{StaticResource FenceScrollBar}" />
 
@@ -78,7 +83,6 @@
 			<Setter Property="TextTrimming" Value="CharacterEllipsis" />
 			<Setter Property="Foreground" Value="{DynamicResource FenceForeground}" />
 			<Setter Property="Opacity" Value="0.75" />
-			<Setter Property="Effect" Value="{DynamicResource TextShadow}" />
 		</Style>
 
 		<!-- 图标视图里是否显示图标名称，按设置在代码里替换 -->
@@ -94,15 +98,16 @@
 						Stretch="Uniform"
 						RenderOptions.BitmapScalingMode="HighQuality" />
 				<Grid>
-					<TextBlock x:Name="NameText"
-							Visibility="{DynamicResource IconNameVisibility}"
-							Text="{Binding DisplayName}"
-							TextAlignment="Center"
-							TextWrapping="Wrap"
-							TextTrimming="CharacterEllipsis"
-							MaxHeight="34"
-							Foreground="{DynamicResource FenceForeground}"
-							Effect="{DynamicResource TextShadow}" />
+					<local:TextShadow Shadow="{DynamicResource TextShadow}">
+						<TextBlock x:Name="NameText"
+								Visibility="{DynamicResource IconNameVisibility}"
+								Text="{Binding DisplayName}"
+								TextAlignment="Center"
+								TextWrapping="Wrap"
+								TextTrimming="CharacterEllipsis"
+								MaxHeight="{DynamicResource NameMaxHeight}"
+								Foreground="{DynamicResource FenceForeground}" />
+					</local:TextShadow>
 					<TextBox x:Name="RenameBox"
 							Visibility="Collapsed"
 							Style="{StaticResource RenameBoxStyle}"
@@ -148,14 +153,14 @@
 						Stretch="Uniform"
 						RenderOptions.BitmapScalingMode="HighQuality" />
 				<!-- 图标靠上、名称离顶端 2：12 号字在 20 高的图标旁大致居中，且与选中后展开完整名称（FenceStyles.xaml）的第一行位置一致，不会因布局取整差一个像素 -->
-				<TextBlock x:Name="NameText"
-						Grid.Column="1"
-						Margin="0,2,0,0"
-						VerticalAlignment="Top"
-						Text="{Binding DisplayName}"
-						TextTrimming="CharacterEllipsis"
-						Foreground="{DynamicResource FenceForeground}"
-						Effect="{DynamicResource TextShadow}" />
+				<local:TextShadow Grid.Column="1" Shadow="{DynamicResource TextShadow}">
+					<TextBlock x:Name="NameText"
+							Margin="{DynamicResource ListNameMargin}"
+							VerticalAlignment="Top"
+							Text="{Binding DisplayName}"
+							TextTrimming="CharacterEllipsis"
+							Foreground="{DynamicResource FenceForeground}" />
+				</local:TextShadow>
 				<TextBox x:Name="RenameBox"
 						Grid.Column="1"
 						VerticalAlignment="Center"
@@ -203,14 +208,14 @@
 						VerticalAlignment="Top"
 						Stretch="Uniform"
 						RenderOptions.BitmapScalingMode="HighQuality" />
-				<TextBlock x:Name="NameText"
-						Grid.Column="1"
-						Margin="0,2,0,0"
-						VerticalAlignment="Top"
-						Text="{Binding DisplayName}"
-						TextTrimming="CharacterEllipsis"
-						Foreground="{DynamicResource FenceForeground}"
-						Effect="{DynamicResource TextShadow}" />
+				<local:TextShadow Grid.Column="1" Shadow="{DynamicResource TextShadow}">
+					<TextBlock x:Name="NameText"
+							Margin="{DynamicResource ListNameMargin}"
+							VerticalAlignment="Top"
+							Text="{Binding DisplayName}"
+							TextTrimming="CharacterEllipsis"
+							Foreground="{DynamicResource FenceForeground}" />
+				</local:TextShadow>
 				<TextBox x:Name="RenameBox"
 						Grid.Column="1"
 						VerticalAlignment="Center"
@@ -219,9 +224,15 @@
 						Text="{Binding RenameText, UpdateSourceTrigger=PropertyChanged}"
 						KeyDown="RenameBox_KeyDown"
 						LostKeyboardFocus="RenameBox_LostKeyboardFocus" />
-				<TextBlock Grid.Column="2" Style="{StaticResource DetailsInfoText}" Text="{Binding ModifiedText}" />
-				<TextBlock Grid.Column="3" Style="{StaticResource DetailsInfoText}" Text="{Binding TypeName}" />
-				<TextBlock Grid.Column="4" Margin="12,2,4,0" Style="{StaticResource DetailsInfoText}" TextAlignment="Right" Text="{Binding SizeText}" />
+				<local:TextShadow Grid.Column="2" Shadow="{DynamicResource TextShadow}">
+					<TextBlock Style="{StaticResource DetailsInfoText}" Text="{Binding ModifiedText}" />
+				</local:TextShadow>
+				<local:TextShadow Grid.Column="3" Shadow="{DynamicResource TextShadow}">
+					<TextBlock Style="{StaticResource DetailsInfoText}" Text="{Binding TypeName}" />
+				</local:TextShadow>
+				<local:TextShadow Grid.Column="4" Shadow="{DynamicResource TextShadow}">
+					<TextBlock Margin="12,2,4,0" Style="{StaticResource DetailsInfoText}" TextAlignment="Right" Text="{Binding SizeText}" />
+				</local:TextShadow>
 			</Grid>
 			<DataTemplate.Triggers>
 				<DataTrigger Binding="{Binding IsRenaming}" Value="True">
@@ -294,29 +305,29 @@
 									Opacity="0.8"
 									Foreground="{DynamicResource FenceForeground}" />
 						</StackPanel>
-						<TextBlock x:Name="TitleText"
-								Grid.Column="1"
-								VerticalAlignment="Center"
-								FontSize="13"
-								FontWeight="SemiBold"
-								TextTrimming="CharacterEllipsis"
-								Foreground="{DynamicResource FenceForeground}"
-								Effect="{DynamicResource TextShadow}" />
+						<local:TextShadow Grid.Column="1" Shadow="{DynamicResource TextShadow}">
+							<TextBlock x:Name="TitleText"
+									VerticalAlignment="Center"
+									FontSize="{DynamicResource TitleFontSize}"
+									FontWeight="SemiBold"
+									TextTrimming="CharacterEllipsis"
+									Foreground="{DynamicResource FenceForeground}" />
+						</local:TextShadow>
 						<!-- 左右收起时的竖排标题：标题栏整体旋转 90°，这里再转回来，每个字一行、正立 -->
-						<TextBlock x:Name="VerticalTitleText"
-								Grid.Column="1"
-								HorizontalAlignment="Left"
-								VerticalAlignment="Center"
-								Visibility="Collapsed"
-								FontSize="13"
-								FontWeight="SemiBold"
-								TextAlignment="Center"
-								Foreground="{DynamicResource FenceForeground}"
-								Effect="{DynamicResource TextShadow}">
-							<TextBlock.LayoutTransform>
-								<RotateTransform Angle="-90" />
-							</TextBlock.LayoutTransform>
-						</TextBlock>
+						<local:TextShadow Grid.Column="1" Shadow="{DynamicResource TextShadow}">
+							<TextBlock x:Name="VerticalTitleText"
+									HorizontalAlignment="Left"
+									VerticalAlignment="Center"
+									Visibility="Collapsed"
+									FontSize="{DynamicResource TitleFontSize}"
+									FontWeight="SemiBold"
+									TextAlignment="Center"
+									Foreground="{DynamicResource FenceForeground}">
+								<TextBlock.LayoutTransform>
+									<RotateTransform Angle="-90" />
+								</TextBlock.LayoutTransform>
+							</TextBlock>
+						</local:TextShadow>
 						<!-- 合并成标签页后，标题换成各成员分区的标签；竖放标题栏时标签文字竖排 -->
 						<ItemsControl x:Name="TabStrip" Grid.Column="1" Visibility="Collapsed" Focusable="False">
 							<ItemsControl.ItemsPanel>
@@ -339,30 +350,32 @@
 													Source="{Binding FolderIcon}"
 													RenderOptions.BitmapScalingMode="HighQuality" />
 											<Grid>
-											<TextBlock x:Name="TabText"
-													VerticalAlignment="Center"
-													FontSize="13"
-													FontWeight="SemiBold"
-													Opacity="0.6"
-													Text="{Binding Title}"
-													TextTrimming="CharacterEllipsis"
-													Foreground="{DynamicResource FenceForeground}"
-													Effect="{DynamicResource TextShadow}" />
-											<TextBlock x:Name="TabVerticalText"
-													HorizontalAlignment="Left"
-													VerticalAlignment="Center"
-													Visibility="Collapsed"
-													FontSize="13"
-													FontWeight="SemiBold"
-													Opacity="0.6"
-													Text="{Binding VerticalTitle}"
-													TextAlignment="Center"
-													Foreground="{DynamicResource FenceForeground}"
-													Effect="{DynamicResource TextShadow}">
-												<TextBlock.LayoutTransform>
-													<RotateTransform Angle="-90" />
-												</TextBlock.LayoutTransform>
-											</TextBlock>
+											<local:TextShadow Shadow="{DynamicResource TextShadow}">
+												<TextBlock x:Name="TabText"
+														VerticalAlignment="Center"
+														FontSize="{DynamicResource TitleFontSize}"
+														FontWeight="SemiBold"
+														Opacity="0.6"
+														Text="{Binding Title}"
+														TextTrimming="CharacterEllipsis"
+														Foreground="{DynamicResource FenceForeground}" />
+											</local:TextShadow>
+											<local:TextShadow Shadow="{DynamicResource TextShadow}">
+												<TextBlock x:Name="TabVerticalText"
+														HorizontalAlignment="Left"
+														VerticalAlignment="Center"
+														Visibility="Collapsed"
+														FontSize="{DynamicResource TitleFontSize}"
+														FontWeight="SemiBold"
+														Opacity="0.6"
+														Text="{Binding VerticalTitle}"
+														TextAlignment="Center"
+														Foreground="{DynamicResource FenceForeground}">
+													<TextBlock.LayoutTransform>
+														<RotateTransform Angle="-90" />
+													</TextBlock.LayoutTransform>
+												</TextBlock>
+											</local:TextShadow>
 											</Grid>
 										</DockPanel>
 									</Border>
@@ -404,7 +417,7 @@
 								Margin="0,0,4,0"
 								VerticalAlignment="Center"
 								Visibility="Collapsed"
-								FontSize="13"
+								FontSize="{DynamicResource TitleFontSize}"
 								Style="{StaticResource RenameBoxStyle}"
 								KeyDown="TitleEditor_KeyDown"
 								LostKeyboardFocus="TitleEditor_LostKeyboardFocus" />

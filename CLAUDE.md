@@ -57,6 +57,7 @@ powershell -ExecutionPolicy Bypass -File installer/Build-Installer.ps1
 - 资源管理器隐藏着的图标列表不随缩放比例变化更新自己的 DPI，IFolderView 报告的间距会按新旧 DPI 之比失真，图标位置却已按新比例排好，读取时要校正（`ExplorerDesktopView.CorrectSpacing`）；分区窗口在缩放变化后也可能停在旧 DPI（`FenceManager.RefreshWindowsDpi`）。
 - 关闭自动排列时，IFolderView 报告的位置是图标图像左边缘、比图标顶端高约 2 DIP 处；自动排列时报告的是格子左上角，两种模式要分别换算（`DesktopTakeover.ToCell`、`ToPosition`）。
 - 系统图像列表对象在本进程里不应答 IImageList 的 QueryInterface，角标按虚表直接调用（`Native/ShellIconLoader`）。
+- 壁纸契合度为「填充」「跨区」、图片比屏幕高时，系统上面裁掉多出部分的三分之一、下面裁三分之二，不是上下居中；比屏幕宽时左右居中（实测：几种测试图设成壁纸后 `PrintWindow` 抓 Progman 量位置）。毛玻璃按这个规则画（`WallpaperBlur.Place`），按居中算会整体往上偏。`TranscodedWallpaperCache` 的 .meta 里那个 80.0 不是裁剪位置，各种宽高比都一样。
 - 系统提供的模糊（亚克力、云母等）对分区这类几乎总是未激活的窗口不起作用，所以毛玻璃是自己画的（`Services/WallpaperBlur`），前提是分区下面只有壁纸。
 - Shell 返回的位图多数图标自下而上，图片缩略图（实测）等自上而下（用户反馈倒置的 Adobe 2026 程序图标应属此类），而 GetObject 读到的 DIBSECTION 高度一律为正、分不出来；取像素要用 GetDIBits 让系统按实际行序转换（`ShellIconLoader.ToBitmapSource`），直接读内存会把后一种上下颠倒。
 - WPF 的透明窗口（`AllowsTransparency`，分区和图标层都是）每次重画都要等显卡把画面拷回内存，显卡被游戏占满时就会一卡一卡。跟着鼠标连续变化的东西（框选框、画框新建分区、拆标签预览）不要画在分区或整屏的图标层里，用 `Views/DrawFrameWindow`：CPU 画好像素交给 `UpdateLayeredWindow`，只有选框那么大。它是借系统 Static 窗口类建的原生窗口：WPF 的 `HwndSource` 不用逐像素透明时会强行去掉 `WS_EX_LAYERED`（事后用 `SetWindowLongPtr` 补上也会被改回去），`UpdateLayeredWindow` 就失败、什么都不显示。
@@ -68,6 +69,7 @@ powershell -ExecutionPolicy Bypass -File installer/Build-Installer.ps1
 - `CompositionTarget.Rendering` 不按屏幕刷新节奏触发：在回调里接着订阅会连着触发（实测连等 10 次只用 0.2 毫秒），不能拿它「等几帧」。等帧用 `FlyingIcon.NextFrame`：后台线程循环 `DwmFlush`（240 Hz 下实测每次约 4.17 毫秒），每次合成后用 `Dispatcher.Invoke` 以输入优先级（低于重绘）在界面线程上完成共用的任务，两帧至少隔 5 毫秒（240 Hz 下约 120 次/秒）。不要在后台线程上直接完成任务：续体按 Normal 优先级排队，图标一多界面线程忙不过来时重绘和输入被饿住（实测 50 个图标错开起飞，排在重绘优先级的操作要等近 2 秒，改成在界面线程上完成后最多约 20 毫秒）。
 - WPF 透明窗口每次 `SetWindowPos` 都要同步重画：小窗口只挪位置约 0.4 毫秒、同时改大小 1.2～1.5 毫秒（CPU 绘制也一样）。所以逐帧改大小的飞行图标不用 WPF 窗口，和选框一样是原生分层窗口（`FlyingIcon`）：每帧用 WPF 的软件渲染（`RenderTargetBitmap`）把预画的阴影和图标合成进共用的 GDI 位图交给 `UpdateLayeredWindow`，大小没变的帧只挪位置。实测每帧约 0.15（只挪）～0.4 毫秒（重新合成）；50 个图标错开起飞：进程 CPU 2.7 → 约 1.6 秒，每个图标从只轮得到一半的帧变成全部跑满，创建 50 个飞行图标 0.5 → 0.17 秒，显卡驱动内存 25～39 → 0 MB。`UpdateLayeredWindow` 每次约 0.12 毫秒，只挪位置也差不多。不受硬件加速开关影响，开不开硬件加速这样都更省。
 - 飞行图标的阴影预先画成位图（`FlyingIcon.DrawShadow`：图标剪影加 `BlurEffect`，参数同原来的 `DropShadowEffect`），合成每帧时跟着图标按比例缩放：每帧现算模糊太贵（画一次约 0.7 毫秒）。以前飞行图标是 WPF 窗口、用 `DropShadowEffect` 时，硬件加速下显卡驱动内存还跟着涨（实测 50 个图标飞一次多占约 22 MB）。阴影按起点和图标里较大的尺寸画。
+- 文字阴影不要把 `DropShadowEffect` 直接加在 TextBlock 上：文字要先画进中间位图再合成，笔画明显发虚（实测，用户反馈「字体发虚」）。改用 `Views/TextShadow`：正文不带效果，后面叠一份加了 `BlurEffect` 的黑色副本。副本每绑定一个属性约多占 1.2 KB（实测 300 个名称绑 19 个属性多 7.4 MB），所以只绑运行中会变的属性，其余第一次排版时照抄，现在每个名称约多 9 KB。透明窗口本身只有灰度抗锯齿、用不了 ClearType，这一点改不了。
 - 往 `RenderTargetBitmap` 里画位图，高质量缩放（`RenderOptions.SetBitmapScalingMode`）要设在 `DrawingGroup` 或元素上：设在作为根的 `DrawingVisual` 上不起作用，缩小时和双线性一模一样（实测）。
 - 后台线程调 `Dispatcher.Invoke` 用非泛型的重载：程序退出、调度器关闭后泛型的 `Invoke<T>` 抛 `TaskCanceledException`，后台线程上没人接住，进程就崩了（实测）；非泛型的返回 null。
 - 收起后那一条的厚度要按 WPF 布局取整的方式算：标题栏和两侧边框各自取整再相加（`FenceWindow.CollapsedHeight`）。150% 时 1 DIP 的边框取整成 2 像素，共 49 像素，按 (30 + 2) × 1.5 整体取整只有 48，收起时标题栏被挤偏 1 像素，标题栏在下边、右边的分区展开收起时会动一下。

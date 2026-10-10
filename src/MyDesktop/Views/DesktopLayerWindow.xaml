@@ -22,7 +22,11 @@
 		<sys:Double x:Key="IconSize">48</sys:Double>
 		<sys:Double x:Key="CellWidth">76</sys:Double>
 		<sys:Double x:Key="LabelWidth">66</sys:Double>
-		<DropShadowEffect x:Key="TextShadow" ShadowDepth="1" BlurRadius="3" Opacity="0.85" Color="Black" Direction="270" />
+		<!-- 文字阴影：加在文字副本上的模糊（见 TextShadow） -->
+		<BlurEffect x:Key="TextShadow" Radius="3" />
+		<!-- 名称的行高和两行的最大高度，随字号在代码里更新 -->
+		<sys:Double x:Key="NameLineHeight">16</sys:Double>
+		<sys:Double x:Key="NameMaxHeight">32</sys:Double>
 		<!-- 几乎透明的底色让整个图标都能点中，图标之外的透明处点击仍穿透到系统桌面 -->
 		<SolidColorBrush x:Key="CellBackground" Color="#01000000" />
 		<SolidColorBrush x:Key="CellHover" Color="#2EFFFFFF" />
@@ -85,16 +89,17 @@
 						RenderOptions.BitmapScalingMode="HighQuality" />
 				<Grid Width="{DynamicResource LabelWidth}">
 					<!-- 与系统桌面一样最多显示两行 -->
-					<TextBlock x:Name="NameText"
-							Text="{Binding DisplayName}"
-							TextAlignment="Center"
-							TextWrapping="Wrap"
-							TextTrimming="CharacterEllipsis"
-							LineStackingStrategy="BlockLineHeight"
-							LineHeight="16"
-							MaxHeight="32"
-							Foreground="White"
-							Effect="{StaticResource TextShadow}" />
+					<local:TextShadow Shadow="{StaticResource TextShadow}" ShadowOpacity="0.85">
+						<TextBlock x:Name="NameText"
+								Text="{Binding DisplayName}"
+								TextAlignment="Center"
+								TextWrapping="Wrap"
+								TextTrimming="CharacterEllipsis"
+								LineStackingStrategy="BlockLineHeight"
+								LineHeight="{DynamicResource NameLineHeight}"
+								MaxHeight="{DynamicResource NameMaxHeight}"
+								Foreground="White" />
+					</local:TextShadow>
 					<TextBox x:Name="RenameBox"
 							Visibility="Collapsed"
 							Style="{StaticResource RenameBoxStyle}"

@@ -1495,6 +1495,18 @@ internal sealed class FenceManager
 		_takeover?.ReloadIcons();
 	}
 
+	/// <summary>
+	/// 设置里换了字体或字号：分区和桌面图标层一起换。
+	/// </summary>
+	public void ApplyFonts()
+	{
+		foreach (var window in _windows)
+		{
+			window.ApplyFonts();
+		}
+		_takeover?.ApplyFonts();
+	}
+
 	public void RefreshAllAppearance()
 	{
 		foreach (var window in _windows)
@@ -1536,7 +1548,7 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 清除各分区单独设置的颜色、不透明度、毛玻璃和图标大小，统一跟随默认外观。
+	/// 清除各分区单独设置的颜色、不透明度、毛玻璃、边框和图标大小，统一跟随默认外观。
 	/// </summary>
 	public void ResetAllAppearance()
 	{
@@ -1545,6 +1557,7 @@ internal sealed class FenceManager
 			model.Color = null;
 			model.Opacity = null;
 			model.Blur = null;
+			model.Border = null;
 			model.IconSize = null;
 		}
 		RefreshAllAppearance();

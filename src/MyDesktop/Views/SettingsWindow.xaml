@@ -281,7 +281,7 @@
 				<!-- 外观 -->
 				<StackPanel x:Name="AppearancePage" Visibility="Collapsed">
 					<TextBlock Style="{StaticResource PageTitle}" Text="外观" />
-					<TextBlock Style="{StaticResource Hint}" Text="以下是所有分区的默认外观。单个分区可以在它的右键菜单里单独设置颜色、不透明度、毛玻璃和图标大小。" />
+					<TextBlock Style="{StaticResource Hint}" Text="以下是所有分区的默认外观。单个分区可以在它的右键菜单里单独设置颜色、不透明度、毛玻璃、边框和图标大小。" />
 
 					<TextBlock Style="{StaticResource SectionTitle}" Text="背景颜色" />
 					<Border Style="{StaticResource Card}">
@@ -310,6 +310,11 @@
 							</StackPanel>
 						</CheckBox>
 					</Border>
+					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="BorderBox" Click="Setting_Changed">
+							<TextBlock Text="显示分区边框" />
+						</CheckBox>
+					</Border>
 
 					<TextBlock Style="{StaticResource SectionTitle}" Text="圆角大小" />
 					<Border Style="{StaticResource Card}">
@@ -325,6 +330,36 @@
 							<ComboBox x:Name="IconSizeBox" Width="150" DockPanel.Dock="Right" SelectionChanged="IconSizeBox_SelectionChanged" />
 							<TextBlock VerticalAlignment="Center" Text="默认图标大小" />
 						</DockPanel>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<StackPanel>
+							<DockPanel>
+								<ComboBox x:Name="FenceFontBox" Width="220" VerticalAlignment="Center" DockPanel.Dock="Right" SelectionChanged="FontBox_SelectionChanged" />
+								<StackPanel Margin="0,0,12,0" VerticalAlignment="Center">
+									<TextBlock Text="分区文字" />
+									<TextBlock Style="{StaticResource Hint}" Text="字号是图标名称的大小，分区标题和标签跟着变" />
+								</StackPanel>
+							</DockPanel>
+							<DockPanel Margin="0,8,0,0">
+								<TextBlock x:Name="FenceFontSizeText" Width="52" VerticalAlignment="Center" DockPanel.Dock="Right" TextAlignment="Right" />
+								<Slider x:Name="FenceFontSizeSlider" IsSnapToTickEnabled="True" Maximum="16" Minimum="9" TickFrequency="1" ValueChanged="FontSizeSlider_ValueChanged" />
+							</DockPanel>
+						</StackPanel>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<StackPanel>
+							<DockPanel>
+								<ComboBox x:Name="DesktopFontBox" Width="220" VerticalAlignment="Center" DockPanel.Dock="Right" SelectionChanged="FontBox_SelectionChanged" />
+								<StackPanel Margin="0,0,12,0" VerticalAlignment="Center">
+									<TextBlock Text="桌面图标文字" />
+									<TextBlock Style="{StaticResource Hint}" Text="没放进分区的桌面图标；字号太大时名称可能压到下一行图标" />
+								</StackPanel>
+							</DockPanel>
+							<DockPanel Margin="0,8,0,0">
+								<TextBlock x:Name="DesktopFontSizeText" Width="52" VerticalAlignment="Center" DockPanel.Dock="Right" TextAlignment="Right" />
+								<Slider x:Name="DesktopFontSizeSlider" IsSnapToTickEnabled="True" Maximum="16" Minimum="9" TickFrequency="1" ValueChanged="FontSizeSlider_ValueChanged" />
+							</DockPanel>
+						</StackPanel>
 					</Border>
 					<Border Style="{StaticResource Card}">
 						<CheckBox x:Name="ShowIconNamesBox" Click="Setting_Changed">
@@ -355,7 +390,7 @@
 							<Button VerticalAlignment="Center" Content="全部重置" DockPanel.Dock="Right" Click="ResetAppearance_Click" />
 							<StackPanel Margin="0,0,12,0">
 								<TextBlock Text="所有分区改用默认外观" />
-								<TextBlock Style="{StaticResource Hint}" Text="清除各分区单独设置的颜色、不透明度、毛玻璃和图标大小" />
+								<TextBlock Style="{StaticResource Hint}" Text="清除各分区单独设置的颜色、不透明度、毛玻璃、边框和图标大小" />
 							</StackPanel>
 						</DockPanel>
 					</Border>

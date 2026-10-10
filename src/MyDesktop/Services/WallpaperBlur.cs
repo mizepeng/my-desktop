@@ -350,6 +350,8 @@ internal sealed class WallpaperBlur
 
 	/// <summary>
 	/// 壁纸在画框中的位置和大小，与系统「选择契合度」一致；居中按原尺寸，其余按画框缩放。
+	/// 填充、跨区时图片比画框高的，系统上面裁掉多出部分的三分之一、下面裁三分之二，不是上下居中；比画框宽的左右居中（实测，
+	/// 用偏高、偏宽、需要放大的几种测试图设成壁纸后量屏幕上的位置）。按居中算的话，毛玻璃比后面的壁纸往上偏。
 	/// </summary>
 	static Rect Place(WallpaperImage image, Rect frame, WallpaperPosition position)
 	{
@@ -362,7 +364,9 @@ internal sealed class WallpaperBlur
 			WallpaperPosition.Fit => (image.Width * fit, image.Height * fit),
 			WallpaperPosition.Fill or WallpaperPosition.Span => (image.Width * fill, image.Height * fill),
 		};
-		return new Rect(frame.X + (frame.Width - width) / 2, frame.Y + (frame.Height - height) / 2, width, height);
+		bool topThird = position is WallpaperPosition.Fill or WallpaperPosition.Span && height > frame.Height;
+		double top = frame.Y + (frame.Height - height) / (topThird ? 3 : 2);
+		return new Rect(frame.X + (frame.Width - width) / 2, top, width, height);
 	}
 
 	static int Scaled(int pixels) => Math.Max(1, (int)Math.Round(pixels * ImageScale));

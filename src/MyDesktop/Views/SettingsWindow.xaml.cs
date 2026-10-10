@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Markup;
 using System.Windows.Media;
 using Microsoft.Win32;
 using MyDesktop.Core;
@@ -79,6 +80,10 @@ internal partial class SettingsWindow : Window
 		AutoOrganizeBox.IsChecked = Settings.AutoOrganize;
 		TextShadowBox.IsChecked = Settings.TextShadow;
 		BlurBox.IsChecked = Settings.DefaultBlur;
+		BorderBox.IsChecked = Settings.DefaultBorder;
+		LoadFonts();
+		FenceFontSizeSlider.Value = Settings.FenceFontSize;
+		DesktopFontSizeSlider.Value = Settings.DesktopFontSize;
 		ShortcutArrowBox.IsChecked = Settings.ShowShortcutArrows;
 		ShowIconNamesBox.IsChecked = Settings.ShowIconNames;
 		HardwareAccelerationBox.IsChecked = Settings.HardwareAcceleration;
@@ -228,6 +233,8 @@ internal partial class SettingsWindow : Window
 		bool shadowChanged = Settings.TextShadow != textShadow;
 		bool blur = BlurBox.IsChecked == true;
 		bool blurChanged = Settings.DefaultBlur != blur;
+		bool border = BorderBox.IsChecked == true;
+		bool borderChanged = Settings.DefaultBorder != border;
 		bool arrows = ShortcutArrowBox.IsChecked == true;
 		bool arrowsChanged = Settings.ShowShortcutArrows != arrows;
 		bool desktopMenu = DesktopMenuBox.IsChecked == true;
@@ -245,6 +252,7 @@ internal partial class SettingsWindow : Window
 		Settings.ShowHiddenFiles = showHidden;
 		Settings.TextShadow = textShadow;
 		Settings.DefaultBlur = blur;
+		Settings.DefaultBorder = border;
 		Settings.ShowShortcutArrows = arrows;
 		Settings.DesktopContextMenu = desktopMenu;
 		Settings.ShowIconNames = names;
@@ -260,7 +268,7 @@ internal partial class SettingsWindow : Window
 		{
 			_manager.RefreshAllItems();
 		}
-		if (shadowChanged || blurChanged)
+		if (shadowChanged || blurChanged || borderChanged)
 		{
 			_manager.RefreshAllAppearance();
 		}
@@ -468,8 +476,60 @@ internal partial class SettingsWindow : Window
 		_manager.SaveSoon();
 	}
 
+	// 字体下拉框各项对应的字体族名称，第一项「系统默认」为 null
+	List<string?> _fontSources = [];
+
+	/// <summary>
+	/// 列出本机已安装的字体，按中文名称（没有时用英文名）排序。
+	/// </summary>
+	void LoadFonts()
+	{
+		var zh = XmlLanguage.GetLanguage("zh-cn");
+		var en = XmlLanguage.GetLanguage("en-us");
+		var fonts = Fonts.SystemFontFamilies
+				.Select(f => (Source: f.Source, Name: f.FamilyNames.TryGetValue(zh, out var name) || f.FamilyNames.TryGetValue(en, out name) ? name : f.Source))
+				.DistinctBy(f => f.Source, StringComparer.OrdinalIgnoreCase)
+				.OrderBy(f => f.Name, StringComparer.CurrentCulture)
+				.ToList();
+		_fontSources = [null, .. fonts.Select(f => (string?)f.Source)];
+		var names = new[] { "系统默认" }.Concat(fonts.Select(f => f.Name)).ToList();
+		FenceFontBox.ItemsSource = names;
+		DesktopFontBox.ItemsSource = names;
+		FenceFontBox.SelectedIndex = FontIndex(Settings.FenceFontFamily);
+		DesktopFontBox.SelectedIndex = FontIndex(Settings.DesktopFontFamily);
+	}
+
+	int FontIndex(string? family) => Math.Max(0, _fontSources.FindIndex(s => string.Equals(s, family, StringComparison.OrdinalIgnoreCase)));
+
+	void FontBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+	{
+		if (_loading || FenceFontBox.SelectedIndex < 0 || DesktopFontBox.SelectedIndex < 0)
+		{
+			return;
+		}
+		Settings.FenceFontFamily = _fontSources[FenceFontBox.SelectedIndex];
+		Settings.DesktopFontFamily = _fontSources[DesktopFontBox.SelectedIndex];
+		_manager.ApplyFonts();
+		_manager.SaveSoon();
+	}
+
+	void FontSizeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+	{
+		if (_loading || FenceFontSizeText == null || DesktopFontSizeText == null)
+		{
+			return;
+		}
+		UpdateSliderTexts();
+		Settings.FenceFontSize = FenceFontSizeSlider.Value;
+		Settings.DesktopFontSize = DesktopFontSizeSlider.Value;
+		_manager.ApplyFonts();
+		_manager.SaveSoon();
+	}
+
 	void UpdateSliderTexts()
 	{
+		FenceFontSizeText.Text = $"{FenceFontSizeSlider.Value:0}";
+		DesktopFontSizeText.Text = $"{DesktopFontSizeSlider.Value:0}";
 		OpacityText.Text = $"{OpacitySlider.Value:0}%";
 		RadiusText.Text = $"{RadiusSlider.Value:0}";
 		SnapGapText.Text = SnapGapSlider.Value == 0 ? "紧贴" : $"{SnapGapSlider.Value:0}";

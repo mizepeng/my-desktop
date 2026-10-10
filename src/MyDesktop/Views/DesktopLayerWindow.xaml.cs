@@ -8,6 +8,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using MyDesktop.Core;
+using MyDesktop.Models;
 using MyDesktop.Native;
 using MyDesktop.Services;
 using static MyDesktop.Native.NativeMethods;
@@ -73,6 +74,17 @@ internal partial class DesktopLayerWindow : Window
 		// 桌面图标层上点图标时前台可能仍是资源管理器的桌面
 		_clickRename = new ClickToRename(BeginRename, item => (IsActive || DesktopHost.IsDesktopSurface(GetForegroundWindow()))
 				&& ItemsList.SelectedItems.Count == 1 && ItemsList.SelectedItem == item);
+	}
+
+	/// <summary>
+	/// 按设置换字体、字号；名称的行高按字号算（12 号时就是原来的 16），和系统桌面一样最多两行。
+	/// </summary>
+	public void ApplyFonts(AppSettings settings)
+	{
+		var (_, size) = TextFont.Apply(this, settings.DesktopFontFamily, settings.DesktopFontSize);
+		double line = Math.Round(size * 4 / 3);
+		Resources["NameLineHeight"] = line;
+		Resources["NameMaxHeight"] = line * 2;
 	}
 
 	public IntPtr Monitor { get; }

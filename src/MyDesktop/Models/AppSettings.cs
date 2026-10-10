@@ -209,6 +209,31 @@ public sealed class AppSettings
 	public bool DefaultBlur { get; set; } = true;
 
 	/// <summary>
+	/// 分区默认显示边框；默认不显示。
+	/// </summary>
+	public bool DefaultBorder { get; set; }
+
+	/// <summary>
+	/// 分区文字的字体（字体族名称）；为空时用系统界面字体。
+	/// </summary>
+	public string? FenceFontFamily { get; set; }
+
+	/// <summary>
+	/// 分区里图标名称的字号（DIP）；分区标题、标签比它大 1。
+	/// </summary>
+	public double FenceFontSize { get; set; } = 12;
+
+	/// <summary>
+	/// 桌面上散放图标名称的字体（字体族名称）；为空时用系统界面字体。
+	/// </summary>
+	public string? DesktopFontFamily { get; set; }
+
+	/// <summary>
+	/// 桌面上散放图标名称的字号（DIP）。
+	/// </summary>
+	public double DesktopFontSize { get; set; } = 12;
+
+	/// <summary>
 	/// 上次运行的程序版本；升级后（不论自动更新还是手动安装）第一次启动时据此提示已更新。
 	/// </summary>
 	public string? LastRunVersion { get; set; }
@@ -325,6 +350,8 @@ public sealed class FenceSettings
 	public double? Opacity { get; set; }
 
 	public bool? Blur { get; set; }
+
+	public bool? Border { get; set; }
 
 	public IconSizeMode? IconSize { get; set; }
 

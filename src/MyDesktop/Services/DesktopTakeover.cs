@@ -397,6 +397,16 @@ internal sealed class DesktopTakeover : IDisposable
 		Items.RefreshSoon();
 	}
 
+	public void ApplyFonts()
+	{
+		foreach (var layer in _layers)
+		{
+			layer.ApplyFonts(_manager.Settings);
+		}
+		// 名称变高变矮，图标层要跟着调整覆盖的范围
+		RelayoutSoon();
+	}
+
 	public void KeepLayersAboveDesktop()
 	{
 		foreach (var layer in _layers)
@@ -677,6 +687,7 @@ internal sealed class DesktopTakeover : IDisposable
 			if (layer == null)
 			{
 				layer = new DesktopLayerWindow(this, monitor);
+				layer.ApplyFonts(_manager.Settings);
 				_layers.Add(layer);
 			}
 			var (work, scale) = GetMonitorWorkArea(monitor);

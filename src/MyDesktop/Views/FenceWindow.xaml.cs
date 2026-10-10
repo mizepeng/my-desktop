@@ -43,7 +43,7 @@ internal partial class FenceWindow : Window
 	// 松手时压住了别的分区，滑到空位的时长
 	const double SlideMilliseconds = 180;
 
-	static readonly DropShadowEffect TextShadowEffect = CreateShadow();
+	static readonly BlurEffect TextShadowEffect = CreateShadow();
 	// 调整大小时列数 × 行数提示：平时半透明黑底；两个方向都刚好装满时蓝底，只有一个方向刚好装满时那个数字用浅蓝色
 	static readonly SolidColorBrush HintBackground = Frozen(Color.FromArgb(0xB3, 0x00, 0x00, 0x00));
 	static readonly SolidColorBrush SnappedHintBackground = Frozen(Color.FromArgb(0xE6, 0x3B, 0x82, 0xF6));
@@ -276,6 +276,7 @@ internal partial class FenceWindow : Window
 			Model.RollEdge = Model.RollDirection ?? AutoRollEdge(ExpandedRect);
 		}
 		UpdateTitle();
+		ApplyFonts();
 		ApplyAppearance();
 		ApplyViewMode();
 		// 首次定位若跨越不同 DPI 的显示器，WPF 会按新 DPI 缩放窗口，第二次把尺寸校正回保存的物理像素
@@ -1569,6 +1570,19 @@ internal partial class FenceWindow : Window
 		return string.Join("\n", characters);
 	}
 
+	/// <summary>
+	/// 按设置换字体、字号：标题和标签比图标名称大 1（最大 16，标题栏放得下）；图标名称最多两行的高度、
+	/// 列表视图里名称和 20 高的图标对齐的上边距都按一行的高度算（12 号微软雅黑时就是原来的 34 和 2）。
+	/// </summary>
+	public void ApplyFonts()
+	{
+		var (family, size) = TextFont.Apply(this, Settings.FenceFontFamily, Settings.FenceFontSize);
+		double line = family.LineSpacing * size;
+		Resources["TitleFontSize"] = Math.Min(size + 1, TextFont.MaxSize);
+		Resources["NameMaxHeight"] = Math.Ceiling(line * 2) + 2;
+		Resources["ListNameMargin"] = new Thickness(0, Math.Max(0, Math.Round((20 - line) / 2)), 0, 0);
+	}
+
 	public void ApplyAppearance()
 	{
 		var baseColor = Appearance.ParseColor(Model.Color ?? Settings.DefaultColor, Color.FromRgb(0x1E, 0x1E, 0x1E));
@@ -1576,7 +1590,10 @@ internal partial class FenceWindow : Window
 		// 浅色且足够不透明的背景上改用深色文字
 		bool light = Appearance.Luminance(baseColor) > 0.6 && opacity >= 0.35;
 		Frame.Background = Frozen(Color.FromArgb((byte)Math.Round(opacity * 255), baseColor.R, baseColor.G, baseColor.B));
-		_frameBorder = Frozen(light ? Color.FromArgb(0x30, 0, 0, 0) : Color.FromArgb(0x38, 0xFF, 0xFF, 0xFF));
+		// 不显示边框时边框涂成和背景一样的颜色（背景只填边框里面，同色时那一圈和里面一模一样，实测），粗细不变：
+		// 设成透明的话相邻分区之间会露出一道缝；卷起后那一条的厚度等按边框计算的尺寸也都不用改。拖放时的高亮边框照常显示
+		_frameBorder = !(Model.Border ?? Settings.DefaultBorder) ? Frame.Background
+				: Frozen(light ? Color.FromArgb(0x30, 0, 0, 0) : Color.FromArgb(0x38, 0xFF, 0xFF, 0xFF));
 		Frame.BorderBrush = _frameBorder;
 		Frame.CornerRadius = new CornerRadius(Settings.CornerRadius);
 		UpdateBlur();
@@ -1821,9 +1838,12 @@ internal partial class FenceWindow : Window
 		return brush;
 	}
 
-	static DropShadowEffect CreateShadow()
+	/// <summary>
+	/// 文字阴影：加在文字的黑色副本上（见 TextShadow），副本下移 1、不透明度 0.75，与原来的 DropShadowEffect 参数一致。
+	/// </summary>
+	static BlurEffect CreateShadow()
 	{
-		var effect = new DropShadowEffect { ShadowDepth = 1, BlurRadius = 3, Opacity = 0.75, Color = Colors.Black, Direction = 270 };
+		var effect = new BlurEffect { Radius = 3 };
 		effect.Freeze();
 		return effect;
 	}
@@ -2859,6 +2879,9 @@ internal partial class FenceWindow : Window
 				}
 				sub.Add("列表", () => SetView(FenceView.List, Model.IconSize), isChecked: Model.View == FenceView.List, radio: true);
 				sub.Add("详细信息", () => SetView(FenceView.Details, Model.IconSize), isChecked: Model.View == FenceView.Details, radio: true);
+				sub.AddSeparator();
+				// 上面选了图标大小就是单独设置，勾上这一项清掉，改回跟随设置里的默认图标大小
+				sub.Add("图标大小跟随默认外观", () => SetView(Model.View, null), isChecked: Model.IconSize == null);
 			});
 			menu.AddSubMenu("背景颜色", sub =>
 			{
@@ -2887,6 +2910,13 @@ internal partial class FenceWindow : Window
 				sub.Add("关", () => SetBlur(false), isChecked: Model.Blur == false, radio: true);
 				sub.AddSeparator();
 				sub.Add("跟随默认外观", () => SetBlur(null), isChecked: Model.Blur == null, radio: true);
+			});
+			menu.AddSubMenu("边框", sub =>
+			{
+				sub.Add("显示", () => SetBorder(true), isChecked: Model.Border == true, radio: true);
+				sub.Add("不显示", () => SetBorder(false), isChecked: Model.Border == false, radio: true);
+				sub.AddSeparator();
+				sub.Add("跟随默认外观", () => SetBorder(null), isChecked: Model.Border == null, radio: true);
 			});
 			menu.AddSeparator();
 			menu.Add("重命名分区", BeginTitleEdit);
@@ -3020,6 +3050,13 @@ internal partial class FenceWindow : Window
 	void SetBlur(bool? blur)
 	{
 		Model.Blur = blur;
+		ApplyAppearance();
+		_manager.SaveSoon();
+	}
+
+	void SetBorder(bool? border)
+	{
+		Model.Border = border;
 		ApplyAppearance();
 		_manager.SaveSoon();
 	}
