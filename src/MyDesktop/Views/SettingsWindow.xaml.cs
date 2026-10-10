@@ -71,6 +71,7 @@ internal partial class SettingsWindow : Window
 		TabAlignmentCard.IsEnabled = !Settings.TabsFillWidth;
 		SwitchTabOnHoverBox.IsChecked = Settings.SwitchTabOnHover;
 		TabHoverDelaySlider.Value = Settings.TabHoverDelay;
+		CollapseDelaySlider.Value = Settings.CollapseDelay;
 		DrawToCreateBox.IsChecked = Settings.DrawToCreate;
 		DesktopMenuBox.IsChecked = Settings.DesktopContextMenu;
 		ExpandOnHoverBox.IsChecked = Settings.ExpandOnHover;
@@ -347,6 +348,18 @@ internal partial class SettingsWindow : Window
 		_manager.SaveSoon();
 	}
 
+	void CollapseDelaySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+	{
+		if (_loading || CollapseDelayText == null)
+		{
+			return;
+		}
+		UpdateSliderTexts();
+		Settings.CollapseDelay = (int)CollapseDelaySlider.Value;
+		_manager.ApplyCollapseDelay();
+		_manager.SaveSoon();
+	}
+
 	void TabHoverDelaySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
 	{
 		if (_loading || TabHoverDelayText == null)
@@ -534,6 +547,7 @@ internal partial class SettingsWindow : Window
 		RadiusText.Text = $"{RadiusSlider.Value:0}";
 		SnapGapText.Text = SnapGapSlider.Value == 0 ? "紧贴" : $"{SnapGapSlider.Value:0}";
 		TabHoverDelayText.Text = TabHoverDelaySlider.Value == 0 ? "立即" : $"{TabHoverDelaySlider.Value:0} 毫秒";
+		CollapseDelayText.Text = $"{CollapseDelaySlider.Value:0} 毫秒";
 	}
 
 	void IconSizeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)

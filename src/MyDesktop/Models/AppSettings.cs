@@ -125,6 +125,11 @@ public sealed class AppSettings
 
 	public bool ExpandOnHover { get; set; } = true;
 
+	/// <summary>
+	/// 鼠标移开后多久收起悬停展开的分区（毫秒）；收起前鼠标还在分区上时按这个间隔再看，所以不能为 0。
+	/// </summary>
+	public int CollapseDelay { get; set; } = 400;
+
 	public bool SnapToEdges { get; set; } = true;
 
 	/// <summary>

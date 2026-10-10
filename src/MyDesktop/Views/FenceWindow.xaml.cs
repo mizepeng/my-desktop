@@ -157,7 +157,8 @@ internal partial class FenceWindow : Window
 			_refreshTimer.Stop();
 			RefreshItems();
 		};
-		_collapseTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+		_collapseTimer = new DispatcherTimer();
+		ApplyCollapseDelay();
 		_collapseTimer.Tick += CollapseTimer_Tick;
 		_buttonsTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
 		_buttonsTimer.Tick += (_, _) =>
@@ -1911,6 +1912,11 @@ internal partial class FenceWindow : Window
 		_tempExpanded = false;
 		ApplyRollBounds();
 	}
+
+	/// <summary>
+	/// 鼠标移开后多久收起悬停展开的分区（设置 → 分区）。
+	/// </summary>
+	public void ApplyCollapseDelay() => _collapseTimer.Interval = TimeSpan.FromMilliseconds(Math.Max(100, Settings.CollapseDelay));
 
 	static void RestartTimer(DispatcherTimer timer)
 	{

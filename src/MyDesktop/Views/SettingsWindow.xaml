@@ -193,6 +193,15 @@
 							</StackPanel>
 						</CheckBox>
 					</Border>
+					<Border Style="{StaticResource Card}" IsEnabled="{Binding IsChecked, ElementName=ExpandOnHoverBox}">
+						<StackPanel>
+							<TextBlock Text="鼠标移开后多久收起" />
+							<DockPanel Margin="0,8,0,0">
+								<TextBlock x:Name="CollapseDelayText" Width="72" VerticalAlignment="Center" DockPanel.Dock="Right" TextAlignment="Right" />
+								<Slider x:Name="CollapseDelaySlider" IsSnapToTickEnabled="True" Maximum="2000" Minimum="100" TickFrequency="100" ValueChanged="CollapseDelaySlider_ValueChanged" />
+							</DockPanel>
+						</StackPanel>
+					</Border>
 
 					<TextBlock Style="{StaticResource SectionTitle}" Text="标签页" />
 					<Border Style="{StaticResource Card}">

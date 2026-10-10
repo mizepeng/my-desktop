@@ -328,8 +328,9 @@
 								</TextBlock.LayoutTransform>
 							</TextBlock>
 						</local:TextShadow>
-						<!-- 合并成标签页后，标题换成各成员分区的标签；竖放标题栏时标签文字竖排 -->
-						<ItemsControl x:Name="TabStrip" Grid.Column="1" Visibility="Collapsed" Focusable="False">
+						<!-- 合并成标签页后，标题换成各成员分区的标签；竖放标题栏时标签文字竖排。
+							左边抵消标题留的 10 的边距，和上下一样离标题栏边缘 4；右边再空 4，加上标签自己的 4，和右侧按钮隔开 8 -->
+						<ItemsControl x:Name="TabStrip" Grid.Column="1" Margin="-6,0,4,0" Visibility="Collapsed" Focusable="False">
 							<ItemsControl.ItemsPanel>
 								<ItemsPanelTemplate>
 									<local:TabStripPanel />

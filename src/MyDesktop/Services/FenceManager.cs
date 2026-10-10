@@ -1495,6 +1495,14 @@ internal sealed class FenceManager
 		_takeover?.ReloadIcons();
 	}
 
+	public void ApplyCollapseDelay()
+	{
+		foreach (var window in _windows)
+		{
+			window.ApplyCollapseDelay();
+		}
+	}
+
 	/// <summary>
 	/// 设置里换了字体或字号：分区和桌面图标层一起换。
 	/// </summary>
