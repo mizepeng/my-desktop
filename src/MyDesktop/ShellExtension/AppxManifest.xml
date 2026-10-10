@@ -26,6 +26,8 @@
 	</Dependencies>
 	<Capabilities>
 		<rescap:Capability Name="runFullTrust" />
+		<!-- Win10 要求 uap10:TrustLevel="mediumIL" 的应用声明此功能，否则清单验证失败（0x80080204）；Win11 不要求，声明了也不影响 -->
+		<rescap:Capability Name="unvirtualizedResources" />
 	</Capabilities>
 	<Applications>
 		<Application Id="MyDesktop" Executable="MyDesktop.exe" uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="win32App">
