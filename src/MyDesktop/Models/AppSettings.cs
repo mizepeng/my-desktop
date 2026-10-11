@@ -221,6 +221,11 @@ public sealed class AppSettings
 	/// </summary>
 	public bool HardwareAcceleration { get; set; } = true;
 
+	/// <summary>
+	/// 图标飞入动画：开机启动、一键整理和自动整理时图标从桌面飞进分区，删除分区时飞回桌面。关掉后图标直接出现在新位置。
+	/// </summary>
+	public bool FlightAnimation { get; set; } = true;
+
 	public string DefaultColor { get; set; } = "#1E1E1E";
 
 	public double DefaultOpacity { get; set; } = 0.45;

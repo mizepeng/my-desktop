@@ -124,6 +124,14 @@
 							</StackPanel>
 						</CheckBox>
 					</Border>
+					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="FlightAnimationBox" Click="Setting_Changed">
+							<StackPanel>
+								<TextBlock Text="图标飞入动画" />
+								<TextBlock Style="{StaticResource Hint}" Text="开机启动、整理桌面时图标从桌面飞进分区，删除分区时飞回桌面；关掉后图标直接出现在新位置" />
+							</StackPanel>
+						</CheckBox>
+					</Border>
 					<!-- 这一页的设置恢复成默认值（见 ResetPage_Click） -->
 					<Border Style="{StaticResource Card}" Margin="0,16,0,4">
 						<DockPanel>

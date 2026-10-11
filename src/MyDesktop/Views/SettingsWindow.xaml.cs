@@ -120,6 +120,7 @@ internal partial class SettingsWindow : Window
 		ShortcutArrowBox.IsChecked = Settings.ShowShortcutArrows;
 		ShowIconNamesBox.IsChecked = Settings.ShowIconNames;
 		HardwareAccelerationBox.IsChecked = Settings.HardwareAcceleration;
+		FlightAnimationBox.IsChecked = Settings.FlightAnimation;
 		AutoUpdateBox.IsChecked = Settings.AutoCheckUpdates;
 		OpacitySlider.Value = Math.Round(Settings.DefaultOpacity * 100);
 		RadiusSlider.Value = Settings.CornerRadius;
@@ -277,6 +278,7 @@ internal partial class SettingsWindow : Window
 		bool namesChanged = Settings.ShowIconNames != names;
 		bool hardware = HardwareAccelerationBox.IsChecked == true;
 		bool hardwareChanged = Settings.HardwareAcceleration != hardware;
+		Settings.FlightAnimation = FlightAnimationBox.IsChecked == true;
 		Settings.DoubleClickToHide = DoubleClickBox.IsChecked == true;
 		Settings.DrawToCreate = DrawToCreateBox.IsChecked == true;
 		Settings.ExpandOnHover = ExpandOnHoverBox.IsChecked == true;
@@ -687,6 +689,7 @@ internal partial class SettingsWindow : Window
 			case "常规":
 				_manager.SetAutoStart(true);
 				Settings.SearchHotkey = defaults.SearchHotkey;
+				Settings.FlightAnimation = defaults.FlightAnimation;
 				if (Settings.HardwareAcceleration != defaults.HardwareAcceleration)
 				{
 					Settings.HardwareAcceleration = defaults.HardwareAcceleration;

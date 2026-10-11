@@ -193,8 +193,8 @@ internal sealed class FenceManager
 		_reorderHook = SetWinEventHook(EVENT_OBJECT_REORDER, EVENT_OBJECT_REORDER, IntPtr.Zero, _reorderCallback, 0, 0,
 				WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 		ApplyStartupHidden();
-		// 系统关掉了「显示桌面图标」时桌面上没有图标可以飞；启动时就藏起了图标或分区的也不播
-		_flyInAtStartup = !DesktopHost.IconsHiddenBySystem() && !_iconsHidden && !_fencesHidden;
+		// 系统关掉了「显示桌面图标」时桌面上没有图标可以飞；启动时就藏起了图标或分区的、关掉了飞入动画的也不播
+		_flyInAtStartup = Settings.FlightAnimation && !DesktopHost.IconsHiddenBySystem() && !_iconsHidden && !_fencesHidden;
 		foreach (var model in Settings.Fences.ToList())
 		{
 			OpenWindow(model);
@@ -517,7 +517,7 @@ internal sealed class FenceManager
 		}
 		SettingsBackup.Create(Settings, BackupReason.DeleteFence);
 		// 桌面分区里的图标飞回桌面：起点要在关闭分区之前取
-		var homing = !model.IsPortal && window.IsVisible && _takeover?.LayersVisible == true ? LiftIcons(window) : [];
+		var homing = Settings.FlightAnimation && !model.IsPortal && window.IsVisible && _takeover?.LayersVisible == true ? LiftIcons(window) : [];
 		LeaveGroup(window);
 		_windows.Remove(window);
 		Settings.Fences.Remove(model);

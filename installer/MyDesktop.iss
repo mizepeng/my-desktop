@@ -3,7 +3,12 @@
 ; 它先发布程序、再用 ISCC 编译本脚本，最后给安装包签名（程序的自动更新只接受签过名的安装包）。
 ; 签名证书的公钥 MyDesktop.cer 随仓库放在本目录；更换签名证书后按 src\MyDesktop\ShellExtension\Pack-DesktopMenu.ps1 开头的命令重新导出覆盖它。
 
-#define PublishDir AddBackslash(SourcePath) + "..\publish\"
+; 程序发布在哪个目录：默认 publish；Build-Installer.ps1 打测试包时用 /DPublishFrom= 指定
+#ifdef PublishFrom
+  #define PublishDir AddBackslash(PublishFrom)
+#else
+  #define PublishDir AddBackslash(SourcePath) + "..\publish\"
+#endif
 #define VerMajor
 #define VerMinor
 #define VerRev

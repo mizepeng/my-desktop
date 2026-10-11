@@ -86,6 +86,12 @@ internal sealed class DesktopOrganizer : IDisposable
 		{
 			foreach (var (rule, paths) in plan)
 			{
+				// 关掉了飞入动画：直接归入
+				if (!_manager.Settings.FlightAnimation)
+				{
+					_manager.AssignToFence(_manager.GetOrCreateRuleFence(rule, reveal: interactive), paths);
+					continue;
+				}
 				// 起点要在归入分区之前取：归入后图标就从桌面上消失了
 				var sources = _manager.CaptureDesktopIcons(paths);
 				var window = _manager.GetOrCreateRuleFence(rule, reveal: interactive);
