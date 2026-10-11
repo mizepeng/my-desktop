@@ -21,6 +21,7 @@ namespace MyDesktop.Services;
 internal sealed class Updater
 {
 	const string LatestReleaseApi = "https://api.github.com/repos/mizepeng/my-desktop/releases/latest";
+	const string ReleasesApi = "https://api.github.com/repos/mizepeng/my-desktop/releases?per_page=30";
 	const string ReleasesPage = "https://github.com/mizepeng/my-desktop/releases/latest";
 	const string InstallerPrefix = "MyDesktop-Setup-";
 	const int CERT_E_UNTRUSTEDROOT = unchecked((int)0x800B0109);
@@ -148,7 +149,7 @@ internal sealed class Updater
 			var message = $"MyDesktop {release.Version.ToString(3)} 已发布，当前版本 {CurrentVersion.ToString(3)}。";
 			if (release.Notes.Length > 0)
 			{
-				message += $"\n\n{release.Notes}";
+				message += $"\n\n更新内容：\n{release.Notes}";
 			}
 			// 最后一个按钮响应 Esc，放「稍后」
 			int choice = MessageDialog.Show("发现新版本", message, "立即更新", "跳过此版本", "稍后");
@@ -185,11 +186,53 @@ internal sealed class Updater
 			if (name.StartsWith(InstallerPrefix, StringComparison.OrdinalIgnoreCase) && name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
 			{
 				var notes = root.TryGetProperty("body", out var body) ? FormatNotes(body.GetString() ?? string.Empty) : string.Empty;
+				if (Normalize(version) > CurrentVersion)
+				{
+					notes = await NotesSinceAsync(Normalize(version), notes);
+				}
 				return new Release(Normalize(version), tag, notes, name, asset.GetProperty("browser_download_url").GetString() ?? string.Empty,
 						asset.GetProperty("size").GetInt64());
 			}
 		}
 		return null;
+	}
+
+	/// <summary>
+	/// 隔了好几个版本没更新时，把当前版本之后每一版的「本版更新」都列出来（新的在前，每一版前面一行版本号）；
+	/// 只差一个版本时和原来一样只列这一版。只是多给的信息，取不到时记日志、退回只列最新一版，不耽误更新。
+	/// </summary>
+	static async Task<string> NotesSinceAsync(Version latest, string latestNotes)
+	{
+		try
+		{
+			using var response = await Http.GetAsync(ReleasesApi);
+			response.EnsureSuccessStatusCode();
+			using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+			var sections = new List<(Version Version, string Notes)>();
+			foreach (var item in json.RootElement.EnumerateArray())
+			{
+				if (item.GetProperty("draft").GetBoolean() || item.GetProperty("prerelease").GetBoolean()
+						|| !Version.TryParse((item.GetProperty("tag_name").GetString() ?? string.Empty).TrimStart('v', 'V'), out var parsed))
+				{
+					continue;
+				}
+				var version = Normalize(parsed);
+				if (version > CurrentVersion && version <= latest)
+				{
+					sections.Add((version, item.TryGetProperty("body", out var body) ? FormatNotes(body.GetString() ?? string.Empty) : string.Empty));
+				}
+			}
+			if (sections.Count <= 1)
+			{
+				return latestNotes;
+			}
+			return string.Join("\n\n", sections.OrderByDescending(x => x.Version).Select(x => $"{x.Version.ToString(3)} 版\n{x.Notes}"));
+		}
+		catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException)
+		{
+			Log.Warn("读取历次发行说明失败，只列最新一版的更新内容", ex);
+			return latestNotes;
+		}
 	}
 
 	/// <summary>

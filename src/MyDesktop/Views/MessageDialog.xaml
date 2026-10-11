@@ -21,7 +21,8 @@
 		<!-- 说明最多显示 20 行，再长（如新版本的更新说明）就在这里滚动；屏幕矮时窗口另有限高（见构造函数），这里跟着变矮。
 			Fluent 的滚动条（宽 12）叠在内容上：向右伸进边距 16、内容右边留出 16，文字排版不变，滚动条落在边距里不压字 -->
 		<ScrollViewer Grid.Row="1" MaxHeight="420" Margin="0,0,-16,0" Padding="0,0,16,0" Focusable="False" VerticalScrollBarVisibility="Auto">
-			<TextBlock x:Name="MessageText" TextWrapping="Wrap" LineHeight="21" />
+			<!-- 说明按行生成（见 SetMessage）：以「• 」开头的行是列表项，折行后和第一行的文字对齐 -->
+			<StackPanel x:Name="MessagePanel" />
 		</ScrollViewer>
 		<!-- 只在显示进度时出现 -->
 		<ProgressBar x:Name="ProgressBar" Grid.Row="2" Height="4" Margin="0,16,0,0" Maximum="1" Visibility="Collapsed" />

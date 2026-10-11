@@ -28,7 +28,7 @@ internal partial class MessageDialog : Window
 	{
 		var dialog = new MessageDialog { Title = title };
 		dialog.HeaderText.Text = title;
-		dialog.MessageText.Text = message;
+		dialog.SetMessage(message);
 		for (int i = 0; i < buttons.Length; i++)
 		{
 			int index = i;
@@ -56,6 +56,43 @@ internal partial class MessageDialog : Window
 	}
 
 	/// <summary>
+	/// 按行排出说明：空行是段落间距；以「• 」开头的行是列表项，圆点单独一列，文字折行后和第一行对齐（悬挂缩进），
+	/// 不像整段文字那样折行后从行首开始。
+	/// </summary>
+	void SetMessage(string message)
+	{
+		MessagePanel.Children.Clear();
+		bool gap = false;
+		foreach (var line in message.Replace("\r", string.Empty).Split('\n'))
+		{
+			if (line.Trim().Length == 0)
+			{
+				gap = MessagePanel.Children.Count > 0;
+				continue;
+			}
+			var margin = new Thickness(0, gap ? 12 : 0, 0, 0);
+			gap = false;
+			if (line.StartsWith("• ", StringComparison.Ordinal))
+			{
+				var item = new Grid { Margin = margin };
+				item.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+				item.ColumnDefinitions.Add(new ColumnDefinition());
+				item.Children.Add(Line("•", new Thickness(0, 0, 8, 0)));
+				var text = Line(line[2..], default);
+				Grid.SetColumn(text, 1);
+				item.Children.Add(text);
+				MessagePanel.Children.Add(item);
+			}
+			else
+			{
+				MessagePanel.Children.Add(Line(line, margin));
+			}
+		}
+	}
+
+	static TextBlock Line(string text, Thickness margin) => new() { Text = text, TextWrapping = TextWrapping.Wrap, LineHeight = 21, Margin = margin };
+
+	/// <summary>
 	/// 显示带进度条和「取消」按钮的对话框，执行 work 直到完成；点取消或关闭窗口会取消它。
 	/// 返回是否顺利完成；出错时由 error 带回异常，取消时 error 为空。
 	/// </summary>
@@ -63,7 +100,7 @@ internal partial class MessageDialog : Window
 	{
 		var dialog = new MessageDialog { Title = title };
 		dialog.HeaderText.Text = title;
-		dialog.MessageText.Text = message;
+		dialog.SetMessage(message);
 		dialog.ProgressBar.Visibility = Visibility.Visible;
 		using var cancel = new CancellationTokenSource();
 		var button = new Button { Content = "取消", MinWidth = 96, IsCancel = true };
