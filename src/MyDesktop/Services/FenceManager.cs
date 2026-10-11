@@ -159,8 +159,8 @@ internal sealed class FenceManager
 		}
 		StartZOrderCheck();
 		Wallpaper.Changed += RefreshAllAppearance;
+		// 用毛玻璃的分区打开时才开始读壁纸（见 FenceWindow.UpdateBlur）
 		Wallpaper.BlurRadius = Settings.BlurRadius;
-		Wallpaper.Start();
 		NotifyIfUpgraded(firstRun);
 		// 旧版本和安装包写的开机自启 Run 项换成计划任务，不耽误接管桌面
 		_dispatcher.InvokeAsync(AutoStart.MigrateRunValue, DispatcherPriority.Background);
@@ -384,7 +384,7 @@ internal sealed class FenceManager
 		_shutdown = true;
 		_watchdogTimer.Stop();
 		Updater.Stop();
-		Wallpaper.Stop();
+		Wallpaper.Enabled = false;
 		Wallpaper.Changed -= RefreshAllAppearance;
 		_zOrderTimer.Stop();
 		_unliftTimer.Stop();
@@ -1643,7 +1643,13 @@ internal sealed class FenceManager
 		{
 			window.ApplyAppearance();
 		}
+		UpdateWallpaperUsage();
 	}
+
+	/// <summary>
+	/// 有分区用毛玻璃时才让 WallpaperBlur 检查壁纸、生成模糊图；改了背景效果后调用，没有分区用了就停下、放掉模糊图。
+	/// </summary>
+	public void UpdateWallpaperUsage() => Wallpaper.Enabled = _windows.Any(w => w.UsesBlur);
 
 	/// <summary>
 	/// 硬件加速开关：之后创建的窗口按进程设置，已经打开的窗口逐个改，不用重启。

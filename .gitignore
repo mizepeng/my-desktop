@@ -6,4 +6,5 @@ obj/
 *.suo
 publish/
 artifacts/
+*_wpftmp.csproj
 更新视频/

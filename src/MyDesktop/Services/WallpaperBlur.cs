@@ -85,13 +85,31 @@ internal sealed class WallpaperBlur
 		return new Rect((rect.Left - _bounds.Left) * _scale, (rect.Top - _bounds.Top) * _scale, rect.Width * _scale, rect.Height * _scale);
 	}
 
-	public void Start()
+	/// <summary>
+	/// 有分区用毛玻璃时才检查壁纸、生成模糊图（见 FenceManager.UpdateWallpaperUsage）；都用半透明或系统亚克力时什么也不做，也不留着模糊图。
+	/// </summary>
+	public bool Enabled
 	{
-		_checkTimer.Start();
-		Refresh();
+		get => _checkTimer.IsEnabled;
+		set
+		{
+			if (value == _checkTimer.IsEnabled)
+			{
+				return;
+			}
+			if (value)
+			{
+				_checkTimer.Start();
+				Refresh();
+				return;
+			}
+			_checkTimer.Stop();
+			// 放掉模糊图，下次再用时重新读壁纸
+			Image = null;
+			_signature = null;
+			_quickSignature = null;
+		}
 	}
-
-	public void Stop() => _checkTimer.Stop();
 
 	/// <summary>
 	/// 比较注册表里的壁纸设置、系统缓存的当前壁纸和有没有动态壁纸，变了就重新读取。
@@ -111,6 +129,10 @@ internal sealed class WallpaperBlur
 	/// </summary>
 	public async void Refresh()
 	{
+		if (!Enabled)
+		{
+			return;
+		}
 		if (_refreshing)
 		{
 			_pending = true;
@@ -160,7 +182,8 @@ internal sealed class WallpaperBlur
 
 	void SetImage(BitmapSource? image, string signature)
 	{
-		if (signature == _signature)
+		// 读取期间已经没有分区用毛玻璃了
+		if (!Enabled || signature == _signature)
 		{
 			return;
 		}

@@ -1727,8 +1727,13 @@ internal partial class FenceWindow : Window
 	void UpdateBlur()
 	{
 		UpdateAcrylic();
+		// 用毛玻璃时让 WallpaperBlur 开始读壁纸，读好后会再刷新外观
+		if (UsesBlur)
+		{
+			_manager.Wallpaper.Enabled = true;
+		}
 		var image = _manager.Wallpaper.Image;
-		if (BackgroundKind != BackgroundEffect.Blur || image == null)
+		if (!UsesBlur || image == null)
 		{
 			_blurBrush = null;
 			BlurLayer.Background = null;
@@ -1751,6 +1756,8 @@ internal partial class FenceWindow : Window
 	}
 
 	BackgroundEffect BackgroundKind => Model.Background ?? Settings.DefaultBackground;
+
+	public bool UsesBlur => BackgroundKind == BackgroundEffect.Blur;
 
 	bool UsesAcrylic => BackgroundKind == BackgroundEffect.Acrylic;
 
@@ -3351,6 +3358,7 @@ internal partial class FenceWindow : Window
 	{
 		Model.Background = background;
 		ApplyAppearance();
+		_manager.UpdateWallpaperUsage();
 		_manager.SaveSoon();
 	}
 
