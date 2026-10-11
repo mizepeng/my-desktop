@@ -2179,15 +2179,17 @@ internal sealed class FenceManager
 		// 先摆好紧贴桌面的散放图标层，分区再压在它们之上
 		_takeover?.KeepLayersAboveDesktop();
 		var misplaced = _windows.Where(w => w.IsVisible && DesktopHost.GetInsertAfterAboveDesktop(w.Handle) != null).ToList();
-		if (misplaced.Count == 0)
-		{
-			return;
-		}
 		// 每个都插到紧贴底座的位置，按从上到下的次序插，分区之间的上下次序才不变
 		var order = DesktopHost.TopToBottom(misplaced.Select(w => w.Handle));
 		foreach (var window in misplaced.OrderBy(w => order.IndexOf(w.Handle)))
 		{
 			window.PlaceAboveDesktop();
+		}
+		// 正在飞的图标（启动、整理、删除分区的动画）也压回分区之上，看一个就知道整批是不是被盖住了
+		var flights = FlyingIcon.OpenWindows;
+		if (flights.Count > 0 && DesktopHost.GetInsertAfterAboveDesktop(flights[0]) != null)
+		{
+			FlyingIcon.Restack(FlightInsertAfter());
 		}
 	}
 

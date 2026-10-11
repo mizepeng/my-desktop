@@ -68,6 +68,8 @@ internal partial class FenceWindow : Window
 	bool _folderExisted;
 	// 映射分区里进入的子文件夹；为空时显示映射的文件夹本身
 	string? _subFolder;
+	// 上一次点子文件夹路径里的某一级跳过去的时刻（Environment.TickCount64）：紧接着的第二下不算双击标题栏卷起
+	long _crumbClickedAt;
 	bool _allowClose;
 	bool _tempExpanded;
 	// 详细信息视图里名称列至少留的宽度，后三列的宽度
@@ -1429,8 +1431,11 @@ internal partial class FenceWindow : Window
 	{
 		bool vertical = _titleEdge is RollEdge.Left or RollEdge.Right;
 		bool tabbed = TabStrip.ItemsSource != null;
+		// 横放的标题栏在子文件夹里时显示逐级能点的路径，代替整行的标题
+		bool crumbs = _subFolder != null && !tabbed && !vertical;
 		TabStrip.Visibility = !tabbed ? Visibility.Collapsed : show ? Visibility.Visible : Visibility.Hidden;
-		TitleText.Visibility = tabbed || vertical ? Visibility.Collapsed : show ? Visibility.Visible : Visibility.Hidden;
+		TitleText.Visibility = tabbed || vertical || crumbs ? Visibility.Collapsed : show ? Visibility.Visible : Visibility.Hidden;
+		Breadcrumb.Visibility = !crumbs ? Visibility.Collapsed : show ? Visibility.Visible : Visibility.Hidden;
 		VerticalTitleText.Visibility = !tabbed && vertical && show ? Visibility.Visible : Visibility.Collapsed;
 	}
 
@@ -1799,7 +1804,88 @@ internal partial class FenceWindow : Window
 		VerticalTitleText.Text = ToVerticalText(TitleText.Text);
 		VerticalTitleText.ToolTip = TitleText.ToolTip;
 		BackButton.Visibility = _subFolder == null ? Visibility.Collapsed : Visibility.Visible;
+		BuildBreadcrumb();
+		ShowTitleText(TitleEditor.Visibility != Visibility.Visible);
 		UpdateBadges();
+	}
+
+	/// <summary>
+	/// 子文件夹路径逐级生成：除了当前所在的最后一级，每一级鼠标移上去有底色，单击回到那一级（见 TitleBar_MouseLeftButtonDown）。
+	/// 第一个子元素是放不下时代替前面几级的省略号（见 BreadcrumbPanel）。
+	/// </summary>
+	void BuildBreadcrumb()
+	{
+		Breadcrumb.Children.Clear();
+		if (_subFolder == null)
+		{
+			return;
+		}
+		Breadcrumb.Children.Add(CrumbText("… › "));
+		var levels = new List<(string Name, string Path)> { (Model.Title, Model.FolderPath) };
+		var path = Model.FolderPath;
+		foreach (var part in Path.GetRelativePath(Model.FolderPath, _subFolder).Split(Path.DirectorySeparatorChar))
+		{
+			path = Path.Combine(path, part);
+			levels.Add((part, path));
+		}
+		for (int i = 0; i < levels.Count; i++)
+		{
+			if (i > 0)
+			{
+				Breadcrumb.Children.Add(CrumbText("›"));
+			}
+			bool current = i == levels.Count - 1;
+			var segment = new Border
+			{
+				Padding = new Thickness(5, 1, 5, 1),
+				CornerRadius = new CornerRadius(4),
+				Background = Brushes.Transparent,
+				Child = CrumbText(levels[i].Name),
+				ToolTip = levels[i].Path,
+			};
+			if (!current)
+			{
+				segment.Tag = levels[i].Path;
+				segment.Cursor = Cursors.Hand;
+				segment.MouseEnter += (_, _) => segment.SetResourceReference(Border.BackgroundProperty, "FenceHover");
+				segment.MouseLeave += (_, _) => segment.Background = Brushes.Transparent;
+			}
+			Breadcrumb.Children.Add(segment);
+		}
+	}
+
+	/// <summary>
+	/// 路径里的一段文字：和标题一样的字号、粗细、颜色和阴影，放不下时末尾省略。
+	/// </summary>
+	static UIElement CrumbText(string text)
+	{
+		var block = new TextBlock
+		{
+			Text = text,
+			FontWeight = FontWeights.SemiBold,
+			TextTrimming = TextTrimming.CharacterEllipsis,
+			VerticalAlignment = VerticalAlignment.Center,
+		};
+		block.SetResourceReference(TextBlock.FontSizeProperty, "TitleFontSize");
+		block.SetResourceReference(TextBlock.ForegroundProperty, "FenceForeground");
+		var shadow = new TextShadow { Child = block };
+		shadow.SetResourceReference(TextShadow.ShadowProperty, "TextShadow");
+		return shadow;
+	}
+
+	/// <summary>
+	/// 点中的是子文件夹路径里能点的某一级时返回它的路径。
+	/// </summary>
+	string? CrumbAt(object source)
+	{
+		for (var element = source as DependencyObject; element != null && element != Breadcrumb; element = VisualTreeHelper.GetParent(element))
+		{
+			if (element is Border { Tag: string path })
+			{
+				return path;
+			}
+		}
+		return null;
 	}
 
 	/// <summary>
@@ -2672,7 +2758,11 @@ internal partial class FenceWindow : Window
 		CommitAllRenames();
 		if (e.ClickCount == 2)
 		{
-			ToggleRollUp();
+			// 刚点路径里的某一级跳过去，紧接着的这一下不当成双击卷起
+			if (Environment.TickCount64 - _crumbClickedAt > GetDoubleClickTime())
+			{
+				ToggleRollUp();
+			}
 			e.Handled = true;
 			return;
 		}
@@ -2704,6 +2794,12 @@ internal partial class FenceWindow : Window
 		if (tab != null && tab.Window != this)
 		{
 			_ = _manager.ActivateTabAsync(tab.Window, true);
+		}
+		// 没拖动、只是点了路径里的某一级：回到那一级
+		if (CrumbAt(e.OriginalSource) is string folder)
+		{
+			_crumbClickedAt = Environment.TickCount64;
+			NavigateTo(folder);
 		}
 	}
 

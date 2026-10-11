@@ -64,6 +64,8 @@ internal sealed class FlyingIcon
 	static IntPtr _frameBitmap;
 	static IntPtr _frameBits;
 	static int _openCount;
+	// 还开着的飞行图标窗口：桌面被提到最前时要一起压回分区之上（只在界面线程上读写）
+	static readonly List<IntPtr> _openWindows = [];
 
 	readonly IntPtr _hwnd;
 	readonly IntPtr _insertAfter;
@@ -100,6 +102,24 @@ internal sealed class FlyingIcon
 			throw new InvalidOperationException($"创建飞行图标窗口失败（错误码 {Marshal.GetLastWin32Error()}）");
 		}
 		_openCount++;
+		_openWindows.Add(_hwnd);
+	}
+
+	/// <summary>
+	/// 还开着的飞行图标窗口。
+	/// </summary>
+	public static IReadOnlyList<IntPtr> OpenWindows => _openWindows;
+
+	/// <summary>
+	/// 把所有飞行图标重新排到 insertAfter 之后（见 FenceManager.FlightInsertAfter）：它们只在起飞时定一次层级，
+	/// 桌面被提到最前（刚装完点「完成」、Win+D）后会被盖住，分区放回桌面之上时它们也要跟着回来。
+	/// </summary>
+	public static void Restack(IntPtr insertAfter)
+	{
+		foreach (var hwnd in _openWindows)
+		{
+			SetWindowPos(hwnd, insertAfter, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+		}
 	}
 
 	/// <summary>
@@ -156,6 +176,7 @@ internal sealed class FlyingIcon
 			return;
 		}
 		_closed = true;
+		_openWindows.Remove(_hwnd);
 		DestroyWindow(_hwnd);
 		if (--_openCount == 0)
 		{

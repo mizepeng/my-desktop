@@ -313,6 +313,8 @@
 									TextTrimming="CharacterEllipsis"
 									Foreground="{DynamicResource FenceForeground}" />
 						</local:TextShadow>
+						<!-- 映射分区进入子文件夹后的标题：每一级都能点，点了回到那一级（内容在代码里按路径生成）；左边抵消每一级的内边距，文字和标题对齐 -->
+						<local:BreadcrumbPanel x:Name="Breadcrumb" Grid.Column="1" Margin="-5,0,0,0" VerticalAlignment="Center" Visibility="Collapsed" />
 						<!-- 左右收起时的竖排标题：标题栏整体旋转 90°，这里再转回来，每个字一行、正立 -->
 						<local:TextShadow Grid.Column="1" Shadow="{DynamicResource TextShadow}">
 							<TextBlock x:Name="VerticalTitleText"
