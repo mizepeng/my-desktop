@@ -65,7 +65,7 @@ internal partial class FenceWindow : Window
 	ImageBrush? _blurBrush;
 	// 拖动或调整大小期间毛玻璃暂时淡出
 	bool _blurHidden;
-	// 毛玻璃改用系统亚克力时垫在下面的窗口
+	// 背景效果是系统亚克力时垫在下面的窗口
 	AcrylicBackdrop? _backdrop;
 	bool _folderExisted;
 	// 映射分区里进入的子文件夹；为空时显示映射的文件夹本身

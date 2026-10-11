@@ -666,7 +666,7 @@ internal partial class SettingsWindow : Window
 
 	void ResetAppearance_Click(object sender, RoutedEventArgs e)
 	{
-		if (MessageDialog.Show("重置外观", "所有分区单独设置的颜色、不透明度、毛玻璃和图标大小都将清除，改用默认外观。", "全部重置", "取消") == 0)
+		if (MessageDialog.Show("重置外观", "所有分区单独设置的颜色、不透明度、背景效果、边框和图标大小都将清除，改用默认外观。", "全部重置", "取消") == 0)
 		{
 			_manager.ResetAllAppearance();
 		}
@@ -689,7 +689,6 @@ internal partial class SettingsWindow : Window
 			case "常规":
 				_manager.SetAutoStart(true);
 				Settings.SearchHotkey = defaults.SearchHotkey;
-				Settings.FlightAnimation = defaults.FlightAnimation;
 				if (Settings.HardwareAcceleration != defaults.HardwareAcceleration)
 				{
 					Settings.HardwareAcceleration = defaults.HardwareAcceleration;
@@ -746,6 +745,7 @@ internal partial class SettingsWindow : Window
 				Settings.ShowIconNames = defaults.ShowIconNames;
 				Settings.TextShadow = defaults.TextShadow;
 				Settings.ShowShortcutArrows = defaults.ShowShortcutArrows;
+				Settings.FlightAnimation = defaults.FlightAnimation;
 				_manager.ApplyFonts();
 				_manager.RefreshAllAppearance();
 				_manager.RefreshAllViewMode();
