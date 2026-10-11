@@ -45,6 +45,11 @@ internal sealed class DesktopTakeover : IDisposable
 	/// </summary>
 	static readonly TimeSpan PlacementWait = TimeSpan.FromSeconds(15);
 
+	/// <summary>
+	/// 消失后这么久之内又出现的项目、这么久之内改名得到的项目，都不算新出现的文件。
+	/// </summary>
+	static readonly TimeSpan ReappearWindow = TimeSpan.FromSeconds(30);
+
 	readonly FenceManager _manager;
 	readonly Dispatcher _dispatcher;
 	readonly List<DesktopLayerWindow> _layers = [];
@@ -81,6 +86,12 @@ internal sealed class DesktopTakeover : IDisposable
 	readonly HashSet<string> _arriving = new(StringComparer.OrdinalIgnoreCase);
 	// 桌面空白处框选时的选框
 	DrawFrameWindow? _marquee;
+	// 见过的桌面项目，用来认出新出现的文件；为 null 时下一次读到的是全量（接管、资源管理器重启），不算新文件
+	HashSet<string>? _seenKeys;
+	// 刚消失的项目和消失的时刻：不久又出现的（替换文件、更新程序替换快捷方式）不算新文件
+	readonly Dictionary<string, DateTime> _goneKeys = new(StringComparer.OrdinalIgnoreCase);
+	// 刚改名得到的项目，改名不算新文件
+	readonly Dictionary<string, DateTime> _renamedKeys = new(StringComparer.OrdinalIgnoreCase);
 
 	public DesktopTakeover(FenceManager manager)
 	{
@@ -98,6 +109,7 @@ internal sealed class DesktopTakeover : IDisposable
 		Items = new DesktopItems(_dispatcher);
 		Items.Changed += OnItemsChanged;
 		Items.Renamed += _manager.OnItemRenamed;
+		Items.Renamed += (_, newPath) => _renamedKeys[newPath] = DateTime.UtcNow;
 		DesktopDrag.CurrentChanged += OnDragChanged;
 		WatchAdvancedSettings();
 		HookExplorer();
@@ -263,10 +275,12 @@ internal sealed class DesktopTakeover : IDisposable
 		{
 			Activate();
 		}
+		var fresh = TakeNewKeys();
 		_manager.OnDesktopItemsChanged();
 		Relayout();
 		TryPendingRename();
 		PlacePending();
+		MoveOutFromUnderFences(fresh);
 	}
 
 	void Activate()
@@ -310,6 +324,8 @@ internal sealed class DesktopTakeover : IDisposable
 			GetWindowThreadProcessId(desktop, out uint process);
 			if (process != _explorerProcess)
 			{
+				// 资源管理器重启后重新读到的是全量，不算新文件
+				_seenKeys = null;
 				HookExplorer();
 				Items.RefreshSoon();
 			}
@@ -784,6 +800,118 @@ internal sealed class DesktopTakeover : IDisposable
 			result.Add((entry, point));
 		}
 		return result;
+	}
+
+	/// <summary>
+	/// 和上一次读到的桌面视图比，新出现的项目。第一次读到（接管、资源管理器重启后）是全量，不算；
+	/// 消失后不久又出现的、刚改名得到的也不算。
+	/// </summary>
+	List<string> TakeNewKeys()
+	{
+		if (Items.Snapshot is not DesktopSnapshot snapshot)
+		{
+			return [];
+		}
+		var current = snapshot.Items.Select(e => e.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+		var seen = _seenKeys;
+		_seenKeys = current;
+		var now = DateTime.UtcNow;
+		foreach (var stale in _goneKeys.Where(p => now - p.Value > ReappearWindow).Select(p => p.Key).ToList())
+		{
+			_goneKeys.Remove(stale);
+		}
+		foreach (var stale in _renamedKeys.Where(p => now - p.Value > ReappearWindow).Select(p => p.Key).ToList())
+		{
+			_renamedKeys.Remove(stale);
+		}
+		if (seen == null)
+		{
+			return [];
+		}
+		foreach (var key in seen.Where(k => !current.Contains(k)))
+		{
+			_goneKeys[key] = now;
+		}
+		var fresh = current.Where(k => !seen.Contains(k) && !_goneKeys.ContainsKey(k) && !_renamedKeys.ContainsKey(k)).ToList();
+		foreach (var key in current)
+		{
+			_goneKeys.Remove(key);
+		}
+		return fresh;
+	}
+
+	/// <summary>
+	/// 关掉自动排列时，资源管理器不知道分区，会把新文件放进分区盖住的空格，图标被挡在分区后面（issue #7）。
+	/// 新出现的散放图标落在分区底下时，挪到同一个显示器上最近的空格并写回资源管理器；用户自己摆好的图标不动。
+	/// “挡住”的判断和自动排列一样：分区边缘只压到格子一点点不算。
+	/// </summary>
+	void MoveOutFromUnderFences(List<string> fresh)
+	{
+		if (fresh.Count == 0 || !_active || Items.Snapshot is not DesktopSnapshot snapshot || snapshot.AutoArrange)
+		{
+			return;
+		}
+		var spacing = snapshot.Spacing;
+		if (spacing.X <= 0 || spacing.Y <= 0)
+		{
+			return;
+		}
+		var fenced = _manager.FencedKeys();
+		// 拖到桌面的文件要摆到松手的位置，不归这里管
+		var pending = _pendingPlacement?.Keys ?? [];
+		var candidates = fresh.Where(k => !fenced.Contains(k) && !pending.Contains(k, StringComparer.OrdinalIgnoreCase))
+				.ToHashSet(StringComparer.OrdinalIgnoreCase);
+		if (candidates.Count == 0)
+		{
+			return;
+		}
+		var blocked = _manager.FenceLayoutBounds();
+		int insetX = spacing.X / 8;
+		int insetY = spacing.Y / 8;
+		RECT Inner(POINT c) => new(c.X + insetX, c.Y + insetY, c.X + spacing.X - insetX, c.Y + spacing.Y - insetY);
+		bool Covered(POINT c) => blocked.Any(b => b.IntersectsWith(Inner(c)));
+		var occupied = snapshot.Items.Where(e => !fenced.Contains(e.Key) && !candidates.Contains(e.Key))
+				.Select(e => Inner(ToCell(snapshot, e.Position))).ToList();
+		bool Free(POINT c) => !Covered(c) && !occupied.Any(o => o.IntersectsWith(Inner(c)));
+		var keys = new List<string>();
+		var points = new List<POINT>();
+		foreach (var entry in snapshot.Items.Where(e => candidates.Contains(e.Key)))
+		{
+			var cell = ToCell(snapshot, entry.Position);
+			if (!Covered(cell))
+			{
+				occupied.Add(Inner(cell));
+				continue;
+			}
+			// 以原来的格子为基准按间距找格子，和资源管理器的网格对得上；只在它所在显示器的工作区里找
+			var (work, _) = GetMonitorWorkArea(MonitorFromPoint(cell, MONITOR_DEFAULTTONEAREST));
+			POINT? best = null;
+			long bestDistance = long.MaxValue;
+			for (int x = cell.X - (cell.X - work.Left) / spacing.X * spacing.X; x + spacing.X <= work.Right; x += spacing.X)
+			{
+				for (int y = cell.Y - (cell.Y - work.Top) / spacing.Y * spacing.Y; y + spacing.Y <= work.Bottom; y += spacing.Y)
+				{
+					long distance = (long)(x - cell.X) * (x - cell.X) + (long)(y - cell.Y) * (y - cell.Y);
+					var point = new POINT(x, y);
+					if (distance < bestDistance && Free(point))
+					{
+						best = point;
+						bestDistance = distance;
+					}
+				}
+			}
+			if (best is POINT free)
+			{
+				keys.Add(entry.Key);
+				points.Add(ToPosition(snapshot, free));
+				occupied.Add(Inner(free));
+			}
+		}
+		if (keys.Count > 0)
+		{
+			Log.Info($"新出现的 {keys.Count} 个桌面图标落在分区底下，挪到旁边的空格");
+			Items.Move(keys, points);
+		}
 	}
 
 	/// <summary>
