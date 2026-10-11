@@ -570,6 +570,15 @@ internal sealed class ShellItemSet : IDisposable
 		return result;
 	}
 
+	/// <summary>
+	/// 同上，但不抛异常、把失败码交给调用方判断：项目不提供这个接口是常态（如普通文件没有放置目标），不该当成错误。
+	/// </summary>
+	public bool TryGetUIObject(IntPtr hwnd, Guid iid, out IntPtr result, out int hr)
+	{
+		hr = _parent.GetUIObjectOf(hwnd, (uint)_childPidls.Length, _childPidls, ref iid, IntPtr.Zero, out result);
+		return hr == 0;
+	}
+
 	public void Dispose()
 	{
 		Marshal.ReleaseComObject(_parent);

@@ -1191,9 +1191,16 @@ internal sealed class FenceManager
 	public void RefreshDesktopSoon() => _takeover?.Items.RefreshSoon();
 
 	/// <summary>
-	/// 散放图标排布时要避开的分区范围。
+	/// 散放图标排布时要避开的分区范围。分区隐藏时不占位；合并成标签页的只有当前标签看得见，其余不算。
 	/// </summary>
-	public List<RECT> FenceLayoutBounds() => _windows.Select(w => w.GetLayoutBounds()).ToList();
+	public List<RECT> FenceLayoutBounds()
+	{
+		if (_fencesHidden)
+		{
+			return [];
+		}
+		return _windows.Where(w => !IsHiddenTab(w)).Select(w => w.GetLayoutBounds()).ToList();
+	}
 
 	/// <summary>
 	/// 分区移动、缩放或卷起后，散放图标重新避让。
@@ -1318,6 +1325,8 @@ internal sealed class FenceManager
 					window.FadeIn();
 				}
 			}
+			// 分区不再占位（或重新占位），落在分区底下的散放图标要回到或让出格子
+			_takeover?.RelayoutSoon();
 		}
 		// 记下来，下次启动「和上次退出时一样」时恢复
 		HideTarget? last = (iconsHidden, fencesHidden) switch
@@ -1637,7 +1646,7 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 清除各分区单独设置的颜色、不透明度、毛玻璃、边框和图标大小，统一跟随默认外观。
+	/// 清除各分区单独设置的颜色、不透明度、毛玻璃、边框、标题栏和图标大小，统一跟随默认外观。
 	/// </summary>
 	public void ResetAllAppearance()
 	{
@@ -1647,6 +1656,9 @@ internal sealed class FenceManager
 			model.Opacity = null;
 			model.Blur = null;
 			model.Border = null;
+			model.TitleBarColor = null;
+			model.TitleBarOpacity = null;
+			model.TitleBarTone = null;
 			model.IconSize = null;
 		}
 		RefreshAllAppearance();

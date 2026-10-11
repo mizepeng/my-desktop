@@ -290,7 +290,7 @@
 				<!-- 外观 -->
 				<StackPanel x:Name="AppearancePage" Visibility="Collapsed">
 					<TextBlock Style="{StaticResource PageTitle}" Text="外观" />
-					<TextBlock Style="{StaticResource Hint}" Text="以下是所有分区的默认外观。单个分区可以在它的右键菜单里单独设置颜色、不透明度、毛玻璃、边框和图标大小。" />
+					<TextBlock Style="{StaticResource Hint}" Text="以下是所有分区的默认外观。单个分区可以在它的右键菜单里单独设置颜色、不透明度、毛玻璃、边框、标题栏和图标大小。" />
 
 					<TextBlock Style="{StaticResource SectionTitle}" Text="背景颜色" />
 					<Border Style="{StaticResource Card}">
@@ -323,6 +323,32 @@
 						<CheckBox x:Name="BorderBox" Click="Setting_Changed">
 							<TextBlock Text="显示分区边框" />
 						</CheckBox>
+					</Border>
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="标题栏和标签条底色" />
+					<Border Style="{StaticResource Card}">
+						<StackPanel>
+							<WrapPanel x:Name="TitleBarColorPanel" />
+							<StackPanel Margin="0,6,0,0" Orientation="Horizontal">
+								<TextBlock VerticalAlignment="Center" Text="自定义" />
+								<Border x:Name="TitleBarColorPreview" Width="28" Height="28" Margin="12,0,8,0" BorderBrush="#40808080" BorderThickness="1" CornerRadius="4" />
+								<TextBox x:Name="TitleBarColorBox" Width="120" VerticalContentAlignment="Center" KeyDown="TitleBarColorBox_KeyDown" LostFocus="TitleBarColorBox_LostFocus" />
+							</StackPanel>
+						</StackPanel>
+					</Border>
+
+					<TextBlock Style="{StaticResource SectionTitle}" Text="标题栏和标签条不透明度" />
+					<Border Style="{StaticResource Card}">
+						<DockPanel>
+							<TextBlock x:Name="TitleBarOpacityText" Width="52" VerticalAlignment="Center" DockPanel.Dock="Right" TextAlignment="Right" />
+							<Slider x:Name="TitleBarOpacitySlider" IsSnapToTickEnabled="True" Maximum="100" Minimum="0" TickFrequency="5" ValueChanged="TitleBarOpacitySlider_ValueChanged" />
+						</DockPanel>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<StackPanel>
+							<TextBlock Style="{StaticResource Hint}" Text="选「自动」时按标题栏合成后的明暗挑文字深浅；标题栏压在模糊壁纸上时量不准，可以手动改成浅色或深色文字" />
+							<ComboBox x:Name="TitleBarToneBox" Width="120" Margin="0,6,0,0" HorizontalAlignment="Left" SelectionChanged="TitleBarToneBox_SelectionChanged" />
+						</StackPanel>
 					</Border>
 
 					<TextBlock Style="{StaticResource SectionTitle}" Text="圆角大小" />
@@ -399,7 +425,7 @@
 							<Button VerticalAlignment="Center" Content="全部重置" DockPanel.Dock="Right" Click="ResetAppearance_Click" />
 							<StackPanel Margin="0,0,12,0">
 								<TextBlock Text="所有分区改用默认外观" />
-								<TextBlock Style="{StaticResource Hint}" Text="清除各分区单独设置的颜色、不透明度、毛玻璃、边框和图标大小" />
+								<TextBlock Style="{StaticResource Hint}" Text="清除各分区单独设置的颜色、不透明度、毛玻璃、边框、标题栏和图标大小" />
 							</StackPanel>
 						</DockPanel>
 					</Border>

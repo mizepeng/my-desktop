@@ -61,6 +61,9 @@ internal partial class FenceWindow : Window
 	FileSystemWatcher? _watcher;
 	ScrollViewer? _scroller;
 	Brush? _frameBorder;
+	// 描边要按标题栏和背景各自的颜色切段，记下这两块实际用的颜色和背景偏不偏亮
+	Color _bodyColor, _titleColor;
+	bool _bodyLight;
 	// 毛玻璃背景的画刷，开着毛玻璃且取到了壁纸时才有
 	ImageBrush? _blurBrush;
 	// 拖动或调整大小期间毛玻璃暂时淡出
@@ -141,6 +144,8 @@ internal partial class FenceWindow : Window
 		_manager = manager;
 		Model = model;
 		InitializeComponent();
+		// 描边按标题栏占整块的比例切段，窗口大小和卷起状态变了都要重算
+		Frame.SizeChanged += (_, _) => UpdateFrameBorder();
 		ItemsList.ItemsSource = _items;
 		_clickRename = new ClickToRename(BeginRename, item => IsActive && ItemsList.SelectedItems.Count == 1 && ItemsList.SelectedItem == item);
 		// 按在空白处时框选的处理会把事件标记为已处理，仍要收到它才能取消别处的选择
@@ -968,6 +973,7 @@ internal partial class FenceWindow : Window
 			{
 				Model.RollEdge = edge;
 				ApplyBounds();
+				UpdateFrameBorder();
 			}
 		}
 		// 用户调整过的位置和大小属于当前所在显示器的缩放比例
@@ -1020,6 +1026,7 @@ internal partial class FenceWindow : Window
 		{
 			Model.RollEdge = edge;
 			ApplyBounds();
+			UpdateFrameBorder();
 		}
 	}
 
@@ -1348,6 +1355,7 @@ internal partial class FenceWindow : Window
 		Model.RollDirection = direction;
 		Model.RollEdge = direction ?? AutoRollEdge(ExpandedRect);
 		ApplyBounds();
+		UpdateFrameBorder();
 		_manager.SyncGroup(this);
 		_manager.OnFenceLayoutChanged();
 		_manager.SaveSoon();
@@ -1619,21 +1627,85 @@ internal partial class FenceWindow : Window
 		bool light = Appearance.Luminance(baseColor) > 0.6 && opacity >= 0.35;
 		// 设成 0% 时也至少留 1/255：分层窗口完全透明的像素不接收鼠标，分区空白处会点穿到桌面，1/255 看上去和全透明一样
 		byte alpha = (byte)Math.Max(1, Math.Round(opacity * 255));
-		Frame.Background = Frozen(Color.FromArgb(alpha, baseColor.R, baseColor.G, baseColor.B));
-		// 不显示边框时边框涂成和背景一样的颜色（背景只填边框里面，同色时那一圈和里面一模一样，实测），粗细不变：
-		// 设成透明的话相邻分区之间会露出一道缝；卷起后那一条的厚度等按边框计算的尺寸也都不用改。拖放时的高亮边框照常显示
-		_frameBorder = !(Model.Border ?? Settings.DefaultBorder) ? Frame.Background
-				: Frozen(light ? Color.FromArgb(0x30, 0, 0, 0) : Color.FromArgb(0x38, 0xFF, 0xFF, 0xFF));
-		Frame.BorderBrush = _frameBorder;
+		_bodyColor = Color.FromArgb(alpha, baseColor.R, baseColor.G, baseColor.B);
+		_bodyLight = light;
+		Frame.Background = Frozen(_bodyColor);
 		Frame.CornerRadius = new CornerRadius(Settings.CornerRadius);
 		UpdateBlur();
-		TitleBar.Background = Frozen(light ? Color.FromArgb(0x12, 0, 0, 0) : Color.FromArgb(0x30, 0, 0, 0));
+		ApplyTitleBar(baseColor, alpha);
+		UpdateFrameBorder();
 		Resources["FenceForeground"] = Frozen(light ? Color.FromRgb(0x1F, 0x1F, 0x1F) : Colors.White);
 		Resources["FenceHover"] = Frozen(light ? Color.FromArgb(0x14, 0, 0, 0) : Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF));
 		Resources["FenceSelected"] = Frozen(light ? Color.FromArgb(0x1E, 0, 0, 0) : Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF));
 		Resources["FenceSelectedBorder"] = Frozen(light ? Color.FromArgb(0x40, 0, 0, 0) : Color.FromArgb(0x59, 0xFF, 0xFF, 0xFF));
 		Resources["TextShadow"] = Settings.TextShadow && !light ? TextShadowEffect : null;
 		UpdateRollVisuals();
+	}
+
+	/// <summary>
+	/// 标题栏和标签条自己的底色与文字：颜色、不透明度单独设置，叠在分区背景上面，不跟背景色联动。
+	/// 文字深浅选「自动」时按合成亮度判断——标题栏色叠在分区底色上，分区底色再叠在系统深/浅色主题的代表色上
+	/// （毛玻璃或背景调透明时露出的是壁纸，量不出亮度，只能拿系统主题当一个中间值）。
+	/// 和背景一样，调到 0% 也留 1/255，否则标题栏和标签点不动。
+	/// </summary>
+	void ApplyTitleBar(Color baseColor, byte bodyAlpha)
+	{
+		var color = Appearance.ParseColor(Model.TitleBarColor ?? Settings.DefaultTitleBarColor, Colors.Black);
+		double opacity = Math.Clamp(Model.TitleBarOpacity ?? Settings.DefaultTitleBarOpacity, 0, 1);
+		byte alpha = (byte)Math.Max(1, Math.Round(opacity * 255));
+		_titleColor = Color.FromArgb(alpha, color.R, color.G, color.B);
+		TitleBar.Background = Frozen(_titleColor);
+		var theme = SystemTheme.IsDark() ? Color.FromRgb(0x1E, 0x1E, 0x1E) : Color.FromRgb(0xE8, 0xE8, 0xE8);
+		var under = Appearance.Blend(baseColor, bodyAlpha / 255.0, theme);
+		bool darkText = (Model.TitleBarTone ?? Settings.DefaultTitleBarTone) switch
+		{
+			TextTone.Auto => Appearance.Luminance(Appearance.Blend(color, alpha / 255.0, under)) > 0.6,
+			TextTone.Light => false,
+			TextTone.Dark => true,
+		};
+		Resources["TitleForeground"] = Frozen(darkText ? Color.FromRgb(0x1F, 0x1F, 0x1F) : Colors.White);
+		Resources["TitleHover"] = Frozen(darkText ? Color.FromArgb(0x14, 0, 0, 0) : Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF));
+		Resources["TitleSelected"] = Frozen(darkText ? Color.FromArgb(0x1E, 0, 0, 0) : Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF));
+		Resources["TitleTextShadow"] = Settings.TextShadow && !darkText ? TextShadowEffect : null;
+	}
+
+	/// <summary>
+	/// 重算描边。显示边框时是一圈半透明的白/黑；不显示边框时涂成和底色一样，看不出接缝
+	/// （设成透明的话相邻分区之间会露出一道缝；粗细不变，卷起后那一条的厚度等按边框算的尺寸也都不用改）。
+	/// 标题栏单独设了颜色以后，整圈只涂背景色会在标题栏那一侧露出一圈背景色的边，
+	/// 所以沿标题栏所在的方向、在标题栏和内容的交界处硬切一刀：那一段用标题栏的颜色
+	/// （标题栏和描边叠在同一层背景上，颜色完全一致），其余用背景色。拖放时的高亮边框照常显示。
+	/// </summary>
+	void UpdateFrameBorder()
+	{
+		if (Model.Border ?? Settings.DefaultBorder)
+		{
+			_frameBorder = Frozen(_bodyLight ? Color.FromArgb(0x30, 0, 0, 0) : Color.FromArgb(0x38, 0xFF, 0xFF, 0xFF));
+		}
+		else
+		{
+			// 标题栏在右边或下边时，渐变要从那一侧起算，偏移 0 才落在标题栏外面的边上
+			var (from, to) = Model.RollEdge switch
+			{
+				RollEdge.Top => (new Point(0, 0), new Point(0, 1)),
+				RollEdge.Bottom => (new Point(0, 1), new Point(0, 0)),
+				RollEdge.Left => (new Point(0, 0), new Point(1, 0)),
+				RollEdge.Right => (new Point(1, 0), new Point(0, 0)),
+			};
+			bool vertical = Model.RollEdge is RollEdge.Top or RollEdge.Bottom;
+			// 卷起时窗口只剩标题栏那一条，按窗口实际大小算，整圈才都是标题栏的颜色
+			double rendered = vertical ? Frame.ActualHeight : Frame.ActualWidth;
+			double total = rendered > 0 ? rendered : (vertical ? Model.Height : Model.Width) / ScaleFactor;
+			double at = Math.Clamp((TitleBarDip + FrameBorderDip) / Math.Max(1, total), 0.02, 0.98);
+			var brush = new LinearGradientBrush { StartPoint = from, EndPoint = to };
+			brush.GradientStops.Add(new GradientStop(_titleColor, 0));
+			brush.GradientStops.Add(new GradientStop(_titleColor, at));
+			brush.GradientStops.Add(new GradientStop(_bodyColor, at));
+			brush.GradientStops.Add(new GradientStop(_bodyColor, 1));
+			brush.Freeze();
+			_frameBorder = brush;
+		}
+		Frame.BorderBrush = _frameBorder;
 	}
 
 	/// <summary>
@@ -1867,9 +1939,9 @@ internal partial class FenceWindow : Window
 			VerticalAlignment = VerticalAlignment.Center,
 		};
 		block.SetResourceReference(TextBlock.FontSizeProperty, "TitleFontSize");
-		block.SetResourceReference(TextBlock.ForegroundProperty, "FenceForeground");
+		block.SetResourceReference(TextBlock.ForegroundProperty, "TitleForeground");
 		var shadow = new TextShadow { Child = block };
-		shadow.SetResourceReference(TextShadow.ShadowProperty, "TextShadow");
+		shadow.SetResourceReference(TextShadow.ShadowProperty, "TitleTextShadow");
 		return shadow;
 	}
 
@@ -3060,6 +3132,39 @@ internal partial class FenceWindow : Window
 				sub.AddSeparator();
 				sub.Add("跟随默认外观", () => SetBorder(null), isChecked: Model.Border == null, radio: true);
 			});
+			menu.AddSubMenu("标题栏和标签条", sub =>
+			{
+				sub.AddSubMenu("底色", s =>
+				{
+					foreach (var (name, hex) in Appearance.ColorPresets)
+					{
+						s.Add(name, () => SetTitleBarColor(hex), isChecked: string.Equals(Model.TitleBarColor, hex, StringComparison.OrdinalIgnoreCase),
+								radio: true, bitmap: s.ColorSwatch(Appearance.ParseColor(hex, Colors.Black)));
+					}
+					s.AddSeparator();
+					s.Add("自定义颜色…", () => PickCustomColor(Model.TitleBarColor ?? Settings.DefaultTitleBarColor, SetTitleBarColor));
+					s.Add("跟随默认外观", () => SetTitleBarColor(null), isChecked: Model.TitleBarColor == null, radio: true);
+				});
+				sub.AddSubMenu("不透明度", s =>
+				{
+					foreach (var percent in Appearance.OpacityPresets)
+					{
+						s.Add($"{percent}%", () => SetTitleBarOpacity(percent / 100.0),
+								isChecked: Model.TitleBarOpacity is double value && Math.Abs(value * 100 - percent) < 0.5, radio: true);
+					}
+					s.AddSeparator();
+					s.Add("跟随默认外观", () => SetTitleBarOpacity(null), isChecked: Model.TitleBarOpacity == null, radio: true);
+				});
+				sub.AddSubMenu("文字", s =>
+				{
+					foreach (var tone in Enum.GetValues<TextTone>())
+					{
+						s.Add(tone.DisplayName(), () => SetTitleBarTone(tone), isChecked: Model.TitleBarTone == tone, radio: true);
+					}
+					s.AddSeparator();
+					s.Add("跟随默认外观", () => SetTitleBarTone(null), isChecked: Model.TitleBarTone == null, radio: true);
+				});
+			});
 			menu.AddSeparator();
 			menu.Add("重命名分区", BeginTitleEdit);
 			var tabs = _manager.TabsOf(this);
@@ -3203,6 +3308,27 @@ internal partial class FenceWindow : Window
 		_manager.SaveSoon();
 	}
 
+	void SetTitleBarColor(string? hex)
+	{
+		Model.TitleBarColor = hex;
+		ApplyAppearance();
+		_manager.SaveSoon();
+	}
+
+	void SetTitleBarOpacity(double? opacity)
+	{
+		Model.TitleBarOpacity = opacity;
+		ApplyAppearance();
+		_manager.SaveSoon();
+	}
+
+	void SetTitleBarTone(TextTone? tone)
+	{
+		Model.TitleBarTone = tone;
+		ApplyAppearance();
+		_manager.SaveSoon();
+	}
+
 	void ToggleLock()
 	{
 		Model.Locked = !Model.Locked;
@@ -3211,9 +3337,14 @@ internal partial class FenceWindow : Window
 		_manager.SaveSoon();
 	}
 
-	void PickCustomColor()
+	void PickCustomColor() => PickCustomColor(Model.Color ?? Settings.DefaultColor, SetColor);
+
+	/// <summary>
+	/// 系统颜色对话框，选好的颜色交给 apply 写到对应的设置项上（背景色或标题栏底色）。
+	/// </summary>
+	void PickCustomColor(string? currentHex, Action<string?> apply)
 	{
-		var current = Appearance.ParseColor(Model.Color ?? Settings.DefaultColor, Colors.Black);
+		var current = Appearance.ParseColor(currentHex, Colors.Black);
 		var buffer = Marshal.AllocHGlobal(CustomColors.Length * sizeof(int));
 		try
 		{
@@ -3232,7 +3363,7 @@ internal partial class FenceWindow : Window
 			}
 			Marshal.Copy(buffer, CustomColors, 0, CustomColors.Length);
 			var picked = Color.FromRgb((byte)(choose.rgbResult & 0xFF), (byte)((choose.rgbResult >> 8) & 0xFF), (byte)((choose.rgbResult >> 16) & 0xFF));
-			SetColor(Appearance.ToHex(picked));
+			apply(Appearance.ToHex(picked));
 		}
 		finally
 		{

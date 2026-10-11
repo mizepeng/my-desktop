@@ -196,6 +196,11 @@ internal sealed class ItemDropForwarder
 		}
 	}
 
+	// 项目不提供放置目标时资源管理器的说法：普通文件（如 .md）常常报这几个码，资源管理器同样不接受往它上面放，不是出错
+	const int E_NOTIMPL = unchecked((int)0x80004001);
+	const int E_NOINTERFACE = unchecked((int)0x80004002);
+	const int DV_E_FORMATETC = unchecked((int)0x80040064);
+
 	static IOleDropTarget? CreateTarget(IntPtr hwnd, FenceItem item, bool desktop)
 	{
 		try
@@ -205,7 +210,14 @@ internal sealed class ItemDropForwarder
 			{
 				return null;
 			}
-			var ptr = set.GetUIObject(hwnd, typeof(IOleDropTarget).GUID);
+			if (!set.TryGetUIObject(hwnd, typeof(IOleDropTarget).GUID, out var ptr, out int hr))
+			{
+				if (hr is not (E_NOTIMPL or E_NOINTERFACE or DV_E_FORMATETC))
+				{
+					Log.Warn($"获取图标的放置目标失败：{item.FullPath}", Marshal.GetExceptionForHR(hr));
+				}
+				return null;
+			}
 			try
 			{
 				return (IOleDropTarget)Marshal.GetObjectForIUnknown(ptr);

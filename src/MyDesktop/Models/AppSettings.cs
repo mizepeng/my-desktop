@@ -77,6 +77,19 @@ public enum TabAlignment
 }
 
 /// <summary>
+/// 标题栏和标签条上的文字用浅色还是深色。
+/// </summary>
+public enum TextTone
+{
+	/// <summary>
+	/// 按标题栏合成后的底色明暗自动选。
+	/// </summary>
+	Auto,
+	Light,
+	Dark,
+}
+
+/// <summary>
 /// 全局设置与全部分区布局，序列化为数据目录下的 settings.json。
 /// </summary>
 public sealed class AppSettings
@@ -219,6 +232,19 @@ public sealed class AppSettings
 	public bool DefaultBorder { get; set; }
 
 	/// <summary>
+	/// 标题栏和标签条的默认底色与不透明度，叠在分区背景上面，不跟背景色联动。
+	/// 默认 19% 的黑，和原来深色主题下画出来的标题栏一致。
+	/// </summary>
+	public string DefaultTitleBarColor { get; set; } = "#000000";
+
+	public double DefaultTitleBarOpacity { get; set; } = 0.19;
+
+	/// <summary>
+	/// 标题栏和标签条上文字的深浅。
+	/// </summary>
+	public TextTone DefaultTitleBarTone { get; set; } = TextTone.Auto;
+
+	/// <summary>
 	/// 分区文字的字体（字体族名称）；为空时用系统界面字体。
 	/// </summary>
 	public string? FenceFontFamily { get; set; }
@@ -357,6 +383,15 @@ public sealed class FenceSettings
 	public bool? Blur { get; set; }
 
 	public bool? Border { get; set; }
+
+	/// <summary>
+	/// 标题栏和标签条的底色、不透明度与文字深浅，为空时跟随全局默认设置。
+	/// </summary>
+	public string? TitleBarColor { get; set; }
+
+	public double? TitleBarOpacity { get; set; }
+
+	public TextTone? TitleBarTone { get; set; }
 
 	public IconSizeMode? IconSize { get; set; }
 

@@ -199,7 +199,7 @@
 		<Setter Property="Margin" Value="2,0,0,0" />
 		<Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
 		<Setter Property="FontSize" Value="11" />
-		<Setter Property="Foreground" Value="{DynamicResource FenceForeground}" />
+		<Setter Property="Foreground" Value="{DynamicResource TitleForeground}" />
 		<Setter Property="Focusable" Value="False" />
 		<Setter Property="Template">
 			<Setter.Value>
@@ -209,10 +209,10 @@
 					</Border>
 					<ControlTemplate.Triggers>
 						<Trigger Property="IsMouseOver" Value="True">
-							<Setter TargetName="Bd" Property="Background" Value="{DynamicResource FenceHover}" />
+							<Setter TargetName="Bd" Property="Background" Value="{DynamicResource TitleHover}" />
 						</Trigger>
 						<Trigger Property="IsPressed" Value="True">
-							<Setter TargetName="Bd" Property="Background" Value="{DynamicResource FenceSelected}" />
+							<Setter TargetName="Bd" Property="Background" Value="{DynamicResource TitleSelected}" />
 						</Trigger>
 					</ControlTemplate.Triggers>
 				</ControlTemplate>

@@ -90,6 +90,9 @@ internal partial class SettingsWindow : Window
 		HardwareAccelerationBox.IsChecked = Settings.HardwareAcceleration;
 		AutoUpdateBox.IsChecked = Settings.AutoCheckUpdates;
 		OpacitySlider.Value = Math.Round(Settings.DefaultOpacity * 100);
+		TitleBarOpacitySlider.Value = Math.Round(Settings.DefaultTitleBarOpacity * 100);
+		TitleBarToneBox.ItemsSource = Enum.GetValues<TextTone>().Select(t => t.DisplayName()).ToList();
+		TitleBarToneBox.SelectedIndex = (int)Settings.DefaultTitleBarTone;
 		RadiusSlider.Value = Settings.CornerRadius;
 		SnapGapSlider.Value = Settings.SnapGap;
 		IconSizeBox.ItemsSource = Enum.GetValues<IconSizeMode>().Select(s => s.DisplayName()).ToList();
@@ -387,7 +390,13 @@ internal partial class SettingsWindow : Window
 
 	void BuildColorSwatches()
 	{
-		ColorPanel.Children.Clear();
+		BuildColorSwatches(ColorPanel, SetDefaultColor);
+		BuildColorSwatches(TitleBarColorPanel, SetDefaultTitleBarColor);
+	}
+
+	void BuildColorSwatches(Panel panel, Action<string> pick)
+	{
+		panel.Children.Clear();
 		foreach (var (name, hex) in Appearance.ColorPresets)
 		{
 			var swatch = new Border
@@ -406,46 +415,70 @@ internal partial class SettingsWindow : Window
 				Margin = new Thickness(0, 0, 8, 8),
 				ToolTip = name,
 			};
-			button.Click += (_, _) => SetDefaultColor(hex);
-			ColorPanel.Children.Add(button);
+			button.Click += (_, _) => pick(hex);
+			panel.Children.Add(button);
 		}
 	}
 
 	void SetDefaultColor(string hex)
 	{
 		Settings.DefaultColor = hex;
-		UpdateColorPreview();
+		UpdateColorPreview(ColorPreview, ColorBox, hex);
+		_manager.RefreshAllAppearance();
+		_manager.SaveSoon();
+	}
+
+	void SetDefaultTitleBarColor(string hex)
+	{
+		Settings.DefaultTitleBarColor = hex;
+		UpdateColorPreview(TitleBarColorPreview, TitleBarColorBox, hex);
 		_manager.RefreshAllAppearance();
 		_manager.SaveSoon();
 	}
 
 	void UpdateColorPreview()
 	{
-		var color = Appearance.ParseColor(Settings.DefaultColor, Colors.Black);
-		ColorPreview.Background = new SolidColorBrush(color);
-		ColorBox.Text = Appearance.ToHex(color);
+		UpdateColorPreview(ColorPreview, ColorBox, Settings.DefaultColor);
+		UpdateColorPreview(TitleBarColorPreview, TitleBarColorBox, Settings.DefaultTitleBarColor);
+	}
+
+	void UpdateColorPreview(Border preview, TextBox box, string? hex)
+	{
+		var color = Appearance.ParseColor(hex, Colors.Black);
+		preview.Background = new SolidColorBrush(color);
+		box.Text = Appearance.ToHex(color);
 	}
 
 	void ColorBox_KeyDown(object sender, KeyEventArgs e)
 	{
 		if (e.Key == Key.Enter)
 		{
-			ApplyColorText();
+			ApplyColorText(ColorBox, SetDefaultColor);
 		}
 	}
 
-	void ColorBox_LostFocus(object sender, RoutedEventArgs e) => ApplyColorText();
+	void ColorBox_LostFocus(object sender, RoutedEventArgs e) => ApplyColorText(ColorBox, SetDefaultColor);
 
-	void ApplyColorText()
+	void TitleBarColorBox_KeyDown(object sender, KeyEventArgs e)
 	{
-		var text = ColorBox.Text.Trim();
+		if (e.Key == Key.Enter)
+		{
+			ApplyColorText(TitleBarColorBox, SetDefaultTitleBarColor);
+		}
+	}
+
+	void TitleBarColorBox_LostFocus(object sender, RoutedEventArgs e) => ApplyColorText(TitleBarColorBox, SetDefaultTitleBarColor);
+
+	void ApplyColorText(TextBox box, Action<string> apply)
+	{
+		var text = box.Text.Trim();
 		if (!text.StartsWith('#'))
 		{
 			text = "#" + text;
 		}
 		if (Appearance.TryParseColor(text, out var color))
 		{
-			SetDefaultColor(Appearance.ToHex(color));
+			apply(Appearance.ToHex(color));
 		}
 		else
 		{
@@ -462,6 +495,30 @@ internal partial class SettingsWindow : Window
 		}
 		UpdateSliderTexts();
 		Settings.DefaultOpacity = OpacitySlider.Value / 100.0;
+		_manager.RefreshAllAppearance();
+		_manager.SaveSoon();
+	}
+
+	void TitleBarOpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+	{
+		// 构造过程中控件可能尚未全部创建
+		if (_loading || TitleBarOpacityText == null)
+		{
+			return;
+		}
+		UpdateSliderTexts();
+		Settings.DefaultTitleBarOpacity = TitleBarOpacitySlider.Value / 100.0;
+		_manager.RefreshAllAppearance();
+		_manager.SaveSoon();
+	}
+
+	void TitleBarToneBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+	{
+		if (_loading || TitleBarToneBox.SelectedIndex < 0)
+		{
+			return;
+		}
+		Settings.DefaultTitleBarTone = (TextTone)TitleBarToneBox.SelectedIndex;
 		_manager.RefreshAllAppearance();
 		_manager.SaveSoon();
 	}
@@ -544,6 +601,7 @@ internal partial class SettingsWindow : Window
 		FenceFontSizeText.Text = $"{FenceFontSizeSlider.Value:0}";
 		DesktopFontSizeText.Text = $"{DesktopFontSizeSlider.Value:0}";
 		OpacityText.Text = $"{OpacitySlider.Value:0}%";
+		TitleBarOpacityText.Text = $"{TitleBarOpacitySlider.Value:0}%";
 		RadiusText.Text = $"{RadiusSlider.Value:0}";
 		SnapGapText.Text = SnapGapSlider.Value == 0 ? "紧贴" : $"{SnapGapSlider.Value:0}";
 		TabHoverDelayText.Text = TabHoverDelaySlider.Value == 0 ? "立即" : $"{TabHoverDelaySlider.Value:0} 毫秒";
@@ -563,7 +621,7 @@ internal partial class SettingsWindow : Window
 
 	void ResetAppearance_Click(object sender, RoutedEventArgs e)
 	{
-		if (MessageDialog.Show("重置外观", "所有分区单独设置的颜色、不透明度、毛玻璃和图标大小都将清除，改用默认外观。", "全部重置", "取消") == 0)
+		if (MessageDialog.Show("重置外观", "所有分区单独设置的颜色、不透明度、毛玻璃、标题栏和图标大小都将清除，改用默认外观。", "全部重置", "取消") == 0)
 		{
 			_manager.ResetAllAppearance();
 		}

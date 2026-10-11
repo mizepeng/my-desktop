@@ -21,7 +21,7 @@ public static class Appearance
 		("云朵白", "#F5F5F5"),
 	];
 
-	public static readonly int[] OpacityPresets = [10, 25, 40, 55, 70, 85, 100];
+	public static readonly int[] OpacityPresets = [0, 10, 25, 40, 55, 70, 85, 100];
 
 	/// <summary>
 	/// 列表视图下的图标尺寸（DIP）。
@@ -102,6 +102,16 @@ public static class Appearance
 		};
 	}
 
+	public static string DisplayName(this TextTone tone)
+	{
+		return tone switch
+		{
+			TextTone.Auto => "自动",
+			TextTone.Light => "浅色文字",
+			TextTone.Dark => "深色文字",
+		};
+	}
+
 	/// <summary>
 	/// 隐藏这个对象时是否藏起桌面图标、是否藏起分区。
 	/// </summary>
@@ -144,4 +154,13 @@ public static class Appearance
 	/// 相对亮度（0~1），用于决定文字用深色还是浅色。
 	/// </summary>
 	public static double Luminance(Color color) => (0.2126 * color.R + 0.7152 * color.G + 0.0722 * color.B) / 255;
+
+	/// <summary>
+	/// 半透明色叠在不透明色上面，返回合成后的不透明色（alpha 取 0~1）。
+	/// </summary>
+	public static Color Blend(Color over, double alpha, Color under)
+	{
+		static byte Mix(byte a, byte b, double t) => (byte)Math.Round(a * t + b * (1 - t));
+		return Color.FromRgb(Mix(over.R, under.R, alpha), Mix(over.G, under.G, alpha), Mix(over.B, under.B, alpha));
+	}
 }

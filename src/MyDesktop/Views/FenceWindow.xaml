@@ -26,6 +26,10 @@
 		<SolidColorBrush x:Key="FenceHover" Color="#22FFFFFF" />
 		<SolidColorBrush x:Key="FenceSelected" Color="#33FFFFFF" />
 		<SolidColorBrush x:Key="FenceSelectedBorder" Color="#59FFFFFF" />
+		<!-- 标题栏和标签条自己的文字、悬停、选中底色，跟分区的背景色无关，由 ApplyTitleBar 按设置替换 -->
+		<SolidColorBrush x:Key="TitleForeground" Color="White" />
+		<SolidColorBrush x:Key="TitleHover" Color="#22FFFFFF" />
+		<SolidColorBrush x:Key="TitleSelected" Color="#33FFFFFF" />
 		<!-- 文字阴影：加在文字副本上的模糊（见 TextShadow），由代码按设置替换 -->
 		<BlurEffect x:Key="TextShadow" Radius="3" />
 		<!-- 以下随字体、字号在代码里更新：标题字号、图标名称两行的最大高度、列表名称离顶端的距离 -->
@@ -303,20 +307,20 @@
 									FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
 									FontSize="11"
 									Opacity="0.8"
-									Foreground="{DynamicResource FenceForeground}" />
+									Foreground="{DynamicResource TitleForeground}" />
 						</StackPanel>
-						<local:TextShadow Grid.Column="1" Shadow="{DynamicResource TextShadow}">
+						<local:TextShadow Grid.Column="1" Shadow="{DynamicResource TitleTextShadow}">
 							<TextBlock x:Name="TitleText"
 									VerticalAlignment="Center"
 									FontSize="{DynamicResource TitleFontSize}"
 									FontWeight="SemiBold"
 									TextTrimming="CharacterEllipsis"
-									Foreground="{DynamicResource FenceForeground}" />
+									Foreground="{DynamicResource TitleForeground}" />
 						</local:TextShadow>
 						<!-- 映射分区进入子文件夹后的标题：每一级都能点，点了回到那一级（内容在代码里按路径生成）；左边抵消每一级的内边距，文字和标题对齐 -->
 						<local:BreadcrumbPanel x:Name="Breadcrumb" Grid.Column="1" Margin="-5,0,0,0" VerticalAlignment="Center" Visibility="Collapsed" />
 						<!-- 左右收起时的竖排标题：标题栏整体旋转 90°，这里再转回来，每个字一行、正立 -->
-						<local:TextShadow Grid.Column="1" Shadow="{DynamicResource TextShadow}">
+						<local:TextShadow Grid.Column="1" Shadow="{DynamicResource TitleTextShadow}">
 							<TextBlock x:Name="VerticalTitleText"
 									HorizontalAlignment="Left"
 									VerticalAlignment="Center"
@@ -324,7 +328,7 @@
 									FontSize="{DynamicResource TitleFontSize}"
 									FontWeight="SemiBold"
 									TextAlignment="Center"
-									Foreground="{DynamicResource FenceForeground}">
+									Foreground="{DynamicResource TitleForeground}">
 								<TextBlock.LayoutTransform>
 									<RotateTransform Angle="-90" />
 								</TextBlock.LayoutTransform>
@@ -356,7 +360,7 @@
 													Source="{Binding FolderIcon}"
 													RenderOptions.BitmapScalingMode="HighQuality" />
 											<Grid>
-											<local:TextShadow Shadow="{DynamicResource TextShadow}">
+											<local:TextShadow Shadow="{DynamicResource TitleTextShadow}">
 												<TextBlock x:Name="TabText"
 														VerticalAlignment="Center"
 														FontSize="{DynamicResource TitleFontSize}"
@@ -364,9 +368,9 @@
 														Opacity="0.6"
 														Text="{Binding Title}"
 														TextTrimming="CharacterEllipsis"
-														Foreground="{DynamicResource FenceForeground}" />
+														Foreground="{DynamicResource TitleForeground}" />
 											</local:TextShadow>
-											<local:TextShadow Shadow="{DynamicResource TextShadow}">
+											<local:TextShadow Shadow="{DynamicResource TitleTextShadow}">
 												<TextBlock x:Name="TabVerticalText"
 														HorizontalAlignment="Left"
 														VerticalAlignment="Center"
@@ -376,7 +380,7 @@
 														Opacity="0.6"
 														Text="{Binding VerticalTitle}"
 														TextAlignment="Center"
-														Foreground="{DynamicResource FenceForeground}">
+														Foreground="{DynamicResource TitleForeground}">
 													<TextBlock.LayoutTransform>
 														<RotateTransform Angle="-90" />
 													</TextBlock.LayoutTransform>
@@ -407,10 +411,10 @@
 											</Setter>
 										</DataTrigger>
 										<Trigger SourceName="TabHit" Property="IsMouseOver" Value="True">
-											<Setter TargetName="Tab" Property="Background" Value="{DynamicResource FenceHover}" />
+											<Setter TargetName="Tab" Property="Background" Value="{DynamicResource TitleHover}" />
 										</Trigger>
 										<DataTrigger Binding="{Binding IsActive}" Value="True">
-											<Setter TargetName="Tab" Property="Background" Value="{DynamicResource FenceSelected}" />
+											<Setter TargetName="Tab" Property="Background" Value="{DynamicResource TitleSelected}" />
 											<Setter TargetName="TabText" Property="Opacity" Value="1" />
 											<Setter TargetName="TabVerticalText" Property="Opacity" Value="1" />
 											<Setter TargetName="TabGlyph" Property="Opacity" Value="1" />
