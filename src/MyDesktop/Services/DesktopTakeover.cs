@@ -1090,18 +1090,17 @@ internal sealed class DesktopTakeover : IDisposable
 	}
 
 	/// <summary>
-	/// 右键框选松开后，与资源管理器一样在鼠标处弹出框住的图标的右键菜单；没框住图标时返回 false，由调用方弹出桌面右键菜单。
+	/// 右键框选松开后，与资源管理器一样在鼠标处弹出框住的图标的右键菜单。
 	/// </summary>
-	public bool ShowMenuForBand(POINT point)
+	public void ShowMenuForBand(POINT point)
 	{
 		var layer = _layers.FirstOrDefault(l => l.SelectedItems.Count > 0);
 		if (layer == null)
 		{
-			return false;
+			return;
 		}
 		var (items, desktop) = SelectionForShell();
 		layer.ShowItemMenu(items, desktop, point, layer.SelectedItems[0]);
-		return true;
 	}
 
 	/// <summary>

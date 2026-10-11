@@ -143,7 +143,7 @@ public sealed class AppSettings
 	public bool SnapToGrid { get; set; } = true;
 
 	/// <summary>
-	/// 在桌面空白处按住右键拖动画框新建分区。
+	/// 在桌面空白处用左键框选后，在选框旁弹出新建分区、新建映射分区的选项。
 	/// </summary>
 	public bool DrawToCreate { get; set; } = true;
 

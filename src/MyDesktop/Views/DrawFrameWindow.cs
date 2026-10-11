@@ -7,7 +7,7 @@ using static MyDesktop.Native.NativeMethods;
 namespace MyDesktop.Views;
 
 /// <summary>
-/// 画在屏幕上的选框：框选图标、按住右键画框新建分区、拆出标签时的落点预览。置顶、鼠标穿透、不抢焦点。
+/// 画在屏幕上的选框：框选图标、拆出标签时的落点预览。置顶、鼠标穿透、不抢焦点。
 /// 像素由 CPU 直接画好交给 UpdateLayeredWindow，不经过 WPF：WPF 的透明窗口每次重画都要等显卡把画面拷回内存，
 /// 显卡被游戏占满时拖着选框就会一卡一卡；这里每次也只画选框这么大的一块，不用重画整个图标层或分区。
 /// </summary>
@@ -46,7 +46,7 @@ internal sealed class DrawFrameWindow : IDisposable
 	}
 
 	/// <summary>
-	/// 画框新建分区、拆出标签的落点预览：圆角、较粗的边框，和分区的样子接近。
+	/// 拆出标签的落点预览：圆角、较粗的边框，和分区的样子接近。
 	/// </summary>
 	public static DrawFrameWindow CreateFrame() => new(Color.FromArgb(0xE6, 0x60, 0xA5, 0xFA), 2, 6);
 

@@ -32,7 +32,7 @@ powershell -ExecutionPolicy Bypass -File installer/Build-Installer.ps1
 - 文件始终留在桌面文件夹：桌面分区只记成员（`FenceSettings.Members`，文件为完整路径，此电脑等系统图标为 `::{CLSID}`）；映射分区直接显示任意文件夹。一键整理、自动整理（`Services/DesktopOrganizer`）也只改成员，不移动文件。
 - `Core/ExplorerDesktopView`：在独立的 STA 线程上跨进程读写资源管理器的桌面视图（IShellWindows → IShellBrowser → IFolderView2），产出快照（位置、间距、自动排列、图标大小）。散放图标的排列与位置以它为准，拖动后用 `SelectAndPositionItems` 写回；资源管理器无响应时不会拖住界面。
 - `Services/DesktopTakeover` 统筹接管：图标层、隐藏与恢复、看门狗（资源管理器重启后重新接管）、守护进程、缩放变化处理，以及改名接手（系统「新建」后在隐藏列表里开始的改名，通过 WinEvent 发现后取消，改在图标层上进行）。`Services/DesktopItems` 管快照刷新和桌面文件夹监视。
-- `Core/DesktopMouseWatcher`：低级鼠标、键盘钩子。负责双击桌面空白处隐藏、按住右键画框新建分区、空白处框选；桌面在前台时拦下 Delete、F2、Ctrl+A 等按键和首字母定位，转给图标层，防止作用到隐藏列表里看不见的文件（按着 Win 键时一律放行）。
+- `Core/DesktopMouseWatcher`：低级鼠标、键盘钩子。负责双击桌面空白处隐藏、空白处框选（资源管理器的图标列表被隐藏后收不到鼠标，系统的框选用不上，左右键框选都由本程序做；左键框选松开后弹出新建分区的菜单）。鼠标事件一律不扣，右键单击、长按原样交给系统，桌面右键菜单和其他软件的右键手势照常工作；右键框选框住了图标时，由跟在鼠标下的透明小窗口（`Views/ClickCatcherWindow`）接住松开，改为弹出这些图标的右键菜单；桌面在前台时拦下 Delete、F2、Ctrl+A 等按键和首字母定位，转给图标层，防止作用到隐藏列表里看不见的文件（按着 Win 键时一律放行）。
 - `Core/DesktopHost`：窗口层级。图标层紧贴桌面窗口之上，分区在图标层之上，靠在 `WM_WINDOWPOSCHANGING` 中改写层级维持。
 - `Services/FenceManager`：分区窗口的生命周期、托盘菜单、命令分发、按缩放比例记忆分区布局（`LayoutDpi`、`BoundsByDpi`），按显示器组合记忆分区布局（`DisplayKey`、`LayoutByDisplay`，接上或拔掉显示器时 `SwitchDisplayLayout` 存旧组合、恢复新组合的布局）。命令定义在 `Core/AppCommand`：再次启动程序时用 `--command <名称>` 广播给正在运行的实例，`exit` 供安装程序在升级、卸载前让实例正常退出。
 - `Views/ItemOps` 汇集分区和图标层共用的项目操作（打开、删除、剪贴板、改名、拖放）；单击已选中图标的名称、过了双击时间开始改名见 `Views/ClickToRename`。
@@ -60,7 +60,7 @@ powershell -ExecutionPolicy Bypass -File installer/Build-Installer.ps1
 - 壁纸契合度为「填充」「跨区」、图片比屏幕高时，系统上面裁掉多出部分的三分之一、下面裁三分之二，不是上下居中；比屏幕宽时左右居中（实测：几种测试图设成壁纸后 `PrintWindow` 抓 Progman 量位置）。毛玻璃按这个规则画（`WallpaperBlur.Place`），按居中算会整体往上偏。`TranscodedWallpaperCache` 的 .meta 里那个 80.0 不是裁剪位置，各种宽高比都一样。
 - 系统提供的模糊（亚克力、云母等）对分区这类几乎总是未激活的窗口不起作用，所以毛玻璃是自己画的（`Services/WallpaperBlur`），前提是分区下面只有壁纸。
 - Shell 返回的位图多数图标自下而上，图片缩略图（实测）等自上而下（用户反馈倒置的 Adobe 2026 程序图标应属此类），而 GetObject 读到的 DIBSECTION 高度一律为正、分不出来；取像素要用 GetDIBits 让系统按实际行序转换（`ShellIconLoader.ToBitmapSource`），直接读内存会把后一种上下颠倒。
-- WPF 的透明窗口（`AllowsTransparency`，分区和图标层都是）每次重画都要等显卡把画面拷回内存，显卡被游戏占满时就会一卡一卡。跟着鼠标连续变化的东西（框选框、画框新建分区、拆标签预览）不要画在分区或整屏的图标层里，用 `Views/DrawFrameWindow`：CPU 画好像素交给 `UpdateLayeredWindow`，只有选框那么大。它是借系统 Static 窗口类建的原生窗口：WPF 的 `HwndSource` 不用逐像素透明时会强行去掉 `WS_EX_LAYERED`（事后用 `SetWindowLongPtr` 补上也会被改回去），`UpdateLayeredWindow` 就失败、什么都不显示。
+- WPF 的透明窗口（`AllowsTransparency`，分区和图标层都是）每次重画都要等显卡把画面拷回内存，显卡被游戏占满时就会一卡一卡。跟着鼠标连续变化的东西（框选框、拆标签预览）不要画在分区或整屏的图标层里，用 `Views/DrawFrameWindow`：CPU 画好像素交给 `UpdateLayeredWindow`，只有选框那么大。它是借系统 Static 窗口类建的原生窗口：WPF 的 `HwndSource` 不用逐像素透明时会强行去掉 `WS_EX_LAYERED`（事后用 `SetWindowLongPtr` 补上也会被改回去），`UpdateLayeredWindow` 就失败、什么都不显示。
 - 透明窗口按整窗大小占内存：CPU 绘制时一份宽×高×4 的私有缓冲加一份同样大的共享位图；硬件加速（`AppSettings.HardwareAcceleration`，`FenceManager.ApplyRenderMode`）时私有缓冲在显卡驱动里，窗口大到整屏还要多一块（150% 的 4K 屏上整屏的图标层：显卡 62 MB 私有加 31 MB 共享，CPU 31 加 31）。所以图标层只盖住图标所在的范围（`DesktopLayerWindow.ExtentSize`），只在本程序发起拖动、整个桌面都要能接住放置时扩成整屏；驱动为整屏窗口多留的那块约 32 MB 窗口缩回后也不还，第一次拖动以后一直占着（实测）。
 - 硬件加速时显卡驱动还在本进程里按块（每块保留 32 MB，大部分是零页）分配命令缓冲，随多个透明窗口的重画增长，空闲几分钟也不回落（实测 15～119 MB），CPU 绘制时没有。运行中切到 CPU 绘制立即生效，但已经加载的显卡驱动和这些内存不会还，要重启程序才降下来。
 - .NET 的 gen0 预算按 CPU 三级缓存的大小定，大缓存的 CPU 上很大（9800X3D 的 96 MB 对应 48 MB），GC 一直占着这么多已提交内存，比存活的对象多出几十 MB。csproj 用 `System.GC.Gen0MaxBudget` 限到 6 MB（小缓存 CPU 上的默认值）：实测 20 秒重度动画里 GC 从 36 次变成 270 次，累计暂停 12 → 43 毫秒，已提交 69 → 27 MB。
@@ -73,6 +73,7 @@ powershell -ExecutionPolicy Bypass -File installer/Build-Installer.ps1
 - 往 `RenderTargetBitmap` 里画位图，高质量缩放（`RenderOptions.SetBitmapScalingMode`）要设在 `DrawingGroup` 或元素上：设在作为根的 `DrawingVisual` 上不起作用，缩小时和双线性一模一样（实测）。
 - 后台线程调 `Dispatcher.Invoke` 用非泛型的重载：程序退出、调度器关闭后泛型的 `Invoke<T>` 抛 `TaskCanceledException`，后台线程上没人接住，进程就崩了（实测）；非泛型的返回 null。
 - 收起后那一条的厚度要按 WPF 布局取整的方式算：标题栏和两侧边框各自取整再相加（`FenceWindow.CollapsedHeight`）。150% 时 1 DIP 的边框取整成 2 像素，共 49 像素，按 (30 + 2) × 1.5 整体取整只有 48，收起时标题栏被挤偏 1 像素，标题栏在下边、右边的分区展开收起时会动一下。
+- 低级钩子吞掉的事件不更新系统记录的按键状态：只吞右键松开时 `GetAsyncKeyState` 一直报告右键按着，随后分区里的右键框选、点桌面图标都会乱（实测）。要么按下、松开成对吞，要么都不吞；要让桌面收不到某次松开，就在鼠标下放一个本程序的窗口接住它（资源管理器的桌面线程在右键拖动时不抓鼠标，只在弹出菜单时抓，实测）。
 - 低级鼠标钩子：每个鼠标事件都要等钩子返回才交给前台程序（包括游戏），回调里没在拖动时的移动、滚轮等直接放行、不读事件内容，钩子线程用最高优先级（`Core/DesktopMouseWatcher`）。
 - 装着文件的文件夹，`IShellItemImageFactory` 取缩略图得到的是系统自带的黄色文件夹（露出里面的内容），不随用户换的图标主题变；空文件夹和 `SHGetFileInfo` 取到的是主题里的图标。所以文件夹只取图标（`SIIGBF_ICONONLY`，`ShellIconLoader.Load`）。
 - 用 `dynamic` 调任务计划程序的 COM 接口时，任务不存在抛的是 `FileNotFoundException`（HResult 0x80070002），不是 `COMException`，要按 HResult 判断。

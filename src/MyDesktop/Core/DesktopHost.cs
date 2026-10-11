@@ -86,6 +86,11 @@ internal static class DesktopHost
 	public static bool HitsLayerIcon(POINT point) => _layers.IconRects.Any(r => r.Contains(point));
 
 	/// <summary>
+	/// 选框是否碰到散放图标层的图标：右键框选框住了图标时才接住松开、弹出图标的菜单。
+	/// </summary>
+	public static bool AnyLayerIconIn(RECT rect) => _layers.IconRects.Any(r => r.IntersectsWith(rect));
+
+	/// <summary>
 	/// 「显示桌面」把桌面提到最前后，桌面窗口每次被激活都会被系统再提到普通窗口的最上层，盖住紧贴其上的图标层和分区，
 	/// 等层级被纠正才露出来，看上去闪一下。由本程序激活桌面时先把它们临时置顶（Lift），桌面提上来以后再放回去（Unlift）。
 	/// 置顶期间不改写它们的层级；_lifting 表示正在置顶、撤销置顶或调整分区之间的上下，放行这期间的层级变化。只在界面线程上读写。

@@ -109,6 +109,7 @@ internal static class NativeMethods
 	public const int VK_RIGHT = 0x27;
 	public const int VK_DOWN = 0x28;
 	public const int VK_DELETE = 0x2E;
+	public const int VK_ESCAPE = 0x1B;
 	public const int VK_NUMPAD0 = 0x60;
 	public const int VK_NUMPAD9 = 0x69;
 	public const int VK_LWIN = 0x5B;
@@ -173,6 +174,7 @@ internal static class NativeMethods
 	public const uint MF_SEPARATOR = 0x0800;
 	public const uint TPM_RIGHTBUTTON = 0x0002;
 	public const uint TPM_RETURNCMD = 0x0100;
+	public const uint TPM_BOTTOMALIGN = 0x0020;
 
 	public const uint NIM_ADD = 0;
 	public const uint NIM_MODIFY = 1;
@@ -287,6 +289,9 @@ internal static class NativeMethods
 
 	[DllImport("user32.dll")]
 	public static extern IntPtr WindowFromPoint(POINT point);
+
+	[DllImport("user32.dll")]
+	public static extern bool EndMenu();
 
 	[DllImport("user32.dll")]
 	public static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);

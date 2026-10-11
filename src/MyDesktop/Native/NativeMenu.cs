@@ -117,11 +117,13 @@ internal sealed class NativeMenu : IDisposable
 	/// <summary>
 	/// 在屏幕坐标处显示菜单，选中项的回调在菜单关闭后同步执行。
 	/// </summary>
-	public void Show(IntPtr owner, POINT point)
+	/// <param name="bottomAlign">菜单底边对齐到这一点（默认是顶边）。</param>
+	public void Show(IntPtr owner, POINT point, bool bottomAlign = false)
 	{
 		// 不先置前台的话，点击菜单外部时菜单不会消失（托盘菜单的经典问题）
 		SetForegroundWindow(owner);
-		int command = TrackPopupMenuEx(_handle, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.X, point.Y, owner, IntPtr.Zero);
+		uint flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | (bottomAlign ? TPM_BOTTOMALIGN : 0);
+		int command = TrackPopupMenuEx(_handle, flags, point.X, point.Y, owner, IntPtr.Zero);
 		PostMessage(owner, WM_NULL, IntPtr.Zero, IntPtr.Zero);
 		if (command > 0 && command <= _commands.Count)
 		{

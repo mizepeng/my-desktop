@@ -41,8 +41,11 @@ internal sealed class FenceManager
 	IntPtr _foregroundHook;
 	IntPtr _reorderHook;
 	TrayIcon? _tray;
+	// 框选后弹出新建分区菜单时留在原处的选框
+	DrawFrameWindow? _bandFrame;
+	// 右键框选框住图标时接住右键松开的小窗口
+	ClickCatcherWindow? _clickCatcher;
 	DesktopMouseWatcher? _mouse;
-	DrawFrameWindow? _drawFrame;
 	SettingsWindow? _settingsWindow;
 	SearchWindow? _searchWindow;
 	DesktopTakeover? _takeover;
@@ -367,7 +370,8 @@ internal sealed class FenceManager
 		_searchWindow?.Close();
 		SaveNow();
 		_mouse?.Dispose();
-		_drawFrame?.Dispose();
+		_bandFrame?.Dispose();
+		_clickCatcher?.Dispose();
 		Organizer.Dispose();
 		// 退出接管时恢复资源管理器的桌面图标
 		_takeover?.Dispose();
@@ -402,7 +406,7 @@ internal sealed class FenceManager
 			FolderPath = portalFolder ?? string.Empty,
 		};
 		var rect = bounds ?? FindFreeSlot(near?.GetBounds());
-		// 画框或在鼠标处新建时压住了别的分区，挪到最近的空位
+		// 框选新建或在鼠标处新建时压住了别的分区，挪到最近的空位
 		if (bounds != null && FindFreeSpot(null, rect) is RECT spot)
 		{
 			rect = spot;
@@ -1376,7 +1380,7 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 「双击桌面隐藏」「右键画框新建分区」和接管桌面图标后的框选、键盘保护共用一套钩子，都用不上时卸载。
+	/// 「双击桌面隐藏」「框选后新建分区」和接管桌面图标后的框选、键盘保护共用一套钩子，都用不上时卸载。
 	/// </summary>
 	public void ApplyMouseHookSettings()
 	{
@@ -1395,12 +1399,6 @@ internal sealed class FenceManager
 		{
 			_mouse = new DesktopMouseWatcher(_dispatcher);
 			_mouse.DoubleClicked += ToggleHidden;
-			_mouse.DrawUpdated += rect =>
-			{
-				_drawFrame ??= DrawFrameWindow.CreateFrame();
-				_drawFrame.ShowAt(rect);
-			};
-			_mouse.DrawFinished += OnDrawFinished;
 			_mouse.BlankPressed += additive =>
 			{
 				_takeover?.OnBlankPressed(additive);
@@ -1411,20 +1409,49 @@ internal sealed class FenceManager
 				}
 			};
 			_mouse.BandUpdated += rect => _takeover?.OnBandUpdated(rect);
-			_mouse.BandFinished += () => _takeover?.OnBandFinished();
-			_mouse.BandMenuRequested += point =>
+			_mouse.BandFinished += band =>
 			{
-				if (_takeover?.ShowMenuForBand(point) != true)
+				_takeover?.OnBandFinished();
+				OnBandFinished(band);
+			};
+			// 右键框选：框住了图标时把接住松开的小窗口放在鼠标下，桌面就收不到这次松开、不弹桌面右键菜单，改由本程序弹出图标的菜单
+			_mouse.RightBandUpdated += rect =>
+			{
+				_takeover?.OnBandUpdated(rect);
+				if (DesktopHost.AnyLayerIconIn(rect))
 				{
-					_mouse?.ReplayRightClickLater();
+					_clickCatcher ??= new ClickCatcherWindow();
+					_clickCatcher.ShowAt(NativeMethods.GetCursorPos());
+				}
+				else
+				{
+					_clickCatcher?.Hide();
+				}
+			};
+			_mouse.RightBandFinished += point =>
+			{
+				// 松开落在哪个窗口上以它此刻是否显示为准：显示着就是本程序接住了，没显示就是系统弹了桌面菜单
+				bool caught = _clickCatcher?.IsShown == true;
+				_clickCatcher?.Hide();
+				_takeover?.OnBandFinished();
+				if (caught)
+				{
+					_takeover?.ShowMenuForBand(point);
 				}
 			};
 			_mouse.DesktopActivationNeeded += ActivateDesktopKeepingFences;
+			_mouse.FencesLiftNeeded += () =>
+			{
+				DesktopHost.Lift(_windows.Select(w => w.Handle));
+				_unliftTimer.Stop();
+				_unliftTimer.Start();
+			};
+			_mouse.MenuDismissRequested += () => EndMenu();
 			_mouse.KeyIntercepted += (key, shift) => _takeover?.HandleKey(key, shift);
 			_mouse.CharIntercepted += character => _takeover?.TypeAhead(character.ToString());
 		}
 		_mouse.DoubleClickEnabled = Settings.DoubleClickToHide;
-		_mouse.DrawEnabled = Settings.DrawToCreate;
+		_mouse.CreateEnabled = Settings.DrawToCreate;
 		_mouse.TakeoverEnabled = takeover;
 		_mouse.Start();
 	}
@@ -1441,19 +1468,73 @@ internal sealed class FenceManager
 		_unliftTimer.Start();
 	}
 
-	void OnDrawFinished(RECT rect)
+	/// <summary>
+	/// 在桌面空白处框选完：开着「框选后新建分区」时在选框右下角旁弹出创建分区、创建映射分区的菜单（照 Fences），点了才创建；菜单开着时选框留在原处。
+	/// 框住了散放图标时，创建的桌面分区直接收进这些图标；映射分区显示的是别的文件夹，不收。
+	/// </summary>
+	void OnBandFinished(RECT band)
 	{
-		_drawFrame?.Hide();
-		// 空矩形表示画得太小、按普通右键处理了
-		if (rect.Width == 0 || rect.Height == 0)
+		if (!Settings.DrawToCreate)
 		{
 			return;
 		}
-		var (_, scale) = GetMonitorWorkArea(MonitorFromRect(ref rect, MONITOR_DEFAULTTONEAREST));
+		var (work, scale) = GetMonitorWorkArea(MonitorFromRect(ref band, MONITOR_DEFAULTTONEAREST));
+		// 框得太小多半是手滑或只想选一两个图标，不弹
+		if (band.Width < 60 * scale || band.Height < 40 * scale)
+		{
+			return;
+		}
 		int minWidth = (int)(160 * scale);
 		int minHeight = (int)(100 * scale);
-		var bounds = new RECT(rect.Left, rect.Top, rect.Left + Math.Max(rect.Width, minWidth), rect.Top + Math.Max(rect.Height, minHeight));
-		CreateFence(editTitle: true, bounds: bounds);
+		var bounds = SnapToScreenEdges(new RECT(band.Left, band.Top, band.Left + Math.Max(band.Width, minWidth), band.Top + Math.Max(band.Height, minHeight)), work, scale);
+		var keys = _takeover?.SelectedItems.Select(i => i.FullPath).ToList() ?? [];
+		void CreateDesktop()
+		{
+			var window = CreateFence(editTitle: true, bounds: bounds);
+			if (keys.Count > 0)
+			{
+				AssignToFence(window, keys);
+			}
+		}
+		void CreatePortal() => CreatePortalFence(bounds: bounds);
+		_bandFrame ??= DrawFrameWindow.CreateMarquee();
+		_bandFrame.ShowAt(band);
+		// 菜单关掉、选框收起后才执行选中的项（映射分区还要弹出选文件夹的对话框）
+		Action? chosen = null;
+		using (var menu = new NativeMenu())
+		{
+			menu.Add("创建分区", () => chosen = CreateDesktop, isDefault: true);
+			menu.Add("创建映射分区…", () => chosen = CreatePortal);
+			if (_mouse != null)
+			{
+				_mouse.MenuOpen = true;
+			}
+			try
+			{
+				menu.Show(_tray!.Handle, new POINT(band.Right + 2, band.Bottom), bottomAlign: true);
+			}
+			finally
+			{
+				_bandFrame.Hide();
+				if (_mouse != null)
+				{
+					_mouse.MenuOpen = false;
+				}
+			}
+		}
+		chosen?.Invoke();
+	}
+
+	/// <summary>
+	/// 框选新建的分区离屏幕边不到 24 DIP（自动卷起方向判断贴边的距离，见 FenceWindow.AutoRollEdge）时整体挪过去贴住，标题栏按贴边的规则放；
+	/// 不挪的话分区离边还有一点却被当成贴边，标题栏竖着，看上去莫名其妙。离得远的不动，标题栏在上边。
+	/// </summary>
+	static RECT SnapToScreenEdges(RECT rect, RECT work, double scale)
+	{
+		int near = (int)(24 * scale);
+		int dx = Math.Abs(rect.Left - work.Left) <= near ? work.Left - rect.Left : Math.Abs(rect.Right - work.Right) <= near ? work.Right - rect.Right : 0;
+		int dy = Math.Abs(rect.Top - work.Top) <= near ? work.Top - rect.Top : Math.Abs(rect.Bottom - work.Bottom) <= near ? work.Bottom - rect.Bottom : 0;
+		return new RECT(rect.Left + dx, rect.Top + dy, rect.Right + dx, rect.Bottom + dy);
 	}
 
 	/// <summary>

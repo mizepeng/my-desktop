@@ -1609,10 +1609,12 @@ internal partial class FenceWindow : Window
 	public void ApplyAppearance()
 	{
 		var baseColor = Appearance.ParseColor(Model.Color ?? Settings.DefaultColor, Color.FromRgb(0x1E, 0x1E, 0x1E));
-		double opacity = Math.Clamp(Model.Opacity ?? Settings.DefaultOpacity, 0.05, 1);
+		double opacity = Math.Clamp(Model.Opacity ?? Settings.DefaultOpacity, 0, 1);
 		// 浅色且足够不透明的背景上改用深色文字
 		bool light = Appearance.Luminance(baseColor) > 0.6 && opacity >= 0.35;
-		Frame.Background = Frozen(Color.FromArgb((byte)Math.Round(opacity * 255), baseColor.R, baseColor.G, baseColor.B));
+		// 设成 0% 时也至少留 1/255：分层窗口完全透明的像素不接收鼠标，分区空白处会点穿到桌面，1/255 看上去和全透明一样
+		byte alpha = (byte)Math.Max(1, Math.Round(opacity * 255));
+		Frame.Background = Frozen(Color.FromArgb(alpha, baseColor.R, baseColor.G, baseColor.B));
 		// 不显示边框时边框涂成和背景一样的颜色（背景只填边框里面，同色时那一圈和里面一模一样，实测），粗细不变：
 		// 设成透明的话相邻分区之间会露出一道缝；卷起后那一条的厚度等按边框计算的尺寸也都不用改。拖放时的高亮边框照常显示
 		_frameBorder = !(Model.Border ?? Settings.DefaultBorder) ? Frame.Background
@@ -2828,6 +2830,7 @@ internal partial class FenceWindow : Window
 	{
 		ActivateForInput();
 		TitleEditor.Text = Model.Title;
+		ApplyTitleEditorOrientation();
 		TitleEditor.Visibility = Visibility.Visible;
 		ShowTitleText(false);
 		Dispatcher.InvokeAsync(() =>
@@ -2835,6 +2838,21 @@ internal partial class FenceWindow : Window
 			TitleEditor.Focus();
 			TitleEditor.SelectAll();
 		}, DispatcherPriority.Input);
+	}
+
+	/// <summary>
+	/// 标题栏竖放时改名框也竖排，和竖排标题一样每个字一行、字是正的：整个标题栏转了 90°，改名框再转回来，
+	/// 宽度只放得下一个汉字、自动换行（两个西文字母也放不下，同样一个一行）。
+	/// </summary>
+	void ApplyTitleEditorOrientation()
+	{
+		bool vertical = _titleEdge is RollEdge.Left or RollEdge.Right;
+		TitleEditor.LayoutTransform = vertical ? new RotateTransform(-90) : Transform.Identity;
+		TitleEditor.TextWrapping = vertical ? TextWrapping.Wrap : TextWrapping.NoWrap;
+		TitleEditor.TextAlignment = vertical ? TextAlignment.Center : TextAlignment.Left;
+		// 文字宽一个字号，加上内边距、边框和 TextBox 内部给光标留的空
+		TitleEditor.Width = vertical ? Math.Ceiling(TitleEditor.FontSize) + 10 : double.NaN;
+		TitleEditor.HorizontalAlignment = HorizontalAlignment.Stretch;
 	}
 
 	void CommitTitleEdit(bool accept)
