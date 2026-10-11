@@ -211,6 +211,8 @@ internal partial class FenceWindow : Window
 
 		public string Title => window.Model.Title;
 
+		public string ToolTipText => $"{window.Model.Title}\n按住 Shift 拖动标签可以调整顺序，拖出标题栏就拆成独立分区";
+
 		public string VerticalTitle => ToVerticalText(window.Model.Title);
 
 		public bool IsActive => isActive;
@@ -3644,8 +3646,9 @@ internal partial class FenceWindow : Window
 			_insertIndex = -1;
 			return forwarded;
 		}
-		TrackReorder(e);
-		return ComputeDropEffect(e);
+		var effect = ComputeDropEffect(e);
+		TrackReorder(e, effect);
+		return effect;
 	}
 
 	/// <summary>
@@ -3699,6 +3702,8 @@ internal partial class FenceWindow : Window
 		bool fromDesktop = _dropFromDesktop;
 		bool reorder = IsReorderDrag();
 		int insertIndex = _insertIndex;
+		// 从别处拖进自定义顺序的分区：放在松手的位置（见 InsertsAtDrop）
+		int dropIndex = !reorder && InsertsAtDrop(effect) ? insertIndex : -1;
 		_dropPreview.Drop(e, effect);
 		EndDragInside(false);
 		e.Handled = true;
@@ -3716,8 +3721,9 @@ internal partial class FenceWindow : Window
 		}
 		if (IsDesktopFence && fromDesktop)
 		{
-			// 桌面上的图标拖进桌面分区只改归属，文件不动
+			// 桌面上的图标拖进桌面分区只改归属，文件不动；先排好位置，图标出现时就在松手处
 			e.Effects = DragDropEffects.None;
+			InsertIntoCustomOrder(keys, dropIndex);
 			_manager.AssignToFence(this, keys);
 			return;
 		}
@@ -3726,11 +3732,11 @@ internal partial class FenceWindow : Window
 		// 压缩软件拖出的临时文件会在拖放结束后被删除，必须同步处理；其余情况异步执行，避免拖放源界面卡住
 		if (paths.Any(p => PathUtil.IsUnder(p, Path.GetTempPath())))
 		{
-			PerformDrop(paths, effect);
+			PerformDrop(paths, effect, dropIndex);
 		}
 		else
 		{
-			Dispatcher.InvokeAsync(() => PerformDrop(paths, effect));
+			Dispatcher.InvokeAsync(() => PerformDrop(paths, effect, dropIndex));
 		}
 	}
 
@@ -3772,9 +3778,31 @@ internal partial class FenceWindow : Window
 		return _subFolder == null && _dropFiles.Length == keys.Length && keys.All(p => PathUtil.AreEqual(Path.GetDirectoryName(p), Model.FolderPath));
 	}
 
-	void TrackReorder(DragEventArgs e)
+	/// <summary>
+	/// 从别处拖进来、分区又是自定义顺序时，按松手的位置插入（和在分区里拖动调整顺序一样显示插入标记），
+	/// 不用先放进来再拖一次。按名称、日期等排序的分区位置由排序决定，进入映射分区的子文件夹后也不记顺序。
+	/// </summary>
+	bool InsertsAtDrop(DragDropEffects effect) => effect != DragDropEffects.None && Model.SortBy == SortField.Custom && _subFolder == null;
+
+	/// <summary>
+	/// 把新放进来的项目（桌面项目的键或文件的完整路径）按插入序号写进自定义顺序；序号为负时不插入、照旧排在最后。
+	/// </summary>
+	void InsertIntoCustomOrder(IEnumerable<string> keys, int insertIndex)
 	{
-		if (!IsReorderDrag())
+		if (insertIndex < 0)
+		{
+			return;
+		}
+		var incoming = keys.Select(OrderKey).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+		var order = _items.Select(OrderKey).Where(k => !incoming.Contains(k, StringComparer.OrdinalIgnoreCase)).ToList();
+		order.InsertRange(Math.Clamp(insertIndex, 0, order.Count), incoming);
+		Model.CustomOrder = order;
+		_manager.SaveSoon();
+	}
+
+	void TrackReorder(DragEventArgs e, DragDropEffects effect)
+	{
+		if (!IsReorderDrag() && !InsertsAtDrop(effect))
 		{
 			InsertMarker.Visibility = Visibility.Collapsed;
 			return;
@@ -3928,7 +3956,7 @@ internal partial class FenceWindow : Window
 		return ItemOps.ChooseDropEffect(e, _manager.PrefersMove(paths, folder));
 	}
 
-	void PerformDrop(string[] paths, DragDropEffects effect)
+	void PerformDrop(string[] paths, DragDropEffects effect, int insertIndex)
 	{
 		var folder = TargetFolder;
 		if (IsDesktopFence)
@@ -3940,6 +3968,7 @@ internal partial class FenceWindow : Window
 			_manager.AssignToFence(this, expected);
 		}
 		var created = ItemOps.Transfer(_hwnd, paths, folder, effect);
+		InsertIntoCustomOrder(created, insertIndex);
 		if (IsDesktopFence && effect == DragDropEffects.Link)
 		{
 			_manager.AssignToFence(this, created);

@@ -342,7 +342,8 @@
 							<ItemsControl.ItemTemplate>
 								<DataTemplate>
 									<!-- 点击、悬停的范围是标签条的整个厚度，看得见的标签只是中间那块 -->
-									<Grid x:Name="TabHit" Background="Transparent">
+									<!-- 鼠标停一会儿提示 Shift 拖动：很多人不知道标签能这样调整顺序、拆开 -->
+									<Grid x:Name="TabHit" Background="Transparent" ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="900">
 									<Border x:Name="Tab" Margin="0,6,4,6" Padding="8,0" CornerRadius="5" Background="Transparent">
 										<DockPanel x:Name="TabContent">
 											<!-- 映射分区的标签带上映射图标；整组共用的标题栏不再放映射角标，切换标签时标签不会左右跳 -->

@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
 using MyDesktop.Native;
 using static MyDesktop.Native.NativeMethods;
 
@@ -26,6 +27,28 @@ internal partial class MessageDialog : Window
 	/// </summary>
 	public static int Show(string title, string message, params string[] buttons)
 	{
+		var dialog = Create(title, message, buttons);
+		dialog.ShowDialog();
+		return dialog._result;
+	}
+
+	/// <summary>
+	/// 同 Show，但不是模态的：等用户点按钮期间，设置窗口、托盘菜单等照常能用（它们在有模态对话框时不响应）。
+	/// 用于更新提示这类不要求先处理完的询问；用嵌套的消息循环等窗口关掉，调用方照样拿到结果。
+	/// </summary>
+	public static int ShowModeless(string title, string message, params string[] buttons)
+	{
+		var dialog = Create(title, message, buttons);
+		var frame = new DispatcherFrame();
+		dialog.Closed += (_, _) => frame.Continue = false;
+		dialog.Show();
+		dialog.Activate();
+		Dispatcher.PushFrame(frame);
+		return dialog._result;
+	}
+
+	static MessageDialog Create(string title, string message, string[] buttons)
+	{
 		var dialog = new MessageDialog { Title = title };
 		dialog.HeaderText.Text = title;
 		dialog.SetMessage(message);
@@ -51,8 +74,7 @@ internal partial class MessageDialog : Window
 			};
 			dialog.ButtonPanel.Children.Add(button);
 		}
-		dialog.ShowDialog();
-		return dialog._result;
+		return dialog;
 	}
 
 	/// <summary>

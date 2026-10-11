@@ -152,7 +152,8 @@ internal sealed class Updater
 				message += $"\n\n更新内容：\n{release.Notes}";
 			}
 			// 最后一个按钮响应 Esc，放「稍后」
-			int choice = MessageDialog.Show("发现新版本", message, "立即更新", "跳过此版本", "稍后");
+			// 不用模态：对话框开着时设置、托盘菜单照常能用
+			int choice = MessageDialog.ShowModeless("发现新版本", message, "立即更新", "跳过此版本", "稍后");
 			if (choice == 1)
 			{
 				_manager.Settings.SkippedVersion = release.Tag;
