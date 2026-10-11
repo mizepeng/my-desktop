@@ -124,6 +124,13 @@
 							</StackPanel>
 						</CheckBox>
 					</Border>
+					<!-- 这一页的设置恢复成默认值（见 ResetPage_Click） -->
+					<Border Style="{StaticResource Card}" Margin="0,16,0,4">
+						<DockPanel>
+							<Button VerticalAlignment="Center" Content="恢复默认" DockPanel.Dock="Right" Tag="常规" Click="ResetPage_Click" />
+							<TextBlock VerticalAlignment="Center" Text="把这一页的设置恢复成默认值" />
+						</DockPanel>
+					</Border>
 				</StackPanel>
 
 				<!-- 桌面 -->
@@ -177,6 +184,13 @@
 								<TextBlock Style="{StaticResource Hint}" Text="只在桌面空白处右键时出现；用安装包安装时，Windows 11 的新式菜单里也会出现" />
 							</StackPanel>
 						</CheckBox>
+					</Border>
+					<!-- 这一页的设置恢复成默认值（见 ResetPage_Click） -->
+					<Border Style="{StaticResource Card}" Margin="0,16,0,4">
+						<DockPanel>
+							<Button VerticalAlignment="Center" Content="恢复默认" DockPanel.Dock="Right" Tag="桌面" Click="ResetPage_Click" />
+							<TextBlock VerticalAlignment="Center" Text="把这一页的设置恢复成默认值" />
+						</DockPanel>
 					</Border>
 				</StackPanel>
 
@@ -284,6 +298,13 @@
 							<Button Margin="0,0,8,0" Content="新建文件夹映射分区…" Click="NewPortal_Click" />
 							<Button Content="一键整理桌面…" Click="Organize_Click" />
 						</WrapPanel>
+					</Border>
+					<!-- 这一页的设置恢复成默认值（见 ResetPage_Click） -->
+					<Border Style="{StaticResource Card}" Margin="0,16,0,4">
+						<DockPanel>
+							<Button VerticalAlignment="Center" Content="恢复默认" DockPanel.Dock="Right" Tag="分区" Click="ResetPage_Click" />
+							<TextBlock VerticalAlignment="Center" Text="把这一页的设置恢复成默认值" />
+						</DockPanel>
 					</Border>
 				</StackPanel>
 
@@ -401,6 +422,13 @@
 								<TextBlock Text="所有分区改用默认外观" />
 								<TextBlock Style="{StaticResource Hint}" Text="清除各分区单独设置的颜色、不透明度、毛玻璃、边框和图标大小" />
 							</StackPanel>
+						</DockPanel>
+					</Border>
+					<!-- 这一页的设置恢复成默认值（见 ResetPage_Click） -->
+					<Border Style="{StaticResource Card}" Margin="0,16,0,4">
+						<DockPanel>
+							<Button VerticalAlignment="Center" Content="恢复默认" DockPanel.Dock="Right" Tag="外观" Click="ResetPage_Click" />
+							<TextBlock VerticalAlignment="Center" Text="把这一页的设置恢复成默认值" />
 						</DockPanel>
 					</Border>
 				</StackPanel>

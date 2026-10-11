@@ -1629,7 +1629,11 @@ internal partial class FenceWindow : Window
 		Frame.BorderBrush = _frameBorder;
 		Frame.CornerRadius = new CornerRadius(Settings.CornerRadius);
 		UpdateBlur();
-		TitleBar.Background = Frozen(light ? Color.FromArgb(0x12, 0, 0, 0) : Color.FromArgb(0x30, 0, 0, 0));
+		// 标题栏的灰底随背景不透明度一起变淡：默认的 45% 及以上和原来一样，低于 45% 按比例减，调到 0% 时几乎看不见，
+		// 背景调成全透明、只留图标时不会剩一条灰底；至少留 1/255，标题栏照样能拖（见上面背景色的说明）
+		double titleScale = Math.Min(1, opacity / 0.45);
+		byte titleAlpha = (byte)Math.Max(1, Math.Round((light ? 0x12 : 0x30) * titleScale));
+		TitleBar.Background = Frozen(Color.FromArgb(titleAlpha, 0, 0, 0));
 		Resources["FenceForeground"] = Frozen(light ? Color.FromRgb(0x1F, 0x1F, 0x1F) : Colors.White);
 		Resources["FenceHover"] = Frozen(light ? Color.FromArgb(0x14, 0, 0, 0) : Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF));
 		Resources["FenceSelected"] = Frozen(light ? Color.FromArgb(0x1E, 0, 0, 0) : Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF));

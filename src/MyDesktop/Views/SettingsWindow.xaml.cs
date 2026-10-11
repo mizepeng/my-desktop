@@ -570,6 +570,89 @@ internal partial class SettingsWindow : Window
 		}
 	}
 
+	/// <summary>
+	/// 「常规」「桌面」「分区」「外观」各页底部的「恢复默认」：这一页的设置改回新装时的默认值（取自新建的 AppSettings），
+	/// 照各项改动时的做法生效，再重新载入界面。「外观」页只恢复默认外观，不动各分区单独的设置（那是「全部重置」）。
+	/// </summary>
+	void ResetPage_Click(object sender, RoutedEventArgs e)
+	{
+		if (sender is not FrameworkElement { Tag: string page }
+				|| MessageDialog.Show("恢复默认", $"把「{page}」页的设置恢复成默认值吗？", "恢复默认", "取消") != 0)
+		{
+			return;
+		}
+		var defaults = new AppSettings();
+		switch (page)
+		{
+			case "常规":
+				_manager.SetAutoStart(true);
+				Settings.SearchHotkey = defaults.SearchHotkey;
+				if (Settings.HardwareAcceleration != defaults.HardwareAcceleration)
+				{
+					Settings.HardwareAcceleration = defaults.HardwareAcceleration;
+					FenceManager.ApplyRenderMode(defaults.HardwareAcceleration);
+				}
+				break;
+			case "桌面":
+				Settings.DoubleClickToHide = defaults.DoubleClickToHide;
+				Settings.StartupVisibility = defaults.StartupVisibility;
+				Settings.StartupHideTarget = defaults.StartupHideTarget;
+				Settings.DrawToCreate = defaults.DrawToCreate;
+				if (Settings.DesktopContextMenu != defaults.DesktopContextMenu)
+				{
+					Settings.DesktopContextMenu = defaults.DesktopContextMenu;
+					DesktopMenu.Apply(defaults.DesktopContextMenu);
+				}
+				_manager.SetDoubleClickTarget(defaults.DoubleClickTarget);
+				_manager.ApplyMouseHookSettings();
+				break;
+			case "分区":
+				bool hiddenChanged = Settings.ShowHiddenFiles != defaults.ShowHiddenFiles;
+				Settings.ExpandOnHover = defaults.ExpandOnHover;
+				Settings.CollapseDelay = defaults.CollapseDelay;
+				Settings.TabsFillWidth = defaults.TabsFillWidth;
+				Settings.TabAlignment = defaults.TabAlignment;
+				Settings.SwitchTabOnHover = defaults.SwitchTabOnHover;
+				Settings.TabHoverDelay = defaults.TabHoverDelay;
+				Settings.SnapToEdges = defaults.SnapToEdges;
+				Settings.SnapToGrid = defaults.SnapToGrid;
+				Settings.SnapGap = defaults.SnapGap;
+				Settings.ShowHiddenFiles = defaults.ShowHiddenFiles;
+				_manager.ApplyCollapseDelay();
+				_manager.RefreshAllTabs();
+				if (hiddenChanged)
+				{
+					_manager.RefreshAllItems();
+				}
+				break;
+			case "外观":
+				bool arrowsChanged = Settings.ShowShortcutArrows != defaults.ShowShortcutArrows;
+				Settings.DefaultColor = defaults.DefaultColor;
+				Settings.DefaultOpacity = defaults.DefaultOpacity;
+				Settings.DefaultBlur = defaults.DefaultBlur;
+				Settings.DefaultBorder = defaults.DefaultBorder;
+				Settings.CornerRadius = defaults.CornerRadius;
+				Settings.DefaultIconSize = defaults.DefaultIconSize;
+				Settings.FenceFontFamily = defaults.FenceFontFamily;
+				Settings.FenceFontSize = defaults.FenceFontSize;
+				Settings.DesktopFontFamily = defaults.DesktopFontFamily;
+				Settings.DesktopFontSize = defaults.DesktopFontSize;
+				Settings.ShowIconNames = defaults.ShowIconNames;
+				Settings.TextShadow = defaults.TextShadow;
+				Settings.ShowShortcutArrows = defaults.ShowShortcutArrows;
+				_manager.ApplyFonts();
+				_manager.RefreshAllAppearance();
+				_manager.RefreshAllViewMode();
+				if (arrowsChanged)
+				{
+					_manager.ApplyShortcutArrows();
+				}
+				break;
+		}
+		_manager.SaveSoon();
+		LoadValues();
+	}
+
 	#endregion
 
 	#region 整理规则

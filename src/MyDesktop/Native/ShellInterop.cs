@@ -570,6 +570,12 @@ internal sealed class ShellItemSet : IDisposable
 		return result;
 	}
 
+	/// <summary>
+	/// 同 GetUIObject，但失败时不抛异常、把返回码交给调用方：项目不提供某个接口是常有的事，不一定是出错。
+	/// </summary>
+	public int TryGetUIObject(IntPtr hwnd, Guid iid, out IntPtr result) =>
+			_parent.GetUIObjectOf(hwnd, (uint)_childPidls.Length, _childPidls, ref iid, IntPtr.Zero, out result);
+
 	public void Dispose()
 	{
 		Marshal.ReleaseComObject(_parent);

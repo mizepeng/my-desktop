@@ -196,6 +196,12 @@ internal sealed class ItemDropForwarder
 		}
 	}
 
+	// 取放置目标时资源管理器表示“这个项目不接受放置”的返回码：有些文件带着可放置的属性，真去取时却回答不支持，
+	// 资源管理器自己也不让往上面放，是正常情况，不记警告
+	const int E_NOTIMPL = unchecked((int)0x80004001);
+	const int E_NOINTERFACE = unchecked((int)0x80004002);
+	const int DV_E_FORMATETC = unchecked((int)0x80040064);
+
 	static IOleDropTarget? CreateTarget(IntPtr hwnd, FenceItem item, bool desktop)
 	{
 		try
@@ -205,7 +211,12 @@ internal sealed class ItemDropForwarder
 			{
 				return null;
 			}
-			var ptr = set.GetUIObject(hwnd, typeof(IOleDropTarget).GUID);
+			int hr = set.TryGetUIObject(hwnd, typeof(IOleDropTarget).GUID, out var ptr);
+			if (hr is E_NOTIMPL or E_NOINTERFACE or DV_E_FORMATETC)
+			{
+				return null;
+			}
+			Marshal.ThrowExceptionForHR(hr);
 			try
 			{
 				return (IOleDropTarget)Marshal.GetObjectForIUnknown(ptr);

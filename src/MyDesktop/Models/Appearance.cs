@@ -21,7 +21,7 @@ public static class Appearance
 		("云朵白", "#F5F5F5"),
 	];
 
-	public static readonly int[] OpacityPresets = [10, 25, 40, 55, 70, 85, 100];
+	public static readonly int[] OpacityPresets = [0, 10, 25, 40, 55, 70, 85, 100];
 
 	/// <summary>
 	/// 列表视图下的图标尺寸（DIP）。
