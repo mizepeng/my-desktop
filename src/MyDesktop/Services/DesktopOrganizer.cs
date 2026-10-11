@@ -195,7 +195,7 @@ internal sealed class DesktopOrganizer : IDisposable
 	}
 
 	/// <summary>
-	/// 启动动画里一个图标从资源管理器桌面上的原处飞进分区；分区里看不到它的格子时飞向分区中央并淡出。
+	/// 启动动画里一个图标从资源管理器桌面上的原处飞进分区；分区里看不到它的格子时飞向分区中央（没显示的标签飞向它的标签）并淡出。
 	/// </summary>
 	static async Task FlyInAsync(FenceWindow window, string key, FlyingIcon flying, RECT source, TimeSpan delay)
 	{
@@ -203,7 +203,7 @@ internal sealed class DesktopOrganizer : IDisposable
 		{
 			await Task.Delay(delay);
 			var target = window.GetIconRect(key);
-			var to = target ?? FlyingIcon.CenteredIn(window.GetBounds(), source.Width / 2, source.Height / 2);
+			var to = target ?? FlyingIcon.CenteredIn(window.FlightFallbackRect(), source.Width / 2, source.Height / 2);
 			await flying.FlyAsync(source, to, fadeIn: false, fadeOut: target == null);
 		}
 		finally
@@ -214,7 +214,7 @@ internal sealed class DesktopOrganizer : IDisposable
 	}
 
 	/// <summary>
-	/// 一个图标从桌面飞进分区；分区里看不到它的格子时（分区小了要滚动、卷起了）飞向分区中央并淡出。
+	/// 一个图标从桌面飞进分区；分区里看不到它的格子时（分区小了要滚动、卷起了）飞向分区中央并淡出，没显示的标签飞向它的标签。
 	/// </summary>
 	async Task FlyAsync(FenceWindow window, string key, (RECT Rect, ImageSource Icon) source, TimeSpan delay)
 	{
@@ -225,7 +225,7 @@ internal sealed class DesktopOrganizer : IDisposable
 			// 等分区排好版，才知道图标落在哪一格
 			await Dispatcher.Yield(DispatcherPriority.Loaded);
 			var target = window.GetIconRect(key);
-			var to = target ?? FlyingIcon.CenteredIn(window.GetBounds(), source.Rect.Width / 2, source.Rect.Height / 2);
+			var to = target ?? FlyingIcon.CenteredIn(window.FlightFallbackRect(), source.Rect.Width / 2, source.Rect.Height / 2);
 			flying = new FlyingIcon(source.Icon, _manager.FlightInsertAfter());
 			flying.Place(source.Rect, 1);
 			// 桌面原处的图标与飞行的图标同时换手

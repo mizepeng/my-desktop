@@ -136,6 +136,14 @@ internal static class NativeMethods
 	public const int ASFW_ANY = -1;
 	public const int DWMWA_CLOAK = 13;
 	public const int DWMWA_CLOAKED = 14;
+	public const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+	public const int DWMWCP_ROUND = 2;
+	public const int DWMWCP_ROUNDSMALL = 3;
+	public const int DWMWCP_DONOTROUND = 1;
+	public const int DWMWA_BORDER_COLOR = 34;
+	public const int DWMWA_COLOR_NONE = unchecked((int)0xFFFFFFFE);
+	public const int WCA_ACCENT_POLICY = 19;
+	public const int ACCENT_ENABLE_ACRYLICBLURBEHIND = 4;
 
 	public const uint MONITOR_DEFAULTTONULL = 0;
 	public const uint MONITOR_DEFAULTTOPRIMARY = 1;
@@ -146,6 +154,7 @@ internal static class NativeMethods
 
 	public const uint GW_HWNDNEXT = 2;
 	public const uint GW_HWNDPREV = 3;
+	public const uint GW_OWNER = 4;
 	public const uint GA_ROOT = 2;
 
 	public const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
@@ -236,8 +245,30 @@ internal static class NativeMethods
 	[DllImport("user32.dll")]
 	public static extern bool DestroyWindow(IntPtr hwnd);
 
+	[DllImport("user32.dll", EntryPoint = "RegisterClassW", CharSet = CharSet.Unicode, SetLastError = true)]
+	public static extern ushort RegisterClass(ref WNDCLASS windowClass);
+
+	[DllImport("user32.dll", EntryPoint = "DefWindowProcW")]
+	public static extern IntPtr DefWindowProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+	public delegate IntPtr WindowProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+	[DllImport("user32.dll")]
+	public static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint colorKey, byte alpha, uint flags);
+
+	public const uint LWA_ALPHA = 0x2;
+
 	[DllImport("user32.dll", SetLastError = true)]
 	public static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int cx, int cy, uint flags);
+
+	[DllImport("user32.dll", SetLastError = true)]
+	public static extern IntPtr BeginDeferWindowPos(int count);
+
+	[DllImport("user32.dll", SetLastError = true)]
+	public static extern IntPtr DeferWindowPos(IntPtr info, IntPtr hwnd, IntPtr insertAfter, int x, int y, int cx, int cy, uint flags);
+
+	[DllImport("user32.dll", SetLastError = true)]
+	public static extern bool EndDeferWindowPos(IntPtr info);
 
 	[DllImport("user32.dll")]
 	public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
@@ -271,6 +302,12 @@ internal static class NativeMethods
 
 	[DllImport("dwmapi.dll")]
 	public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+	/// <summary>
+	/// 系统未公开的接口，设置窗口的合成效果（亚克力等）；窗口没激活时也有效，DWM 的系统背景材质（DWMWA_SYSTEMBACKDROP_TYPE）没激活时退回纯色（实测）。
+	/// </summary>
+	[DllImport("user32.dll")]
+	public static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WINDOWCOMPOSITIONATTRIBDATA data);
 
 	/// <summary>
 	/// 等到 DWM 下一次把画面送到屏幕上之后才返回，紧接着的改动就会在同一次刷新里生效。
@@ -681,6 +718,38 @@ internal struct RECT
 	public readonly bool Contains(POINT p) => p.X >= Left && p.X < Right && p.Y >= Top && p.Y < Bottom;
 
 	public readonly RECT Inflate(int size) => new(Left - size, Top - size, Right + size, Bottom + size);
+}
+
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+internal struct WNDCLASS
+{
+	public uint style;
+	public NativeMethods.WindowProc lpfnWndProc;
+	public int cbClsExtra;
+	public int cbWndExtra;
+	public IntPtr hInstance;
+	public IntPtr hIcon;
+	public IntPtr hCursor;
+	public IntPtr hbrBackground;
+	public string? lpszMenuName;
+	public string lpszClassName;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct ACCENT_POLICY
+{
+	public int AccentState;
+	public int AccentFlags;
+	public int GradientColor;
+	public int AnimationId;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct WINDOWCOMPOSITIONATTRIBDATA
+{
+	public int Attribute;
+	public IntPtr Data;
+	public int SizeOfData;
 }
 
 [StructLayout(LayoutKind.Sequential)]

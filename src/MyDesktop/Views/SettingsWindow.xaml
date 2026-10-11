@@ -333,12 +333,23 @@
 						</DockPanel>
 					</Border>
 					<Border Style="{StaticResource Card}">
-						<CheckBox x:Name="BlurBox" Click="Setting_Changed">
-							<StackPanel>
-								<TextBlock Text="毛玻璃背景" />
-								<TextBlock Style="{StaticResource Hint}" Text="分区后面的壁纸模糊后透出来，不透明度越低越通透；用动态壁纸或视频壁纸时自动改为半透明" />
-							</StackPanel>
-						</CheckBox>
+						<StackPanel>
+							<DockPanel>
+								<ComboBox x:Name="BackgroundBox" Width="190" DockPanel.Dock="Right" SelectionChanged="BackgroundBox_SelectionChanged" />
+								<TextBlock VerticalAlignment="Center" Text="背景效果" />
+							</DockPanel>
+							<TextBlock x:Name="BackgroundHint" Margin="0,6,0,0" Style="{StaticResource Hint}" />
+						</StackPanel>
+					</Border>
+					<Border x:Name="BlurRadiusCard" Style="{StaticResource Card}">
+						<StackPanel>
+							<DockPanel>
+								<TextBlock x:Name="BlurRadiusText" Width="52" VerticalAlignment="Center" DockPanel.Dock="Right" TextAlignment="Right" />
+								<TextBlock Width="80" VerticalAlignment="Center" DockPanel.Dock="Left" Text="模糊程度" />
+								<Slider x:Name="BlurRadiusSlider" IsSnapToTickEnabled="True" Maximum="12" Minimum="1" TickFrequency="1" ValueChanged="BlurRadiusSlider_ValueChanged" />
+							</DockPanel>
+							<TextBlock x:Name="BlurRadiusHint" Style="{StaticResource Hint}" Text="只对毛玻璃有效，系统亚克力的模糊程度是固定的" />
+						</StackPanel>
 					</Border>
 					<Border Style="{StaticResource Card}">
 						<CheckBox x:Name="BorderBox" Click="Setting_Changed">
@@ -348,10 +359,17 @@
 
 					<TextBlock Style="{StaticResource SectionTitle}" Text="圆角大小" />
 					<Border Style="{StaticResource Card}">
-						<DockPanel>
-							<TextBlock x:Name="RadiusText" Width="52" VerticalAlignment="Center" DockPanel.Dock="Right" TextAlignment="Right" />
-							<Slider x:Name="RadiusSlider" IsSnapToTickEnabled="True" Maximum="16" Minimum="0" TickFrequency="1" ValueChanged="RadiusSlider_ValueChanged" />
-						</DockPanel>
+						<StackPanel>
+							<DockPanel x:Name="RadiusSliderPanel">
+								<TextBlock x:Name="RadiusText" Width="52" VerticalAlignment="Center" DockPanel.Dock="Right" TextAlignment="Right" />
+								<Slider x:Name="RadiusSlider" IsSnapToTickEnabled="True" Maximum="16" Minimum="0" TickFrequency="1" ValueChanged="RadiusSlider_ValueChanged" />
+							</DockPanel>
+							<!-- 系统亚克力只能用 DWM 窗口圆角的三档 -->
+							<DockPanel x:Name="RadiusChoicePanel">
+								<ComboBox x:Name="RadiusChoiceBox" Width="150" DockPanel.Dock="Right" SelectionChanged="RadiusChoiceBox_SelectionChanged" />
+								<TextBlock VerticalAlignment="Center" Style="{StaticResource Hint}" Text="系统亚克力只有三档圆角" />
+							</DockPanel>
+						</StackPanel>
 					</Border>
 
 					<TextBlock Style="{StaticResource SectionTitle}" Text="图标与文字" />

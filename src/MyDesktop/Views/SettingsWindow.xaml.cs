@@ -49,9 +49,39 @@ internal partial class SettingsWindow : Window
 		_rules = new ObservableCollection<OrganizeRule>(manager.Settings.Rules);
 		RulesList.ItemsSource = _rules;
 		LoadValues();
+		BlockComboBoxWheel();
+	}
+
+	/// <summary>
+	/// 下拉框没展开时滚轮不改选项（鼠标停在下拉框上滚动页面，很容易误改设置），交给页面滚动；展开后照常滚动选项列表。
+	/// </summary>
+	void BlockComboBoxWheel()
+	{
+		foreach (var box in new[] { DoubleClickTargetBox, StartupVisibilityBox, StartupHideTargetBox, TabAlignmentBox,
+				BackgroundBox, RadiusChoiceBox, IconSizeBox, FenceFontBox, DesktopFontBox })
+		{
+			box.PreviewMouseWheel += ComboBox_PreviewMouseWheel;
+		}
 	}
 
 	AppSettings Settings => _manager.Settings;
+
+	void ComboBox_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+	{
+		if (sender is ComboBox { IsDropDownOpen: false } box)
+		{
+			e.Handled = true;
+			// 阻止下拉框改选项，把滚轮交给父级，让设置页面照常滚动
+			if (VisualTreeHelper.GetParent(box) is UIElement parent)
+			{
+				parent.RaiseEvent(new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
+				{
+					RoutedEvent = MouseWheelEvent,
+					Source = box,
+				});
+			}
+		}
+	}
 
 	void LoadValues()
 	{
@@ -81,7 +111,8 @@ internal partial class SettingsWindow : Window
 		ShowHiddenBox.IsChecked = Settings.ShowHiddenFiles;
 		AutoOrganizeBox.IsChecked = Settings.AutoOrganize;
 		TextShadowBox.IsChecked = Settings.TextShadow;
-		BlurBox.IsChecked = Settings.DefaultBlur;
+		BackgroundBox.ItemsSource = Enum.GetValues<BackgroundEffect>().Select(b => b.DisplayName()).ToList();
+		BackgroundBox.SelectedIndex = (int)Settings.DefaultBackground;
 		BorderBox.IsChecked = Settings.DefaultBorder;
 		LoadFonts();
 		FenceFontSizeSlider.Value = Settings.FenceFontSize;
@@ -92,6 +123,9 @@ internal partial class SettingsWindow : Window
 		AutoUpdateBox.IsChecked = Settings.AutoCheckUpdates;
 		OpacitySlider.Value = Math.Round(Settings.DefaultOpacity * 100);
 		RadiusSlider.Value = Settings.CornerRadius;
+		RadiusChoiceBox.ItemsSource = RadiusChoices.Select(c => c.Name).ToList();
+		BlurRadiusSlider.Value = Settings.BlurRadius;
+		UpdateBlurControls();
 		SnapGapSlider.Value = Settings.SnapGap;
 		IconSizeBox.ItemsSource = Enum.GetValues<IconSizeMode>().Select(s => s.DisplayName()).ToList();
 		IconSizeBox.SelectedIndex = (int)Settings.DefaultIconSize;
@@ -233,8 +267,6 @@ internal partial class SettingsWindow : Window
 		bool textShadow = TextShadowBox.IsChecked == true;
 		bool hiddenChanged = Settings.ShowHiddenFiles != showHidden;
 		bool shadowChanged = Settings.TextShadow != textShadow;
-		bool blur = BlurBox.IsChecked == true;
-		bool blurChanged = Settings.DefaultBlur != blur;
 		bool border = BorderBox.IsChecked == true;
 		bool borderChanged = Settings.DefaultBorder != border;
 		bool arrows = ShortcutArrowBox.IsChecked == true;
@@ -253,7 +285,6 @@ internal partial class SettingsWindow : Window
 		Settings.AutoOrganize = AutoOrganizeBox.IsChecked == true;
 		Settings.ShowHiddenFiles = showHidden;
 		Settings.TextShadow = textShadow;
-		Settings.DefaultBlur = blur;
 		Settings.DefaultBorder = border;
 		Settings.ShowShortcutArrows = arrows;
 		Settings.DesktopContextMenu = desktopMenu;
@@ -270,7 +301,7 @@ internal partial class SettingsWindow : Window
 		{
 			_manager.RefreshAllItems();
 		}
-		if (shadowChanged || blurChanged || borderChanged)
+		if (shadowChanged || borderChanged)
 		{
 			_manager.RefreshAllAppearance();
 		}
@@ -479,6 +510,74 @@ internal partial class SettingsWindow : Window
 		_manager.SaveSoon();
 	}
 
+	/// <summary>
+	/// 系统亚克力的三档圆角（DWM 窗口圆角）：名称和对应的圆角大小。
+	/// </summary>
+	static readonly (string Name, double Radius)[] RadiusChoices = [("直角", 0), ("小圆角", 4), ("圆角", 8)];
+
+	void RadiusChoiceBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+	{
+		if (_loading || RadiusChoiceBox.SelectedIndex < 0)
+		{
+			return;
+		}
+		Settings.CornerRadius = RadiusChoices[RadiusChoiceBox.SelectedIndex].Radius;
+		_loading = true;
+		RadiusSlider.Value = Settings.CornerRadius;
+		_loading = false;
+		UpdateSliderTexts();
+		_manager.RefreshAllAppearance();
+		_manager.SaveSoon();
+	}
+
+	void BlurRadiusSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+	{
+		if (_loading || BlurRadiusText == null)
+		{
+			return;
+		}
+		UpdateSliderTexts();
+		Settings.BlurRadius = BlurRadiusSlider.Value;
+		_manager.Wallpaper.BlurRadius = Settings.BlurRadius;
+		_manager.Wallpaper.Refresh();
+		_manager.SaveSoon();
+	}
+
+	void BackgroundBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+	{
+		if (_loading || BackgroundBox.SelectedIndex < 0)
+		{
+			return;
+		}
+		Settings.DefaultBackground = (BackgroundEffect)BackgroundBox.SelectedIndex;
+		UpdateBlurControls();
+		_manager.RefreshAllAppearance();
+		_manager.SaveSoon();
+	}
+
+	/// <summary>
+	/// 背景效果的说明跟着选项换；系统亚克力时圆角改成三选一；不是毛玻璃时模糊程度拉条变灰。
+	/// </summary>
+	void UpdateBlurControls()
+	{
+		BackgroundHint.Text = Settings.DefaultBackground switch
+		{
+			BackgroundEffect.Translucent => "只有背景颜色，后面的壁纸原样透出来",
+			BackgroundEffect.Blur => "分区后面的壁纸模糊后透出来，不透明度越低越通透；用动态壁纸或视频壁纸时自动改为半透明",
+			BackgroundEffect.Acrylic => "由系统实时模糊，动态壁纸、视频壁纸也能透出来；用的是系统未公开的功能，可能有显示问题，以后的 Windows 版本也可能失效；"
+					+ "圆角只有直角、小圆角、圆角三档。系统关掉透明效果或开着节电模式时没有模糊",
+		};
+		bool acrylic = Settings.DefaultBackground == BackgroundEffect.Acrylic;
+		RadiusSliderPanel.Visibility = acrylic ? Visibility.Collapsed : Visibility.Visible;
+		RadiusChoicePanel.Visibility = acrylic ? Visibility.Visible : Visibility.Collapsed;
+		bool loading = _loading;
+		_loading = true;
+		RadiusChoiceBox.SelectedIndex = Settings.CornerRadius <= 0 ? 0 : Settings.CornerRadius <= 4 ? 1 : 2;
+		_loading = loading;
+		BlurRadiusCard.IsEnabled = Settings.DefaultBackground == BackgroundEffect.Blur;
+		BlurRadiusHint.Visibility = acrylic ? Visibility.Visible : Visibility.Collapsed;
+	}
+
 	void SnapGapSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
 	{
 		if (_loading || SnapGapText == null)
@@ -546,6 +645,7 @@ internal partial class SettingsWindow : Window
 		DesktopFontSizeText.Text = $"{DesktopFontSizeSlider.Value:0}";
 		OpacityText.Text = $"{OpacitySlider.Value:0}%";
 		RadiusText.Text = $"{RadiusSlider.Value:0}";
+		BlurRadiusText.Text = $"{BlurRadiusSlider.Value:0}";
 		SnapGapText.Text = SnapGapSlider.Value == 0 ? "紧贴" : $"{SnapGapSlider.Value:0}";
 		TabHoverDelayText.Text = TabHoverDelaySlider.Value == 0 ? "立即" : $"{TabHoverDelaySlider.Value:0} 毫秒";
 		CollapseDelayText.Text = $"{CollapseDelaySlider.Value:0} 毫秒";
@@ -629,7 +729,10 @@ internal partial class SettingsWindow : Window
 				bool arrowsChanged = Settings.ShowShortcutArrows != defaults.ShowShortcutArrows;
 				Settings.DefaultColor = defaults.DefaultColor;
 				Settings.DefaultOpacity = defaults.DefaultOpacity;
-				Settings.DefaultBlur = defaults.DefaultBlur;
+				Settings.DefaultBackground = defaults.DefaultBackground;
+				Settings.BlurRadius = defaults.BlurRadius;
+				_manager.Wallpaper.BlurRadius = defaults.BlurRadius;
+				_manager.Wallpaper.Refresh();
 				Settings.DefaultBorder = defaults.DefaultBorder;
 				Settings.CornerRadius = defaults.CornerRadius;
 				Settings.DefaultIconSize = defaults.DefaultIconSize;

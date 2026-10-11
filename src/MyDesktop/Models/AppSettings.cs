@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace MyDesktop.Models;
 
 public enum SortField
@@ -65,6 +67,25 @@ public enum StartupVisibility
 	/// 和上次退出时一样（AppSettings.LastHidden）。
 	/// </summary>
 	Restore,
+}
+
+/// <summary>
+/// 分区的背景效果。
+/// </summary>
+public enum BackgroundEffect
+{
+	/// <summary>
+	/// 只有背景颜色。
+	/// </summary>
+	Translucent,
+	/// <summary>
+	/// 自己画的毛玻璃：背景颜色下面铺一层模糊后的壁纸（Services/WallpaperBlur）。
+	/// </summary>
+	Blur,
+	/// <summary>
+	/// 系统亚克力（实验性，Views/AcrylicBackdrop）：能透出动态壁纸，用的是系统未公开的接口。
+	/// </summary>
+	Acrylic,
 }
 
 /// <summary>
@@ -208,10 +229,29 @@ public sealed class AppSettings
 
 	public IconSizeMode DefaultIconSize { get; set; } = IconSizeMode.Medium;
 
+	public BackgroundEffect DefaultBackground { get; set; } = BackgroundEffect.Blur;
+
 	/// <summary>
-	/// 分区背景默认用毛玻璃：背景颜色下面铺一层模糊后的壁纸。
+	/// 1.2.0 及以前的「毛玻璃背景」开关：只读不写，关着的改成半透明。
 	/// </summary>
-	public bool DefaultBlur { get; set; } = true;
+	[JsonPropertyName("DefaultBlur")]
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+	public bool? LegacyDefaultBlur
+	{
+		get => null;
+		set
+		{
+			if (value == false)
+			{
+				DefaultBackground = BackgroundEffect.Translucent;
+			}
+		}
+	}
+
+	/// <summary>
+	/// 自己画的毛玻璃的模糊程度：屏幕上的模糊半径约为它的 8 倍（物理像素），默认 6 约 50 像素。系统亚克力的模糊程度是固定的。
+	/// </summary>
+	public double BlurRadius { get; set; } = 6;
 
 	/// <summary>
 	/// 分区默认显示边框；默认不显示。
@@ -354,7 +394,24 @@ public sealed class FenceSettings
 
 	public double? Opacity { get; set; }
 
-	public bool? Blur { get; set; }
+	public BackgroundEffect? Background { get; set; }
+
+	/// <summary>
+	/// 1.2.0 及以前单独设置的「毛玻璃背景」开关：只读不写，开着的改成毛玻璃、关着的改成半透明。
+	/// </summary>
+	[JsonPropertyName("Blur")]
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+	public bool? LegacyBlur
+	{
+		get => null;
+		set
+		{
+			if (value is bool blur)
+			{
+				Background = blur ? BackgroundEffect.Blur : BackgroundEffect.Translucent;
+			}
+		}
+	}
 
 	public bool? Border { get; set; }
 

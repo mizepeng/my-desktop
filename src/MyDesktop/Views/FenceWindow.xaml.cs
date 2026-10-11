@@ -65,6 +65,8 @@ internal partial class FenceWindow : Window
 	ImageBrush? _blurBrush;
 	// 拖动或调整大小期间毛玻璃暂时淡出
 	bool _blurHidden;
+	// 毛玻璃改用系统亚克力时垫在下面的窗口
+	AcrylicBackdrop? _backdrop;
 	bool _folderExisted;
 	// 映射分区里进入的子文件夹；为空时显示映射的文件夹本身
 	string? _subFolder;
@@ -229,6 +231,11 @@ internal partial class FenceWindow : Window
 	public IntPtr Handle => _hwnd;
 
 	/// <summary>
+	/// 亚克力窗口（没用系统亚克力时为 0），查层级问题用。
+	/// </summary>
+	public IntPtr BackdropHandle => _backdrop?.Handle ?? IntPtr.Zero;
+
+	/// <summary>
 	/// 桌面分区：成员是桌面上的项目，文件留在桌面；否则为映射分区。
 	/// </summary>
 	bool IsDesktopFence => !Model.IsPortal;
@@ -307,6 +314,8 @@ internal partial class FenceWindow : Window
 		SetWindowLongPtr(_hwnd, GWL_EXSTYLE, new IntPtr((exStyle | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW));
 		long style = GetWindowLongPtr(_hwnd, GWL_STYLE).ToInt64();
 		SetWindowLongPtr(_hwnd, GWL_STYLE, new IntPtr(style & ~(WS_MINIMIZEBOX | WS_MAXIMIZEBOX)));
+		IsVisibleChanged += (_, _) => UpdateBackdrop();
+		UpdateAcrylic();
 	}
 
 	public void CloseForReal()
@@ -315,6 +324,7 @@ internal partial class FenceWindow : Window
 		StopWatcher();
 		_clickRename.Cancel();
 		_standIn?.Dispose();
+		_backdrop?.Dispose();
 		_refreshTimer.Stop();
 		_collapseTimer.Stop();
 		_buttonsTimer.Stop();
@@ -392,6 +402,7 @@ internal partial class FenceWindow : Window
 			case WM_WINDOWPOSCHANGED:
 			{
 				UpdateBlurViewbox();
+				UpdateBackdrop();
 				break;
 			}
 			case WM_ENTERSIZEMOVE:
@@ -1136,9 +1147,12 @@ internal partial class FenceWindow : Window
 
 	RectangleGeometry SetRollClip(Rect rect)
 	{
-		var clip = new RectangleGeometry(rect, Settings.CornerRadius, Settings.CornerRadius);
+		var clip = new RectangleGeometry(rect, Radius, Radius);
 		_rollClip = clip;
 		((UIElement)Content).Clip = clip;
+		// 动画期间亚克力窗口逐帧跟着裁剪改大小
+		CompositionTarget.Rendering -= OnRollFrame;
+		CompositionTarget.Rendering += OnRollFrame;
 		return clip;
 	}
 
@@ -1146,6 +1160,9 @@ internal partial class FenceWindow : Window
 	{
 		_rollClip = null;
 		((UIElement)Content).Clip = null;
+		CompositionTarget.Rendering -= OnRollFrame;
+		// 收起时紧接着就缩小窗口，这时按整个窗口摆亚克力的话会在大窗口上闪一下；等那之后再按窗口摆
+		Dispatcher.BeginInvoke(UpdateBackdrop);
 	}
 
 	void StopRollAnimation()
@@ -1190,7 +1207,7 @@ internal partial class FenceWindow : Window
 		if (shown)
 		{
 			DwmFlush();
-			SetCloaked(false);
+			CloakWindow(false);
 			_standIn?.Hide();
 		}
 	}
@@ -1211,7 +1228,7 @@ internal partial class FenceWindow : Window
 			// 截图显示出来和分区藏起来要落在同一次屏幕刷新里：截图带透明度，两个叠着显示会更暗
 			DwmFlush();
 			_standIn.Show(image, screen, _hwnd);
-			SetCloaked(true);
+			CloakWindow(true);
 			return true;
 		}
 		catch (Exception ex)
@@ -1244,12 +1261,25 @@ internal partial class FenceWindow : Window
 	/// <summary>
 	/// 用 DWM 把窗口藏起来（cloak）或取消：藏着时照常绘制，只是不显示在屏幕上，显示和隐藏都在下一次屏幕刷新时生效。
 	/// </summary>
+	/// <summary>
+	/// 用 DWM 藏起（cloak）分区，亚克力窗口一起藏。
+	/// </summary>
 	public void SetCloaked(bool cloaked)
+	{
+		CloakWindow(cloaked);
+		_backdrop?.SetCloaked(cloaked);
+	}
+
+	/// <summary>
+	/// 只藏分区本身：截图顶替时亚克力窗口照常显示，截图里没有亚克力。
+	/// </summary>
+	void CloakWindow(bool cloaked)
 	{
 		if (_hwnd == IntPtr.Zero)
 		{
 			return;
 		}
+		DesktopHost.TraceZOrder(cloaked ? "{0} 藏起（cloak）" : "{0} 取消藏起", _hwnd);
 		int value = cloaked ? 1 : 0;
 		DwmSetWindowAttribute(_hwnd, DWMWA_CLOAK, ref value, sizeof(int));
 	}
@@ -1380,7 +1410,7 @@ internal partial class FenceWindow : Window
 		ApplyTitlePlacement(edge);
 		RollButton.Content = Model.RolledUp ? "" : "";
 		RollButton.ToolTip = Model.RolledUp ? "固定展开" : "卷起";
-		double radius = Math.Max(0, Settings.CornerRadius - 1);
+		double radius = Math.Max(0, Radius - 1);
 		TitleBar.CornerRadius = collapsed ? new CornerRadius(radius) : edge switch
 		{
 			RollEdge.Top => new CornerRadius(radius, radius, 0, 0),
@@ -1455,6 +1485,55 @@ internal partial class FenceWindow : Window
 		ShowTitleText(TitleEditor.Visibility != Visibility.Visible);
 		UpdateBadges();
 	}
+
+	/// <summary>
+	/// 看不到图标格子时飞行图标飞向的范围（物理像素）：标签组里没显示的标签飞向显示着的标签标题栏上它的那个标签，其余飞向整个分区。
+	/// </summary>
+	public RECT FlightFallbackRect()
+	{
+		if (_manager.IsHiddenTab(this) && _manager.TabsOf(this).FirstOrDefault(w => !_manager.IsHiddenTab(w)) is { } shown && shown.TabRectOf(this) is { } tab)
+		{
+			return tab;
+		}
+		return GetBounds();
+	}
+
+	/// <summary>
+	/// 标题栏上 tab 那个标签的屏幕范围（物理像素）；没有这个标签或看不到时返回 null。
+	/// </summary>
+	RECT? TabRectOf(FenceWindow tab)
+	{
+		if (TabStrip.ItemsSource is not List<FenceTab> tabs || tabs.FindIndex(t => t.Window == tab) is var index && index < 0
+				|| TabStrip.ItemContainerGenerator.ContainerFromIndex(index) is not FrameworkElement { IsVisible: true } container)
+		{
+			return null;
+		}
+		// 竖放的标题栏整体旋转了 90°，两角换算到屏幕上后可能左右、上下颠倒
+		var a = container.PointToScreen(new Point(0, 0));
+		var b = container.PointToScreen(new Point(container.ActualWidth, container.ActualHeight));
+		return new RECT((int)Math.Round(Math.Min(a.X, b.X)), (int)Math.Round(Math.Min(a.Y, b.Y)), (int)Math.Round(Math.Max(a.X, b.X)), (int)Math.Round(Math.Max(a.Y, b.Y)));
+	}
+
+	// 标签的提示弹出时鼠标的位置，鼠标离开这里提示就消失
+	POINT _tabToolTipCursor;
+
+	void TabHit_ToolTipOpening(object sender, ToolTipEventArgs e) => _tabToolTipCursor = NativeMethods.GetCursorPos();
+
+	/// <summary>
+	/// 标签的提示弹出后鼠标一动就关掉，直到鼠标离开这个标签前不再弹出：提示盖在标签条旁边，挡着看别的标签和分区内容。
+	/// </summary>
+	void TabHit_MouseMove(object sender, MouseEventArgs e)
+	{
+		var hit = (FrameworkElement)sender;
+		var cursor = NativeMethods.GetCursorPos();
+		if (hit.ToolTip is ToolTip { IsOpen: true } tip && (cursor.X != _tabToolTipCursor.X || cursor.Y != _tabToolTipCursor.Y))
+		{
+			tip.IsOpen = false;
+			ToolTipService.SetIsEnabled(hit, false);
+		}
+	}
+
+	void TabHit_MouseLeave(object sender, MouseEventArgs e) => ToolTipService.SetIsEnabled((FrameworkElement)sender, true);
 
 	/// <summary>
 	/// 鼠标事件发生在哪个标签上；不在标签上时返回 null。
@@ -1627,7 +1706,7 @@ internal partial class FenceWindow : Window
 		_frameBorder = !(Model.Border ?? Settings.DefaultBorder) ? Frame.Background
 				: Frozen(light ? Color.FromArgb(0x30, 0, 0, 0) : Color.FromArgb(0x38, 0xFF, 0xFF, 0xFF));
 		Frame.BorderBrush = _frameBorder;
-		Frame.CornerRadius = new CornerRadius(Settings.CornerRadius);
+		Frame.CornerRadius = new CornerRadius(Radius);
 		UpdateBlur();
 		// 标题栏的灰底随背景不透明度一起变淡：默认的 45% 及以上和原来一样，低于 45% 按比例减，调到 0% 时几乎看不见，
 		// 背景调成全透明、只留图标时不会剩一条灰底；至少留 1/255，标题栏照样能拖（见上面背景色的说明）
@@ -1647,8 +1726,9 @@ internal partial class FenceWindow : Window
 	/// </summary>
 	void UpdateBlur()
 	{
+		UpdateAcrylic();
 		var image = _manager.Wallpaper.Image;
-		if (!(Model.Blur ?? Settings.DefaultBlur) || image == null)
+		if (BackgroundKind != BackgroundEffect.Blur || image == null)
 		{
 			_blurBrush = null;
 			BlurLayer.Background = null;
@@ -1660,11 +1740,81 @@ internal partial class FenceWindow : Window
 			_blurBrush = new ImageBrush(image) { ViewboxUnits = BrushMappingMode.Absolute, Stretch = Stretch.Fill };
 			BlurLayer.Background = _blurBrush;
 			UpdateBlurViewbox();
-			// 刚取到或换了壁纸时淡入，和系统换壁纸的过渡差不多，不会突然跳变
-			BlurLayer.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(BlurFadeInMilliseconds)));
+			// 刚取到或换了壁纸时淡入，和系统换壁纸的过渡差不多，不会突然跳变；只改了模糊程度时直接换
+			if (_manager.Wallpaper.WallpaperChanged)
+			{
+				BlurLayer.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(BlurFadeInMilliseconds)));
+			}
 			return;
 		}
 		UpdateBlurViewbox();
+	}
+
+	BackgroundEffect BackgroundKind => Model.Background ?? Settings.DefaultBackground;
+
+	bool UsesAcrylic => BackgroundKind == BackgroundEffect.Acrylic;
+
+	/// <summary>
+	/// 分区的圆角。用系统亚克力时只能取 DWM 窗口圆角的三档：直角、小圆角 4、圆角 8，分区的背景、边框跟着取同样的值，和亚克力对齐。
+	/// </summary>
+	double Radius => !UsesAcrylic ? Settings.CornerRadius : Settings.CornerRadius <= 0 ? 0 : Settings.CornerRadius <= 4 ? 4 : 8;
+
+	/// <summary>
+	/// 毛玻璃改用系统亚克力时，由 DWM 实时模糊分区后面的内容，动态壁纸也能透出来，分区的背景颜色叠在上面当作叠色。
+	/// 亚克力画在垫在分区下面的另一个窗口上（AcrylicBackdrop，原因见那里）。
+	/// </summary>
+	void UpdateAcrylic()
+	{
+		if (_hwnd == IntPtr.Zero)
+		{
+			return;
+		}
+		if (!UsesAcrylic)
+		{
+			_backdrop?.Dispose();
+			_backdrop = null;
+			return;
+		}
+		_backdrop ??= new AcrylicBackdrop();
+		_backdrop.SetCorner(Radius <= 0 ? DWMWCP_DONOTROUND : Radius <= 4 ? DWMWCP_ROUNDSMALL : DWMWCP_ROUND);
+		UpdateBackdrop();
+	}
+
+	/// <summary>
+	/// 亚克力窗口跟着分区：摆在所有分区下面，范围是分区现在露出来的部分（卷起展开的动画期间按裁剪），整体透明度跟着分区的淡入淡出。
+	/// </summary>
+	void UpdateBackdrop()
+	{
+		if (_backdrop == null)
+		{
+			return;
+		}
+		if (!IsVisible)
+		{
+			_backdrop.Hide();
+			return;
+		}
+		var bounds = GetBounds();
+		var rect = bounds;
+		if (_rollClip != null)
+		{
+			var visible = _rollClip.Rect;
+			double scale = ScaleFactor;
+			rect = new RECT(bounds.Left + (int)Math.Round(visible.Left * scale), bounds.Top + (int)Math.Round(visible.Top * scale),
+					bounds.Left + (int)Math.Round(visible.Right * scale), bounds.Top + (int)Math.Round(visible.Bottom * scale));
+		}
+		_backdrop.Show(rect, (byte)Math.Round(Math.Clamp(Opacity, 0, 1) * 255));
+	}
+
+	void OnRollFrame(object? sender, EventArgs e) => UpdateBackdrop();
+
+	protected override void OnPropertyChanged(DependencyPropertyChangedEventArgs e)
+	{
+		base.OnPropertyChanged(e);
+		if (e.Property == OpacityProperty)
+		{
+			UpdateBackdrop();
+		}
 	}
 
 	/// <summary>
@@ -3052,12 +3202,14 @@ internal partial class FenceWindow : Window
 				sub.AddSeparator();
 				sub.Add("跟随默认外观", () => SetOpacity(null), isChecked: Model.Opacity == null, radio: true);
 			});
-			menu.AddSubMenu("毛玻璃背景", sub =>
+			menu.AddSubMenu("背景效果", sub =>
 			{
-				sub.Add("开", () => SetBlur(true), isChecked: Model.Blur == true, radio: true);
-				sub.Add("关", () => SetBlur(false), isChecked: Model.Blur == false, radio: true);
+				foreach (var effect in Enum.GetValues<BackgroundEffect>())
+				{
+					sub.Add(effect.DisplayName(), () => SetBackground(effect), isChecked: Model.Background == effect, radio: true);
+				}
 				sub.AddSeparator();
-				sub.Add("跟随默认外观", () => SetBlur(null), isChecked: Model.Blur == null, radio: true);
+				sub.Add("跟随默认外观", () => SetBackground(null), isChecked: Model.Background == null, radio: true);
 			});
 			menu.AddSubMenu("边框", sub =>
 			{
@@ -3195,9 +3347,9 @@ internal partial class FenceWindow : Window
 		_manager.SaveSoon();
 	}
 
-	void SetBlur(bool? blur)
+	void SetBackground(BackgroundEffect? background)
 	{
-		Model.Blur = blur;
+		Model.Background = background;
 		ApplyAppearance();
 		_manager.SaveSoon();
 	}

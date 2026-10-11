@@ -25,14 +25,10 @@ internal sealed class WallpaperBlur
 	const string LiveSignature = "live";
 
 	/// <summary>
-	/// 按屏幕像素的 1/8 绘制再模糊：模糊后的图放大显示依然平滑，绘制和内存开销都很小。
+	/// 缩小后绘制再模糊，缩小后的模糊半径保持 6 像素：模糊后的图放大显示依然平滑，绘制和内存开销都很小。
+	/// 模糊得轻时缩得少（最多画成一半大小），模糊程度默认（6）时是 1/8；缩小后的半径太小时放大显示看得出一格一格的（实测半径 1 时）。
 	/// </summary>
-	const double ImageScale = 1 / 8.0;
-
-	/// <summary>
-	/// 模糊半径（缩小后的像素），相当于屏幕上约 50 像素。
-	/// </summary>
-	const double BlurRadius = 6;
+	const double ScaledRadius = 6;
 
 	/// <summary>
 	/// 解码壁纸文件时的最大宽度，模糊后看不出细节，没必要按原尺寸解码。
@@ -64,6 +60,19 @@ internal sealed class WallpaperBlur
 	public event Action? Changed;
 
 	/// <summary>
+	/// 模糊程度：屏幕上的模糊半径约为它的 8 倍（物理像素），默认 6 约 50 像素；改了以后调 Refresh 重画。
+	/// </summary>
+	public double BlurRadius { get; set; } = 6;
+
+	// 现在这张模糊壁纸相对屏幕像素的缩小比例
+	double _scale = 1 / 8.0;
+
+	/// <summary>
+	/// 这次换图是不是换了壁纸（而不只是改了模糊程度）：换壁纸时分区的毛玻璃淡入，只改模糊程度时直接换，拖动拉条时不会一闪一闪。
+	/// </summary>
+	public bool WallpaperChanged { get; private set; }
+
+	/// <summary>
 	/// 覆盖整个虚拟屏幕的模糊壁纸；还没读到或读取失败时为 null。
 	/// </summary>
 	public BitmapSource? Image { get; private set; }
@@ -73,7 +82,7 @@ internal sealed class WallpaperBlur
 	/// </summary>
 	public Rect ViewboxFor(RECT rect)
 	{
-		return new Rect((rect.Left - _bounds.Left) * ImageScale, (rect.Top - _bounds.Top) * ImageScale, rect.Width * ImageScale, rect.Height * ImageScale);
+		return new Rect((rect.Left - _bounds.Left) * _scale, (rect.Top - _bounds.Top) * _scale, rect.Width * _scale, rect.Height * _scale);
 	}
 
 	public void Start()
@@ -119,7 +128,8 @@ internal sealed class WallpaperBlur
 					continue;
 				}
 				var monitors = await Task.Run(ReadMonitors).WaitAsync(TimeSpan.FromSeconds(10));
-				var signature = string.Join("|", monitors.Select(m => m.Signature));
+				double radius = BlurRadius;
+				var signature = $"{radius}#" + string.Join("|", monitors.Select(m => m.Signature));
 				if (signature == _signature)
 				{
 					continue;
@@ -131,7 +141,9 @@ internal sealed class WallpaperBlur
 					SetImage(null, signature);
 					continue;
 				}
-				(var image, _bounds) = Render(monitors, images);
+				double scale = Math.Min(0.5, ScaledRadius / (radius * 8));
+				(var image, _bounds) = Render(monitors, images, scale);
+				_scale = scale;
 				SetImage(image, signature);
 			}
 			while (_pending);
@@ -153,6 +165,8 @@ internal sealed class WallpaperBlur
 			return;
 		}
 		Image = image;
+		// 签名里 # 后面是壁纸本身，前面是模糊半径
+		WallpaperChanged = _signature == null || _signature[(_signature.IndexOf('#') + 1)..] != signature[(signature.IndexOf('#') + 1)..];
 		_signature = signature;
 		Changed?.Invoke();
 	}
@@ -275,7 +289,7 @@ internal sealed class WallpaperBlur
 	/// <summary>
 	/// 各显示器分别画好、模糊，再按位置拼成覆盖整个虚拟屏幕的一张图。
 	/// </summary>
-	static (BitmapSource? Image, RECT Bounds) Render(List<MonitorWallpaper> monitors, Dictionary<string, WallpaperImage> images)
+	static (BitmapSource? Image, RECT Bounds) Render(List<MonitorWallpaper> monitors, Dictionary<string, WallpaperImage> images, double scale)
 	{
 		if (monitors.Count == 0)
 		{
@@ -287,11 +301,11 @@ internal sealed class WallpaperBlur
 		{
 			foreach (var monitor in monitors)
 			{
-				var blurred = RenderMonitor(monitor, images.GetValueOrDefault(monitor.Path));
-				dc.DrawImage(blurred, new Rect((monitor.Rect.Left - bounds.Left) * ImageScale, (monitor.Rect.Top - bounds.Top) * ImageScale, blurred.PixelWidth, blurred.PixelHeight));
+				var blurred = RenderMonitor(monitor, images.GetValueOrDefault(monitor.Path), scale);
+				dc.DrawImage(blurred, new Rect((monitor.Rect.Left - bounds.Left) * scale, (monitor.Rect.Top - bounds.Top) * scale, blurred.PixelWidth, blurred.PixelHeight));
 			}
 		}
-		var result = new RenderTargetBitmap(Scaled(bounds.Width), Scaled(bounds.Height), 96, 96, PixelFormats.Pbgra32);
+		var result = new RenderTargetBitmap(Scaled(bounds.Width, scale), Scaled(bounds.Height, scale), 96, 96, PixelFormats.Pbgra32);
 		result.Render(canvas);
 		result.Freeze();
 		return (result, bounds);
@@ -300,10 +314,10 @@ internal sealed class WallpaperBlur
 	/// <summary>
 	/// 一个显示器上的壁纸：先按契合度画出来，再模糊；四周按镜像外延一圈再模糊，免得靠近屏幕边缘的地方发暗。
 	/// </summary>
-	static BitmapSource RenderMonitor(MonitorWallpaper monitor, WallpaperImage? image)
+	static BitmapSource RenderMonitor(MonitorWallpaper monitor, WallpaperImage? image, double scale)
 	{
-		int width = Scaled(monitor.Rect.Width);
-		int height = Scaled(monitor.Rect.Height);
+		int width = Scaled(monitor.Rect.Width, scale);
+		int height = Scaled(monitor.Rect.Height, scale);
 		var area = new Rect(0, 0, width, height);
 		var sharp = new DrawingVisual();
 		using (var dc = sharp.RenderOpen())
@@ -318,7 +332,7 @@ internal sealed class WallpaperBlur
 					{
 						TileMode = TileMode.Tile,
 						ViewportUnits = BrushMappingMode.Absolute,
-						Viewport = new Rect(0, 0, image.Width * ImageScale, image.Height * ImageScale),
+						Viewport = new Rect(0, 0, image.Width * scale, image.Height * scale),
 					};
 					dc.DrawRectangle(tiles, null, area);
 				}
@@ -326,20 +340,20 @@ internal sealed class WallpaperBlur
 				{
 					// 跨屏时一张图铺满所有显示器合起来的范围，这里只画落在本显示器上的部分
 					var frame = monitor.Position == WallpaperPosition.Span
-							? new Rect((monitor.Span.Left - monitor.Rect.Left) * ImageScale, (monitor.Span.Top - monitor.Rect.Top) * ImageScale, Scaled(monitor.Span.Width), Scaled(monitor.Span.Height))
+							? new Rect((monitor.Span.Left - monitor.Rect.Left) * scale, (monitor.Span.Top - monitor.Rect.Top) * scale, Scaled(monitor.Span.Width, scale), Scaled(monitor.Span.Height, scale))
 							: area;
-					dc.DrawImage(image.Bitmap, Place(image, frame, monitor.Position));
+					dc.DrawImage(image.Bitmap, Place(image, frame, monitor.Position, scale));
 				}
 				dc.Pop();
 			}
 		}
 		var sharpBitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
 		sharpBitmap.Render(sharp);
-		var blurred = new DrawingVisual { Effect = new BlurEffect { Radius = BlurRadius, KernelType = KernelType.Gaussian, RenderingBias = RenderingBias.Quality } };
+		var blurred = new DrawingVisual { Effect = new BlurEffect { Radius = ScaledRadius, KernelType = KernelType.Gaussian, RenderingBias = RenderingBias.Quality } };
 		using (var dc = blurred.RenderOpen())
 		{
 			var mirror = new ImageBrush(sharpBitmap) { TileMode = TileMode.FlipXY, ViewportUnits = BrushMappingMode.Absolute, Viewport = area };
-			double pad = BlurRadius * 3;
+			double pad = ScaledRadius * 3;
 			dc.DrawRectangle(mirror, null, new Rect(-pad, -pad, width + pad * 2, height + pad * 2));
 		}
 		var result = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
@@ -353,13 +367,13 @@ internal sealed class WallpaperBlur
 	/// 填充、跨区时图片比画框高的，系统上面裁掉多出部分的三分之一、下面裁三分之二，不是上下居中；比画框宽的左右居中（实测，
 	/// 用偏高、偏宽、需要放大的几种测试图设成壁纸后量屏幕上的位置）。按居中算的话，毛玻璃比后面的壁纸往上偏。
 	/// </summary>
-	static Rect Place(WallpaperImage image, Rect frame, WallpaperPosition position)
+	static Rect Place(WallpaperImage image, Rect frame, WallpaperPosition position, double scale)
 	{
 		double fit = Math.Min(frame.Width / image.Width, frame.Height / image.Height);
 		double fill = Math.Max(frame.Width / image.Width, frame.Height / image.Height);
 		var (width, height) = position switch
 		{
-			WallpaperPosition.Center => (image.Width * ImageScale, image.Height * ImageScale),
+			WallpaperPosition.Center => (image.Width * scale, image.Height * scale),
 			WallpaperPosition.Stretch or WallpaperPosition.Tile => (frame.Width, frame.Height),
 			WallpaperPosition.Fit => (image.Width * fit, image.Height * fit),
 			WallpaperPosition.Fill or WallpaperPosition.Span => (image.Width * fill, image.Height * fill),
@@ -369,7 +383,7 @@ internal sealed class WallpaperBlur
 		return new Rect(frame.X + (frame.Width - width) / 2, top, width, height);
 	}
 
-	static int Scaled(int pixels) => Math.Max(1, (int)Math.Round(pixels * ImageScale));
+	static int Scaled(int pixels, double scale) => Math.Max(1, (int)Math.Round(pixels * scale));
 
 	static RECT Union(RECT a, RECT b) => new(Math.Min(a.Left, b.Left), Math.Min(a.Top, b.Top), Math.Max(a.Right, b.Right), Math.Max(a.Bottom, b.Bottom));
 

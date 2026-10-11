@@ -157,7 +157,9 @@ internal sealed class FenceManager
 			_dispatcher.InvokeAsync(() => _tray?.ShowBalloon($"快捷键 {Settings.SearchHotkey} 已被其他程序占用", "搜索桌面图标的快捷键没有生效，可以在 MyDesktop 设置里换一个。"),
 					DispatcherPriority.Background);
 		}
+		StartZOrderCheck();
 		Wallpaper.Changed += RefreshAllAppearance;
+		Wallpaper.BlurRadius = Settings.BlurRadius;
 		Wallpaper.Start();
 		NotifyIfUpgraded(firstRun);
 		// 旧版本和安装包写的开机自启 Run 项换成计划任务，不耽误接管桌面
@@ -225,6 +227,18 @@ internal sealed class FenceManager
 			LogMemory();
 		};
 		memoryLog.Start();
+		// 启动动画播完、程序空闲下来以后预热弹出窗口，见 WarmUpPopup；动画还在播就等下一次
+		var warmUp = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
+		warmUp.Tick += (_, _) =>
+		{
+			if (FlyingIcon.OpenWindows.Count > 0)
+			{
+				return;
+			}
+			warmUp.Stop();
+			_dispatcher.InvokeAsync(WarmUpPopup, DispatcherPriority.ApplicationIdle);
+		};
+		warmUp.Start();
 		// 用 --data 启动的测试实例不自动检查更新，免得和正式实例重复提示
 		if (!AppPaths.IsCustomDataDir)
 		{
@@ -236,6 +250,26 @@ internal sealed class FenceManager
 		{
 			_dispatcher.InvokeAsync(ShowWelcome, DispatcherPriority.Background);
 		}
+	}
+
+	/// <summary>
+	/// 进程里第一次打开弹出窗口（下拉框、提示、菜单）时，WPF 要初始化辅助功能（UI Automation）、同步辅助功能树，
+	/// 界面线程要多忙一两百毫秒，之后就快了：用户反馈启动后第一次打开设置窗口时，第一次展开下拉框会晚零点几秒才打开，
+	/// 性能采样显示首次展开约 230 毫秒，大部分在 AutomationPeer.UpdateSubtree 和给辅助功能客户端发通知上。
+	/// 所以在屏幕外开合一次透明的弹出窗口，把这笔开销提前付掉（测试程序实测：第一个设置窗口首次展开下拉框 175 → 23 毫秒）。
+	/// </summary>
+	void WarmUpPopup()
+	{
+		var popup = new System.Windows.Controls.Primitives.Popup
+		{
+			Placement = System.Windows.Controls.Primitives.PlacementMode.Absolute,
+			HorizontalOffset = -32000,
+			VerticalOffset = -32000,
+			AllowsTransparency = true,
+			Child = new System.Windows.Controls.Border { Width = 1, Height = 1 },
+		};
+		popup.IsOpen = true;
+		_dispatcher.InvokeAsync(() => popup.IsOpen = false, DispatcherPriority.ApplicationIdle);
 	}
 
 	void LogMemory()
@@ -797,6 +831,12 @@ internal sealed class FenceManager
 				await SwitchTabAsync(current, target, activate);
 			}
 		}
+		catch (Exception ex)
+		{
+			// 调用方大多不等这个任务，出错时记下来：记录的当前标签已经换了、画面没换，之后再切到它会被当成已是当前标签
+			Log.Error($"切换到标签「{target.Model.Title}」出错", ex);
+			throw;
+		}
 		finally
 		{
 			_switchingGroups.Remove(group);
@@ -805,6 +845,7 @@ internal sealed class FenceManager
 
 	async Task SwitchTabAsync(FenceWindow current, FenceWindow target, bool activate)
 	{
+		DesktopHost.TraceZOrder("切换标签 {0} → {1}", current.Handle, target.Handle);
 		CopyFrame(current.Model, target.Model);
 		await target.ShowInPlaceOf(current);
 		target.TakeOverFrom(current);
@@ -1637,7 +1678,7 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 清除各分区单独设置的颜色、不透明度、毛玻璃、边框和图标大小，统一跟随默认外观。
+	/// 清除各分区单独设置的颜色、不透明度、背景效果、边框和图标大小，统一跟随默认外观。
 	/// </summary>
 	public void ResetAllAppearance()
 	{
@@ -1645,7 +1686,7 @@ internal sealed class FenceManager
 		{
 			model.Color = null;
 			model.Opacity = null;
-			model.Blur = null;
+			model.Background = null;
 			model.Border = null;
 			model.IconSize = null;
 		}
@@ -2143,6 +2184,7 @@ internal sealed class FenceManager
 		// 由系统直接回调，异常不会进入 WPF 的未处理异常流程，必须就地捕获，否则进程会被终止
 		try
 		{
+			DesktopHost.TraceZOrder("前台换成 {0}", hwnd);
 			KeepFencesAboveDesktop();
 			// Explorer 调整层级可能晚于前台切换，稍后再校正一次
 			_zOrderTimer.Stop();
@@ -2166,6 +2208,7 @@ internal sealed class FenceManager
 		}
 		try
 		{
+			DesktopHost.TraceZOrder("其他程序调整了层级");
 			KeepFencesAboveDesktop();
 		}
 		catch (Exception ex)
@@ -2174,22 +2217,61 @@ internal sealed class FenceManager
 		}
 	}
 
+	/// <summary>
+	/// 查层级问题用：每 2 秒检查一次分区、亚克力窗口和桌面的上下关系（见 DesktopHost.CheckZOrder），连续两次不对才记日志，
+	/// 免得把切换标签等一两帧的中间状态当成问题；恢复正常前不重复记。
+	/// </summary>
+	void StartZOrderCheck()
+	{
+		int failures = 0;
+		var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+		timer.Tick += (_, _) =>
+		{
+			var labels = new Dictionary<IntPtr, string>();
+			var pairs = new List<(IntPtr, IntPtr)>();
+			// 没显示的标签也查：分区没显示、它的亚克力却显示着也是问题
+			foreach (var window in _windows)
+			{
+				labels[window.Handle] = $"分区「{window.Model.Title}」";
+				if (window.BackdropHandle != IntPtr.Zero)
+				{
+					labels[window.BackdropHandle] = $"亚克力「{window.Model.Title}」";
+				}
+				pairs.Add((window.Handle, window.BackdropHandle));
+			}
+			var problem = DesktopHost.CheckZOrder(pairs, labels);
+			failures = problem == null ? 0 : failures + 1;
+			if (failures == 2)
+			{
+				Log.Warn($"层级不对：{problem}");
+			}
+		};
+		timer.Start();
+	}
+
 	void KeepFencesAboveDesktop()
 	{
 		// 先摆好紧贴桌面的散放图标层，分区再压在它们之上
 		_takeover?.KeepLayersAboveDesktop();
-		var misplaced = _windows.Where(w => w.IsVisible && DesktopHost.GetInsertAfterAboveDesktop(w.Handle) != null).ToList();
-		// 每个都插到紧贴底座的位置，按从上到下的次序插，分区之间的上下次序才不变
-		var order = DesktopHost.TopToBottom(misplaced.Select(w => w.Handle));
-		foreach (var window in misplaced.OrderBy(w => order.IndexOf(w.Handle)))
+		var visible = _windows.Where(w => w.IsVisible).Select(w => w.Handle).ToList();
+		if (visible.Any(hwnd => DesktopHost.GetInsertAfterAboveDesktop(hwnd) != null))
 		{
-			window.PlaceAboveDesktop();
+			// 亚克力会整体调整，分区也必须整批同步，不能只移动落到桌面下面的那个分区
+			DesktopHost.PlaceAboveFloor(DesktopHost.TopToBottom(visible));
 		}
-		// 正在飞的图标（启动、整理、删除分区的动画）也压回分区之上，看一个就知道整批是不是被盖住了
+		// 飞行图标必须在全部可见分区之上并跟随其置顶状态，只检查是否在桌面上方会漏掉被亚克力盖住的图标
 		var flights = FlyingIcon.OpenWindows;
-		if (flights.Count > 0 && DesktopHost.GetInsertAfterAboveDesktop(flights[0]) != null)
+		if (flights.Count > 0)
 		{
-			FlyingIcon.Restack(FlightInsertAfter());
+			var insertAfter = FlightInsertAfter();
+			bool topmost = insertAfter == HWND_TOPMOST;
+			var order = DesktopHost.TopToBottom(_windows.Where(w => w.IsVisible).Select(w => w.Handle).Concat(flights));
+			if (order.Take(flights.Count).Any(hwnd => !flights.Contains(hwnd))
+					|| flights.Any(hwnd => ((GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0) != topmost)
+					|| DesktopHost.GetInsertAfterAboveDesktop(flights[0]) != null)
+			{
+				FlyingIcon.Restack(insertAfter);
+			}
 		}
 	}
 
@@ -2198,9 +2280,9 @@ internal sealed class FenceManager
 	/// </summary>
 	/// <summary>
 	/// 飞行的图标（整理、启动、删除分区的动画）在层级上排在哪个窗口之后：紧贴在最上面的分区之上、其他程序的窗口之下，
-	/// 和桌面同一层，桌面被别的窗口挡住时动画也被挡住。
+	/// 显示桌面时跟随分区临时置顶，分区回到普通窗口层后一起撤销，桌面被别的窗口挡住时动画也被挡住。
 	/// </summary>
-	public IntPtr FlightInsertAfter() => DesktopHost.InsertAfterAbove(_windows.Where(w => w.IsVisible).Select(w => w.Handle));
+	public IntPtr FlightInsertAfter() => DesktopHost.InsertAfterAbove(_windows.Where(w => w.IsVisible).Select(w => w.Handle), FlyingIcon.OpenWindows);
 
 	public void BringToFront(FenceWindow window)
 	{

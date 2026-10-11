@@ -93,6 +93,16 @@ public static class Appearance
 		};
 	}
 
+	public static string DisplayName(this BackgroundEffect effect)
+	{
+		return effect switch
+		{
+			BackgroundEffect.Translucent => "半透明",
+			BackgroundEffect.Blur => "毛玻璃",
+			BackgroundEffect.Acrylic => "系统亚克力（实验性）",
+		};
+	}
+
 	public static string DisplayName(this TabAlignment alignment)
 	{
 		return alignment switch

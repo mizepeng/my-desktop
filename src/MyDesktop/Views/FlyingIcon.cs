@@ -7,6 +7,7 @@ using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
+using MyDesktop.Core;
 using MyDesktop.Native;
 using static MyDesktop.Native.NativeMethods;
 
@@ -94,8 +95,8 @@ internal sealed class FlyingIcon
 	{
 		_icon = icon;
 		_insertAfter = insertAfter;
-		// 同 DrawFrameWindow：借用系统自带的 Static 窗口类，内容全由 UpdateLayeredWindow 提供
-		_hwnd = CreateWindowEx((uint)(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW), "Static", null,
+		// 内容全由 UpdateLayeredWindow 提供；窗口类见 DesktopHost.LayeredWindowClass（层级要在 WM_WINDOWPOSCHANGING 里定）
+		_hwnd = CreateWindowEx((uint)(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW), DesktopHost.LayeredWindowClass(), null,
 				unchecked((uint)WS_POPUP), 0, 0, 1, 1, IntPtr.Zero, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
 		if (_hwnd == IntPtr.Zero)
 		{
@@ -114,13 +115,7 @@ internal sealed class FlyingIcon
 	/// 把所有飞行图标重新排到 insertAfter 之后（见 FenceManager.FlightInsertAfter）：它们只在起飞时定一次层级，
 	/// 桌面被提到最前（刚装完点「完成」、Win+D）后会被盖住，分区放回桌面之上时它们也要跟着回来。
 	/// </summary>
-	public static void Restack(IntPtr insertAfter)
-	{
-		foreach (var hwnd in _openWindows)
-		{
-			SetWindowPos(hwnd, insertAfter, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-		}
-	}
+	public static void Restack(IntPtr insertAfter) => DesktopHost.PlaceAfter([.. _openWindows], insertAfter);
 
 	/// <summary>
 	/// 让图像正好落在屏幕上的 image 范围（物理像素），窗口四周按图像大小的比例多出阴影的边距。
@@ -157,7 +152,9 @@ internal sealed class FlyingIcon
 		if (!_placed)
 		{
 			_placed = true;
-			SetWindowPos(_hwnd, _insertAfter, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+			// 直接传插在哪个窗口之后不可靠：紧挨在分区上面的是以管理员身份运行的程序的窗口时被拒绝访问，
+			// 飞行图标留在刚创建时的最上层，盖在别的程序上面（用户反馈：装完没切回桌面也看到了飞入动画）；见 DesktopHost.SetZOrder
+			DesktopHost.PlaceAfter([_hwnd], _insertAfter);
 		}
 	}
 

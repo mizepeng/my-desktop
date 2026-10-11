@@ -1,13 +1,14 @@
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Media.Imaging;
+using MyDesktop.Core;
 using MyDesktop.Native;
 using static MyDesktop.Native.NativeMethods;
 
 namespace MyDesktop.Views;
 
 /// <summary>
-/// 分区挪动窗口左上角的那一下，顶替它显示的截图（见 FenceWindow.MoveBehindStandIn）：鼠标穿透、不抢焦点、不置顶，
+/// 分区挪动窗口左上角的那一下，顶替它显示的截图（见 FenceWindow.MoveBehindStandIn）：鼠标穿透、不抢焦点、跟分区在同一层，
 /// 层级紧贴在分区之上；像素用 UpdateLayeredWindow 一次给全，不用等 WPF 重画。
 /// </summary>
 internal sealed class StandInWindow : IDisposable
@@ -16,8 +17,8 @@ internal sealed class StandInWindow : IDisposable
 
 	public StandInWindow()
 	{
-		// 和 DrawFrameWindow 一样借用系统的 Static 窗口类：WPF 的窗口不用逐像素透明时会被去掉 WS_EX_LAYERED
-		_hwnd = CreateWindowEx((uint)(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW), "Static", null,
+		// 不用 WPF 的窗口：不用逐像素透明时会被去掉 WS_EX_LAYERED；窗口类见 DesktopHost.LayeredWindowClass（层级要在 WM_WINDOWPOSCHANGING 里定）
+		_hwnd = CreateWindowEx((uint)(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW), DesktopHost.LayeredWindowClass(), null,
 				unchecked((uint)WS_POPUP), 0, 0, 1, 1, IntPtr.Zero, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
 		if (_hwnd == IntPtr.Zero)
 		{
@@ -73,18 +74,15 @@ internal sealed class StandInWindow : IDisposable
 			}
 			DeleteDC(dc);
 		}
-		// 插到原本在 owner 上面的那个窗口后面，就是 owner 正上方；上面是置顶窗口时放到普通窗口的最上面
+		// 插到原本在 owner 上面的那个窗口后面，就是 owner 正上方；owner 在置顶层（显示桌面时）也跟着进置顶层。
+		// 插入位置在 WM_WINDOWPOSCHANGING 里定，直接传不可靠（见 DesktopHost.SetZOrder）
 		var above = GetWindow(owner, GW_HWNDPREV);
-		uint flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW;
-		if (above == _hwnd)
+		if (above != _hwnd)
 		{
-			flags |= SWP_NOZORDER;
+			bool ownerTopmost = (GetWindowLongPtr(owner, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0;
+			DesktopHost.PlaceAfter([_hwnd], above != IntPtr.Zero ? above : ownerTopmost ? HWND_TOPMOST : HWND_TOP);
 		}
-		else if (above != IntPtr.Zero && (GetWindowLongPtr(above, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0)
-		{
-			above = HWND_TOP;
-		}
-		SetWindowPos(_hwnd, above, 0, 0, 0, 0, flags);
+		SetWindowPos(_hwnd, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
 	}
 
 	public void Hide() => SetWindowPos(_hwnd, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_HIDEWINDOW);
