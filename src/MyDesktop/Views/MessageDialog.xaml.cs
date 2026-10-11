@@ -81,6 +81,12 @@ internal partial class MessageDialog : Window
 	/// 按行排出说明：空行是段落间距；以「• 」开头的行是列表项，圆点单独一列，文字折行后和第一行对齐（悬挂缩进），
 	/// 不像整段文字那样折行后从行首开始。
 	/// </summary>
+	/// <summary>
+	/// 说明里单独一行写这个，显示成一条分隔线（更新内容里新增功能、功能改进、问题修复之间用，见 Updater.FormatNotes）。
+	/// 以「# 」开头的行显示成大一号的小标题（隔了几个版本时每一版的版本号），以「## 」开头的行显示成小标题（每类更新的标题）。
+	/// </summary>
+	public const string Separator = "---";
+
 	void SetMessage(string message)
 	{
 		MessagePanel.Children.Clear();
@@ -90,6 +96,27 @@ internal partial class MessageDialog : Window
 			if (line.Trim().Length == 0)
 			{
 				gap = MessagePanel.Children.Count > 0;
+				continue;
+			}
+			if (line == Separator)
+			{
+				var rule = new Border { Height = 1, Margin = new Thickness(0, 8, 0, 8) };
+				rule.SetResourceReference(Border.BackgroundProperty, "DividerStrokeColorDefaultBrush");
+				MessagePanel.Children.Add(rule);
+				gap = false;
+				continue;
+			}
+			if (line.StartsWith("# ", StringComparison.Ordinal) || line.StartsWith("## ", StringComparison.Ordinal))
+			{
+				bool major = line[1] == ' ';
+				var title = Line(line[(major ? 2 : 3)..], new Thickness(0, gap ? 12 : 0, 0, 4));
+				title.FontWeight = FontWeights.SemiBold;
+				if (major)
+				{
+					title.FontSize = 16;
+				}
+				MessagePanel.Children.Add(title);
+				gap = false;
 				continue;
 			}
 			var margin = new Thickness(0, gap ? 12 : 0, 0, 0);

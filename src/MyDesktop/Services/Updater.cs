@@ -149,7 +149,7 @@ internal sealed class Updater
 			var message = $"MyDesktop {release.Version.ToString(3)} 已发布，当前版本 {CurrentVersion.ToString(3)}。";
 			if (release.Notes.Length > 0)
 			{
-				message += $"\n\n更新内容：\n{release.Notes}";
+				message += $"\n\n{release.Notes}";
 			}
 			// 最后一个按钮响应 Esc，放「稍后」
 			// 不用模态：对话框开着时设置、托盘菜单照常能用
@@ -227,7 +227,7 @@ internal sealed class Updater
 			{
 				return latestNotes;
 			}
-			return string.Join("\n\n", sections.OrderByDescending(x => x.Version).Select(x => $"{x.Version.ToString(3)} 版\n{x.Notes}"));
+			return string.Join("\n\n", sections.OrderByDescending(x => x.Version).Select(x => $"# {x.Version.ToString(3)} 版\n{x.Notes}"));
 		}
 		catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException)
 		{
@@ -247,13 +247,47 @@ internal sealed class Updater
 				? lines.Skip(start + 1).TakeWhile(l => !l.StartsWith('#'))
 				: lines.Where(l => !l.StartsWith('#')).Take(8);
 		var text = new StringBuilder();
+		// 按条目的种类（「新增：…」冒号前的部分）分组：每组前加小标题、条目去掉种类前缀，组与组之间加分隔线（见 MessageDialog.Separator）
+		string? kind = null;
 		foreach (var line in picked.Where(l => l.Trim().Length > 0).Take(12))
 		{
 			var plain = line.Trim().Replace("**", string.Empty).Replace("`", string.Empty);
-			text.AppendLine(plain.StartsWith("- ", StringComparison.Ordinal) ? "• " + plain[2..] : plain);
+			if (!plain.StartsWith("- ", StringComparison.Ordinal))
+			{
+				text.AppendLine(plain);
+				continue;
+			}
+			var item = plain[2..];
+			int colon = item.IndexOf('：');
+			if (colon > 0 && KindTitle(item[..colon]) is string title)
+			{
+				var itemKind = item[..colon];
+				if (itemKind != kind)
+				{
+					if (kind != null)
+					{
+						text.AppendLine(MessageDialog.Separator);
+					}
+					text.AppendLine("## " + title);
+					kind = itemKind;
+				}
+				item = item[(colon + 1)..];
+			}
+			text.AppendLine("• " + item);
 		}
 		return text.ToString().TrimEnd();
 	}
+
+	/// <summary>
+	/// 更新日志里条目的种类在更新窗口里的小标题；不是这几种时返回 null，那一条照原样列出。
+	/// </summary>
+	static string? KindTitle(string kind) => kind switch
+	{
+		"新增" => "新增功能",
+		"改进" => "功能改进",
+		"修复" => "问题修复",
+		_ => null,
+	};
 
 	void DownloadAndInstall(Release release)
 	{
