@@ -87,7 +87,7 @@ internal sealed class AcrylicBackdrop : IDisposable
 	}
 
 	/// <summary>
-	/// 显示在 rect（屏幕物理像素）处、整体透明度 alpha；层级在所有分区之下：传 HWND_BOTTOM，
+	/// 显示在 rect（屏幕物理像素）处、整体透明度 alpha；层级在所有分区之下：传 HWND_TOP，
 	/// 由 WM_WINDOWPOSCHANGING 改写成紧贴底座之上（DesktopHost.KeepBackdropAboveFloor），直接传插在哪个窗口之后不可靠（见 DesktopHost.SetZOrder）。
 	/// </summary>
 	public void Show(RECT rect, byte alpha)
@@ -100,7 +100,7 @@ internal sealed class AcrylicBackdrop : IDisposable
 		// 调整层级的过程中（比如这一批正把亚克力窗口和分区一起摆好），分区收到 WM_WINDOWPOSCHANGED 就会来这里：只改位置，
 		// 否则它会按那一批的要求再插一次，跑到刚摆好的分区上面
 		uint zOrder = DesktopHost.IsAdjustingZOrder ? SWP_NOZORDER : 0;
-		SetWindowPos(_hwnd, HWND_BOTTOM, rect.Left, rect.Top, rect.Width, rect.Height, SWP_NOACTIVATE | SWP_SHOWWINDOW | zOrder);
+		SetWindowPos(_hwnd, HWND_TOP, rect.Left, rect.Top, rect.Width, rect.Height, SWP_NOACTIVATE | SWP_SHOWWINDOW | zOrder);
 	}
 
 	public IntPtr Handle => _hwnd;

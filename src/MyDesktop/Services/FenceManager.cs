@@ -2260,7 +2260,9 @@ internal sealed class FenceManager
 		// 先摆好紧贴桌面的散放图标层，分区再压在它们之上
 		_takeover?.KeepLayersAboveDesktop();
 		var visible = _windows.Where(w => w.IsVisible).Select(w => w.Handle).ToList();
-		if (visible.Any(hwnd => DesktopHost.GetInsertAfterAboveDesktop(hwnd) != null))
+		// 分区夹在图标层和亚克力之间时，仅检查它是否在桌面上方会漏判；亚克力也必须紧贴图标层，不能隔着分区。
+		if (visible.Any(hwnd => DesktopHost.GetInsertAfterAboveDesktop(hwnd) != null)
+				|| DesktopHost.Backdrops.Any(hwnd => IsWindowVisible(hwnd) && DesktopHost.GetBackdropInsertAfter(hwnd) != null))
 		{
 			// 亚克力会整体调整，分区也必须整批同步，不能只移动落到桌面下面的那个分区
 			DesktopHost.PlaceAboveFloor(DesktopHost.TopToBottom(visible));

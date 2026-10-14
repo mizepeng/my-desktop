@@ -222,10 +222,11 @@ internal static class DesktopHost
 	/// <summary>
 	/// 逐个放到 insertAfter 的位置，一次性生效（DeferWindowPos，结果和逐个 SetWindowPos 一样，实测）：逐个挪的话中间状态可能被 DWM 合成出来，
 	/// 比如临时置顶时先挪上去的亚克力窗口压在还没挪的分区上面，分区被模糊、闪一下。
-	/// insertAfter 是具体窗口时不直接传给系统，而是先传 HWND_BOTTOM、再在各窗口的 WM_WINDOWPOSCHANGING 里改写成它（原生窗口探针实测）：
+	/// insertAfter 是具体窗口时不直接传给系统，而是先传 HWND_TOP、再在各窗口的 WM_WINDOWPOSCHANGING 里改写成它（原生窗口探针实测）：
 	/// 直接传的话，普通窗口插在置顶窗口之后调用成功却原地不动（显示桌面后切换标签，新标签留在最底下，只剩它的亚克力），
 	/// 置顶窗口插在普通窗口之后也落不到它正下方，插在以管理员身份运行的程序的窗口之后还会被拒绝访问（错误码 5）；
-	/// 在消息里改写则都对：普通窗口跟着进入置顶层、置顶窗口跟着回到普通层，都紧挨在它下面，也不受权限限制。最初的代码就是这样摆分区的。
+	/// 在消息里改写则都对：普通窗口跟着进入置顶层、置顶窗口跟着回到普通层，都紧挨在它下面，也不受权限限制。
+	/// 不能先传 HWND_BOTTOM：目标和参照都已置顶时，即使消息里改写了位置，调用仍会成功却原地不动（Win+D 后切换曾经置顶的隐藏标签，实测）。
 	/// </summary>
 	static void SetZOrder(IEnumerable<IntPtr> windows, IntPtr insertAfter)
 	{
@@ -233,7 +234,7 @@ internal static class DesktopHost
 		var list = windows.ToList();
 		insertAfter = NotOwnedBy(insertAfter, list);
 		bool special = insertAfter.ToInt64() is >= -2 and <= 1;
-		var passed = special ? insertAfter : HWND_BOTTOM;
+		var passed = special ? insertAfter : HWND_TOP;
 		TraceZOrder($"调整层级：{string.Join("、", list.Select((_, i) => $"{{{i}}}"))} 插在 {{{list.Count}}} 之后", [.. list, insertAfter]);
 		// 特殊值也登记：这批窗口自己的 WM_WINDOWPOSCHANGING 照传入的位置摆，不被 KeepAboveDesktop 等改写
 		foreach (var hwnd in list)
@@ -665,7 +666,7 @@ internal static class DesktopHost
 	}
 
 	/// <summary>
-	/// 在亚克力窗口的 WM_WINDOWPOSCHANGING 中调用（它自己摆位置时都传 HWND_BOTTOM，见 AcrylicBackdrop.Show）：
+	/// 在亚克力窗口的 WM_WINDOWPOSCHANGING 中调用（它自己摆位置时都传 HWND_TOP，见 AcrylicBackdrop.Show）：
 	/// 改写成紧贴底座之上（GetBackdropInsertAfter），已在那里或正在调整层级时不改层级。
 	/// </summary>
 	public static void KeepBackdropAboveFloor(IntPtr hwnd, IntPtr lParam)
@@ -679,7 +680,7 @@ internal static class DesktopHost
 		{
 			return;
 		}
-		// 别的窗口正在调整层级时（_lifting）分区每挪一下都会来摆亚克力窗口，这时只改位置、不动层级，免得传进来的 HWND_BOTTOM 把它压到最底下；
+		// 别的窗口正在调整层级时（_lifting）分区每挪一下都会来摆亚克力窗口，这时只改位置、不动层级，免得传进来的 HWND_TOP 把它提到分区上面；
 		// 插在自己之后的话 SetWindowPos 整个失败，位置也不会变
 		var insertAfter = _lifting ? null : GetBackdropInsertAfter(hwnd);
 		if (insertAfter is IntPtr after && after != hwnd)
@@ -748,7 +749,7 @@ internal static class DesktopHost
 	public static void PlaceAboveDesktop(IntPtr hwnd)
 	{
 		TraceZOrder("{0} 摆回桌面上方", hwnd);
-		SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+		SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 	}
 
 	/// <summary>
