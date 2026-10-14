@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本文件为在此仓库中工作的 AI 编程助手提供项目约定和开发指导。
 
 ## 项目概况
 MyDesktop：Windows 11 桌面分区整理工具（对标 Fences），.NET 10 + WPF，单个项目 `src/MyDesktop`，没有第三方依赖。没有测试项目和 lint 配置，验证靠编译加实机运行。README 面向最终用户，开发说明写在脚本开头：`installer/MyDesktop.iss`、`src/MyDesktop/ShellExtension/Pack-DesktopMenu.ps1`。
@@ -46,7 +46,7 @@ powershell -ExecutionPolicy Bypass -File installer/Build-Installer.ps1
 - 卷起与展开（包括悬停临时展开和收回）带动画（`FenceWindow.ApplyRollBounds`）：窗口先取展开时的范围，用 `UIElement.Clip` 从标题栏那一条伸展开或缩回，收起时动画结束后才缩小窗口。内容始终按展开的大小排好，不逐帧改窗口大小：透明窗口每改一次大小都要整窗重画，内容还会边动边重新排版。别处直接调 `ApplyBounds` 时动画跳到结束。标题栏在下边、右边时，展开开始和收起结束那一下要挪窗口左上角，由截图窗口（`Views/StandInWindow`）顶替（`FenceWindow.MoveBehindStandIn`，原因见「实测得出的约束」）。
 - 标签页（分区合并）：`AppSettings.Groups` 记录合并成标签页的分区组（成员顺序 + 当前标签）。每个标签仍是独立的分区窗口，同组只显示当前标签那一个，其余照常加载内容但不显示（`FenceManager.IsHiddenTab`）；位置、大小、卷起和锁定在组内同步（`FenceManager.SyncGroup`、`CopyFrame`），所以缩放、显示器布局等按单个分区写的逻辑不用改，只是同组的分区互相不算重叠。切换标签时新标签先用 DWM 藏着（cloak）显示在当前标签正下方、画好后在同一次屏幕刷新里换手（`FenceWindow.ShowInPlaceOf`、`TakeOverFrom`）：分区多是半透明的，两个叠着显示时下面那个会透出来；切换要等几帧，期间又切换时排队（`FenceManager.ActivateTabAsync`）。拖动分区时鼠标停在别的分区标题栏上松手就合并（`MergeTargetAt`、`MergeAsync`）；按住 Shift 拖标签调整顺序或拖出拆分（`DetachTab`）。
 - 搜索桌面图标：全局快捷键注册在托盘的隐藏窗口上（`TrayIcon.SetHotkey`，默认 Alt+Space，`AppSettings.SearchHotkey` 为空表示不用），弹出 `Views/SearchWindow`，候选是各桌面分区和散放图标层里的图标，不含映射分区；没输入时分「常用」和「全部」两类列出：常用按 `Services/UsageStats` 记录的打开次数（数据目录的 `usage.json`，随时间衰减）排序、没有记录时不列，全部只列前面一部分。`Core/PinyinMatcher` 支持全拼、首字母混输，拼音表 `Assets/pinyin.txt` 由 Unicode 的 Unihan 数据生成（文件开头写明取哪些字段）。
-- `Core/AutoStart`：开机自启是当前用户「登录时」的计划任务（任务计划程序 COM 接口，普通优先级、不限时长）。注册表 Run 项会被资源管理器排队延后，实测比资源管理器晚约 30 秒才启动；安装包勾选开机自启时仍写 Run 项，程序启动时迁移成计划任务，卸载时按名称前缀删除各用户的任务。
+- `Core/AutoStart`：开机自启使用当前用户的注册表 Run 项，接受 Windows 登录后的启动延迟。启动时将本安装的旧登录计划任务迁回 Run，保留启动参数及 Windows 中的禁用状态，写入成功才删除旧任务；迁移失败保留旧任务并记录警告。卸载时清理 Run、StartupApproved 和旧任务。外部项目由 `Core/ExplorerShell` 经资源管理器打开，避免继承 MyDesktop 的 Job 限制。
 ### 桌面右键菜单
 签名的外部位置稀疏包 `MyDesktop.DesktopMenu`（`ShellExtension/AppxManifest.xml`）加进程外 COM：系统以包身份按需启动 `MyDesktop.exe --shell-extension`（`Core/DesktopMenuServer`，实现 IExplorerCommand）。程序启动时注册扩展包（`Core/DesktopMenuPackage`，注册记录在 `%LOCALAPPDATA%\MyDesktop\desktop-menu-package.txt`），注册失败时退回写当前用户注册表的静态菜单（`Core/DesktopMenu`）。设置里关掉菜单时后台注销扩展包要好几秒，菜单服务弹出菜单前都向主程序查询状态（`AppCommands.EncodeState`），关掉了就立即隐藏。
 ### 安装包与自动更新

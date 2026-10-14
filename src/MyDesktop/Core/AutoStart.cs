@@ -1,71 +1,119 @@
 using System.Runtime.InteropServices;
-using System.Security;
-using System.Security.Principal;
+using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using Microsoft.Win32;
 
 namespace MyDesktop.Core;
 
 /// <summary>
-/// 开机自启：登录 Windows 时由任务计划程序启动，只针对当前用户，不需要管理员权限。
-/// 注册表 Run 项要等资源管理器按顺序逐个拉起（实测比资源管理器晚约 30 秒），计划任务在登录时立即启动、按普通优先级运行。
-/// 旧版本写的 Run 项、安装包勾选「开机自动启动」时写的 Run 项，都在程序启动时换成计划任务。
+/// 开机自启：通过当前用户的 Run 项在登录 Windows 后启动，不要求提前于资源管理器启动。
+/// 旧版本的登录计划任务在程序启动时迁回 Run 项，保留启动参数和 Windows 中的禁用状态。
 /// </summary>
 internal static class AutoStart
 {
 	public const string Argument = "--autostart";
 	const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+	const string ApprovalKey = @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
 	const string ValueName = "MyDesktop";
-
-	/// <summary>
-	/// 计划任务名的前缀，每个用户一个任务；卸载程序按这个前缀删除全部用户的任务。
-	/// </summary>
 	const string TaskPrefix = "MyDesktop 开机启动";
-
-	// ITaskFolder.RegisterTask 的 TASK_CREATE_OR_UPDATE 与 TASK_LOGON_INTERACTIVE_TOKEN
-	const int CreateOrUpdate = 6;
-	const int InteractiveToken = 3;
-
-	// 任务不存在时任务计划程序返回 HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)，经动态调用抛出的是 FileNotFoundException，按 HResult 判断
 	const int TaskNotFound = unchecked((int)0x80070002);
 
-	static string ExePath => Environment.ProcessPath ?? string.Empty;
+	// 迁移失败时旧任务仍负责自启，设置界面和关闭操作也要识别它。
+	static bool _legacyTaskEnabled;
+	static bool _migrationAttempted;
+
+	static string ExePath => Environment.ProcessPath ?? throw new InvalidOperationException("取不到当前程序的路径");
 
 	static string TaskName => $"{TaskPrefix}（{Environment.UserName}）";
 
-	public static bool IsEnabled() => TaskExists() || RunValueExists();
+	public static bool IsEnabled()
+	{
+		MigrateTask();
+		return _legacyTaskEnabled || RunValueExists() && IsRunApproved();
+	}
 
 	public static void SetEnabled(bool enabled)
 	{
+		MigrateTask();
 		if (enabled)
 		{
-			RegisterTask();
+			// 引号前的末尾反斜杠要成对写入，否则盘符根目录会把结束引号变成参数内容。
+			var dataDir = Regex.Replace(AppPaths.DataDir, @"\\+$", "$0$0");
+			var arguments = Argument + (AppPaths.IsCustomDataDir ? $" --data \"{dataDir}\"" : string.Empty);
+			WriteRunValue(arguments);
+			// 用户明确开启时解除 Windows 的禁用；自动迁移不改这个状态。
+			DeleteApprovalValue();
 		}
-		else
+		if (_legacyTaskEnabled)
 		{
-			DeleteTask();
+			UseTaskFolder(folder =>
+			{
+				folder.DeleteTask(TaskName, 0);
+				return true;
+			});
+			_legacyTaskEnabled = false;
 		}
-		// 开启时计划任务接替 Run 项，关闭时两者都不留
-		DeleteRunValue();
+		if (!enabled)
+		{
+			using var key = Registry.CurrentUser.OpenSubKey(RunKey, true);
+			key?.DeleteValue(ValueName, false);
+			DeleteApprovalValue();
+		}
 	}
 
 	/// <summary>
-	/// 把旧版本或安装包写的 Run 项换成计划任务；换不成时保留 Run 项照旧开机启动，下次启动再试。
+	/// 先写入 Run 项，再删除本用户的旧登录任务；迁移失败时保留旧任务，下次启动再试。
+	/// 已禁用的任务不创建 Run 项，已有的 Run 项和 Windows 禁用记录保持原样。
 	/// </summary>
-	public static void MigrateRunValue()
+	public static void MigrateTask()
 	{
-		if (!RunValueExists())
+		if (_migrationAttempted)
 		{
 			return;
 		}
+		_migrationAttempted = true;
 		try
 		{
-			RegisterTask();
-			DeleteRunValue();
-			Log.Info("开机自启已从注册表 Run 项改为登录时运行的计划任务");
+			UseTaskFolder(folder =>
+			{
+				dynamic task;
+				try
+				{
+					task = folder.GetTask(TaskName);
+				}
+				catch (Exception ex) when (ex.HResult == TaskNotFound)
+				{
+					return false;
+				}
+				try
+				{
+					var xml = XDocument.Parse((string)task.Xml);
+					XNamespace ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
+					var action = xml.Root?.Element(ns + "Actions")?.Element(ns + "Exec");
+					if (!string.Equals((string?)action?.Element(ns + "Command"), ExePath, StringComparison.OrdinalIgnoreCase))
+					{
+						return false;
+					}
+					_legacyTaskEnabled = (bool)task.Enabled;
+					if (_legacyTaskEnabled && !RunValueExists())
+					{
+						// 任务的 Arguments 可省略；原参数中的自定义数据目录也原样迁移。
+						WriteRunValue((string?)action?.Element(ns + "Arguments") ?? string.Empty);
+					}
+					folder.DeleteTask(TaskName, 0);
+					_legacyTaskEnabled = false;
+					Log.Info("开机自启已从登录计划任务迁移到当前用户的 Run 项");
+					return true;
+				}
+				finally
+				{
+					Marshal.ReleaseComObject(task);
+				}
+			});
 		}
 		catch (Exception ex)
 		{
-			Log.Warn("开机自启改为计划任务失败，仍使用注册表 Run 项", ex);
+			Log.Warn("开机自启迁移到 Run 项失败，保留旧计划任务，下次启动再试", ex);
 		}
 	}
 
@@ -75,97 +123,41 @@ internal static class AutoStart
 		return key?.GetValue(ValueName) is string command && command.Contains(ExePath, StringComparison.OrdinalIgnoreCase);
 	}
 
-	static void DeleteRunValue()
+	static bool IsRunApproved()
 	{
-		using var key = Registry.CurrentUser.OpenSubKey(RunKey, true);
+		using var key = Registry.CurrentUser.OpenSubKey(ApprovalKey);
+		var value = key?.GetValue(ValueName);
+		if (value == null)
+		{
+			return true;
+		}
+		if (value is not byte[] { Length: >= 4 } data)
+		{
+			throw new InvalidDataException("Windows 开机自启状态的格式不正确");
+		}
+		// StartupApproved 的状态最低位为 1 表示禁用（3、7），为 0 表示启用（2、6）。
+		return (BitConverter.ToUInt32(data, 0) & 1) == 0;
+	}
+
+	static void WriteRunValue(string arguments)
+	{
+		var command = $"\"{ExePath}\" {arguments}".TrimEnd();
+		if (command.Length > 260)
+		{
+			throw new InvalidOperationException("开机自启命令超过 Windows Run 项的 260 字符限制，请缩短程序路径或数据目录");
+		}
+		using var key = Registry.CurrentUser.CreateSubKey(RunKey, true);
+		key.SetValue(ValueName, command, RegistryValueKind.String);
+	}
+
+	static void DeleteApprovalValue()
+	{
+		using var key = Registry.CurrentUser.OpenSubKey(ApprovalKey, true);
 		key?.DeleteValue(ValueName, false);
 	}
 
 	/// <summary>
-	/// 本用户的任务存在、并且启动的是当前这个程序（换过安装位置的旧任务不算）。
-	/// </summary>
-	static bool TaskExists()
-	{
-		try
-		{
-			return UseTaskFolder(folder =>
-			{
-				string xml = folder.GetTask(TaskName).Xml;
-				return xml.Contains(SecurityElement.Escape(ExePath), StringComparison.OrdinalIgnoreCase);
-			});
-		}
-		catch (Exception ex) when (ex.HResult == TaskNotFound)
-		{
-			return false;
-		}
-	}
-
-	/// <summary>
-	/// 登录时启动：普通优先级（任务默认是低于正常），不限运行时长、不因使用电池而不启动或被停止，已在运行时不再启动第二个。
-	/// </summary>
-	static void RegisterTask()
-	{
-		var user = WindowsIdentity.GetCurrent().User?.Value ?? throw new InvalidOperationException("取不到当前用户的 SID");
-		var arguments = Argument + (AppPaths.IsCustomDataDir ? $" --data \"{AppPaths.DataDir}\"" : string.Empty);
-		var xml = $"""
-				<?xml version="1.0" encoding="UTF-16"?>
-				<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-				  <RegistrationInfo>
-				    <Description>登录 Windows 时启动 MyDesktop 桌面分区</Description>
-				  </RegistrationInfo>
-				  <Triggers>
-				    <LogonTrigger>
-				      <Enabled>true</Enabled>
-				      <UserId>{user}</UserId>
-				    </LogonTrigger>
-				  </Triggers>
-				  <Principals>
-				    <Principal id="Author">
-				      <UserId>{user}</UserId>
-				      <LogonType>InteractiveToken</LogonType>
-				      <RunLevel>LeastPrivilege</RunLevel>
-				    </Principal>
-				  </Principals>
-				  <Settings>
-				    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-				    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-				    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-				    <AllowHardTerminate>false</AllowHardTerminate>
-				    <StartWhenAvailable>false</StartWhenAvailable>
-				    <IdleSettings>
-				      <StopOnIdleEnd>false</StopOnIdleEnd>
-				      <RestartOnIdle>false</RestartOnIdle>
-				    </IdleSettings>
-				    <AllowStartOnDemand>true</AllowStartOnDemand>
-				    <Enabled>true</Enabled>
-				    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-				    <Priority>4</Priority>
-				  </Settings>
-				  <Actions Context="Author">
-				    <Exec>
-				      <Command>{SecurityElement.Escape(ExePath)}</Command>
-				      <Arguments>{SecurityElement.Escape(arguments)}</Arguments>
-				    </Exec>
-				  </Actions>
-				</Task>
-				""";
-		UseTaskFolder(folder => folder.RegisterTask(TaskName, xml, CreateOrUpdate, null, null, InteractiveToken, null));
-	}
-
-	static void DeleteTask()
-	{
-		try
-		{
-			UseTaskFolder(folder => folder.DeleteTask(TaskName, 0));
-		}
-		catch (Exception ex) when (ex.HResult == TaskNotFound)
-		{
-			// 本来就没有
-		}
-	}
-
-	/// <summary>
-	/// 通过任务计划程序的 COM 接口操作根文件夹。
+	/// 任务计划程序的 COM 接口仅用于迁移、清理旧版本留下的任务。
 	/// </summary>
 	static T UseTaskFolder<T>(Func<dynamic, T> action)
 	{
@@ -174,11 +166,19 @@ internal static class AutoStart
 		try
 		{
 			service.Connect();
-			return action(service.GetFolder(@"\"));
+			dynamic folder = service.GetFolder(@"\");
+			try
+			{
+				return action(folder);
+			}
+			finally
+			{
+				Marshal.ReleaseComObject(folder);
+			}
 		}
 		finally
 		{
-			Marshal.FinalReleaseComObject(service);
+			Marshal.ReleaseComObject(service);
 		}
 	}
 }

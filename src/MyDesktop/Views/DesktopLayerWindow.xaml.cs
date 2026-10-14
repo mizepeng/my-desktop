@@ -424,7 +424,7 @@ internal partial class DesktopLayerWindow : Window
 
 	/// <summary>
 	/// 窗口应有的大小（物理像素）：盖住图标所在的范围再加余量，不超出工作区；本程序发起拖动期间是整个工作区。
-	/// 透明窗口按整窗大小占内存（见 CLAUDE.md），铺满工作区的话只为角落里几个图标就要占几十 MB。
+	/// 透明窗口按整窗大小占内存（见 AGENTS.md），铺满工作区的话只为角落里几个图标就要占几十 MB。
 	/// 图标在窗口里的左上角就是它在画布上的 X、Y。最下面的格子之下留 SpareRows 行，展开的完整名称、改名框在这个范围内时窗口不用变；
 	/// 超出时按已排好版的实际大小算。
 	/// </summary>
@@ -451,7 +451,7 @@ internal partial class DesktopLayerWindow : Window
 	}
 
 	/// <summary>
-	/// 按 ExtentSize 调整窗口大小：左上角不动，只改宽高（同时挪左上角会闪，见 CLAUDE.md）。
+	/// 按 ExtentSize 调整窗口大小：左上角不动，只改宽高（同时挪左上角会闪，见 AGENTS.md）。
 	/// </summary>
 	void UpdateExtent()
 	{

@@ -1,6 +1,5 @@
 using System.Collections.Specialized;
 using System.ComponentModel;
-using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -305,14 +304,9 @@ internal static class ItemOps
 				var path = item.IsFolder && !Path.EndsInDirectorySeparator(item.FullPath)
 						? item.FullPath + Path.DirectorySeparatorChar
 						: item.FullPath;
-				var startInfo = new ProcessStartInfo(path)
-				{
-					UseShellExecute = true,
-					WorkingDirectory = Path.GetDirectoryName(item.FullPath) ?? string.Empty,
-				};
-				Process.Start(startInfo)?.Dispose();
+				ExplorerShell.Open(path, Path.GetDirectoryName(item.FullPath) ?? string.Empty);
 			}
-			catch (Win32Exception ex) when (ex.NativeErrorCode == ErrorCancelled)
+			catch (Exception ex) when (ex is Win32Exception { NativeErrorCode: ErrorCancelled } || ex.HResult == unchecked((int)0x800704C7))
 			{
 				// 用户在 UAC 等提示中取消
 			}

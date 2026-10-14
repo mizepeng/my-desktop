@@ -162,8 +162,8 @@ internal sealed class FenceManager
 		// 用毛玻璃的分区打开时才开始读壁纸（见 FenceWindow.UpdateBlur）
 		Wallpaper.BlurRadius = Settings.BlurRadius;
 		NotifyIfUpgraded(firstRun);
-		// 旧版本和安装包写的开机自启 Run 项换成计划任务，不耽误接管桌面
-		_dispatcher.InvokeAsync(AutoStart.MigrateRunValue, DispatcherPriority.Background);
+		// 旧版本的登录计划任务迁回 Run 项，不耽误接管桌面
+		_dispatcher.InvokeAsync(AutoStart.MigrateTask, DispatcherPriority.Background);
 
 		// 上次异常退出时桌面图标可能停留在隐藏状态，启动时先恢复
 		if (!DesktopHost.IconsHiddenBySystem())
@@ -1854,7 +1854,7 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 开关开机自启，失败时提示（计划任务由系统服务管理，可能被组策略等限制）；返回是否成功。
+	/// 开关开机自启，写入失败时提示；返回是否成功。
 	/// </summary>
 	public bool SetAutoStart(bool enabled)
 	{
