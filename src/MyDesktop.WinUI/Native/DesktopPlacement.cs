@@ -14,7 +14,7 @@ internal sealed class DesktopPlacement : IDisposable
 	readonly WinEventProc _callback;
 	readonly nint _foregroundHook, _windowHook;
 	nint _desktop;
-	bool _started, _queued, _disposed;
+	bool _started, _queued, _disposed, _activating;
 
 	public DesktopPlacement(nint hwnd)
 	{
@@ -43,6 +43,33 @@ internal sealed class DesktopPlacement : IDisposable
 	}
 
 	public nint DesktopHandle => FindDesktop();
+
+	public bool ActivateDesktop()
+	{
+		var desktop = FindDesktop();
+		if (desktop == 0 || !DesktopInput.IsInputDesktop())
+		{
+			return false;
+		}
+		if (GetForegroundWindow() == desktop)
+		{
+			return true;
+		}
+		_activating = true;
+		try
+		{
+			if (!SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE))
+			{
+				throw new Win32Exception();
+			}
+			return SetForegroundWindow(desktop);
+		}
+		finally
+		{
+			_activating = false;
+			Refresh();
+		}
+	}
 
 	public void Refresh()
 	{
@@ -76,6 +103,13 @@ internal sealed class DesktopPlacement : IDisposable
 		var position = Marshal.PtrToStructure<WINDOWPOS>(lParam);
 		if ((position.flags & SWP_NOZORDER) != 0)
 		{
+			return;
+		}
+		if (_activating)
+		{
+			position.hwndInsertAfter = HWND_TOPMOST;
+			position.flags |= SWP_NOACTIVATE;
+			Marshal.StructureToPtr(position, lParam, false);
 			return;
 		}
 		var desktop = FindDesktop();

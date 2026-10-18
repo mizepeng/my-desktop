@@ -8,6 +8,8 @@ namespace MyDesktop.WinUI.Native;
 
 internal static class DesktopInput
 {
+	public static string CurrentDesktopName => NameOf(GetThreadDesktop(GetCurrentThreadId()));
+
 	public static bool Begin(nint hwnd)
 	{
 		SetActivationAllowed(hwnd, true);

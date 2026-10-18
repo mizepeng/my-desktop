@@ -1,11 +1,25 @@
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.WindowsRuntime;
+using Microsoft.UI.Xaml.Media.Imaging;
 using MyDesktop.Native;
 using static MyDesktop.Native.NativeMethods;
 
 namespace MyDesktop.WinUI.Services;
 
-internal sealed record ShellItemImage(string Name, int Width, int Height, byte[] Pixels);
+internal sealed record ShellItemImage(string Name, int Width, int Height, byte[] Pixels)
+{
+	public WriteableBitmap ToBitmap()
+	{
+		var bitmap = new WriteableBitmap(Width, Height);
+		using (var stream = bitmap.PixelBuffer.AsStream())
+		{
+			stream.Write(Pixels);
+		}
+		bitmap.Invalidate();
+		return bitmap;
+	}
+}
 
 /// <summary>
 /// 在独立 STA 线程读取 Shell 显示名与图像，只把像素交回界面，不创建 WPF 对象。

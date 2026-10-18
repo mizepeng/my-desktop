@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.Numerics;
-using System.Runtime.InteropServices.WindowsRuntime;
 using Microsoft.UI;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml;
@@ -10,7 +9,6 @@ using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Markup;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Media.Imaging;
 using MyDesktop.Core;
 using MyDesktop.Models;
 using MyDesktop.Native;
@@ -246,13 +244,7 @@ public sealed partial class FenceView : UserControl, IDisposable
 				{
 					return;
 				}
-				var bitmap = new WriteableBitmap(data.Width, data.Height);
-				using (var stream = bitmap.PixelBuffer.AsStream())
-				{
-					stream.Write(data.Pixels);
-				}
-				bitmap.Invalidate();
-				_items.Add(new FenceItem(path, data.Name, bitmap));
+				_items.Add(new FenceItem(path, data.Name, data.ToBitmap()));
 			}
 			if (version == _contentVersion && _items.Count == 0)
 			{

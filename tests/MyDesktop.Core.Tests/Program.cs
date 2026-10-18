@@ -21,6 +21,10 @@ var checks = new (string Name, Action Run)[]
 	("改名保留隐藏扩展名且拒绝非法文件名", RenameNames),
 	("改名严格区分普通子项和系统入口", RenameScope),
 	("目录改名同步成员、映射及自定义顺序", RenameReferences),
+	("散放图标排除全部标签成员并避开分区", LooseIconArrangement),
+	("自由排列沿用 Explorer 坐标和显示器缩放", LooseIconCoordinates),
+	("无法完整绘制散放图标时拒绝接管", InvalidDesktopLayout),
+	("桌面键盘保护成对处理且放行系统快捷键", DesktopKeyboardProtection),
 	("核心程序集不依赖 WPF 或 WinUI", FrameworkIndependence),
 };
 int failures = 0;
@@ -217,4 +221,60 @@ static void RenameReferences()
 	Require(settings.Fences[1].FolderPath == @"C:\新资料" && settings.Fences[2].FolderPath == @"C:\新资料\子目录", "直接映射或子目录映射没有更新。");
 	ItemRename.UpdateReferences(settings, @"C:\新资料\子目录\文件.txt", @"C:\新资料\子目录\文件.TXT", false);
 	Require(settings.Fences[0].Members[1].EndsWith("文件.TXT", StringComparison.Ordinal), "仅修改大小写时引用未更新。");
+}
+
+static DesktopSnapshot DesktopFixture(bool autoArrange = true)
+{
+	return new DesktopSnapshot(autoArrange, new System.Drawing.Point(100, 100), 48, new System.Drawing.Rectangle(0, 0, 1000, 800),
+	[
+		new DesktopEntry("a", "甲", true, false, new System.Drawing.Point(0, 0)),
+		new DesktopEntry("b", "乙", true, false, new System.Drawing.Point(0, 100)),
+		new DesktopEntry("c", "丙", true, false, new System.Drawing.Point(0, 200)),
+	]);
+}
+
+static void LooseIconArrangement()
+{
+	var snapshot = DesktopFixture();
+	var fences = new[] { new FenceSettings { Members = ["A"] }, new FenceSettings { IsPortal = true, Members = ["b"] } };
+	var monitors = new[] { new DesktopMonitor(snapshot.ListBounds, 1) };
+	var positions = DesktopLayout.Build(snapshot, fences, [new System.Drawing.Rectangle(0, 0, 100, 200)], monitors);
+	Require(positions.Select(item => item.Entry.Key).SequenceEqual(new[] { "b", "c" }), "隐藏标签的成员未排除，或映射分区错误地认领了桌面项目。");
+	Require(positions[0].Bounds.Top == 200 && positions[1].Bounds.Top == 300, "自动排列没有压紧并跳过分区。");
+	Require(positions.All(item => item.Bounds.Size == new System.Drawing.Size(100, 100)), "未沿用 Explorer 的格子间距。");
+}
+
+static void LooseIconCoordinates()
+{
+	var snapshot = new DesktopSnapshot(false, new System.Drawing.Point(100, 100), 48, new System.Drawing.Rectangle(-1920, 0, 3840, 1080),
+		[new DesktopEntry("file", "文件", true, false, new System.Drawing.Point(100, 10))]);
+	var monitors = new[] { new DesktopMonitor(new System.Drawing.Rectangle(-1920, 0, 1920, 1080), 1.5),
+		new DesktopMonitor(new System.Drawing.Rectangle(0, 0, 1920, 1080), 1) };
+	var placement = DesktopLayout.Build(snapshot, [], [], monitors).Single();
+	Require(placement.Bounds.Left == -1834 && placement.Bounds.Top == 13, "自由排列没有按所在显示器缩放换算图标与格子偏移。");
+}
+
+static void InvalidDesktopLayout()
+{
+	var snapshot = DesktopFixture();
+	var monitors = new[] { new DesktopMonitor(snapshot.ListBounds, 1) };
+	Throws<InvalidOperationException>(() => DesktopLayout.Build(snapshot, [], [snapshot.ListBounds], monitors));
+	Throws<InvalidDataException>(() => DesktopLayout.Build(snapshot, [], [], []));
+	var invalid = new DesktopSnapshot(true, System.Drawing.Point.Empty, 48, snapshot.ListBounds, snapshot.Items);
+	Throws<InvalidDataException>(() => DesktopLayout.Build(invalid, [], [], monitors));
+	var missingBounds = new DesktopSnapshot(true, snapshot.Spacing, 48, System.Drawing.Rectangle.Empty, snapshot.Items);
+	Throws<InvalidDataException>(() => DesktopLayout.Build(missingBounds, [], [], monitors));
+}
+
+static void DesktopKeyboardProtection()
+{
+	var routing = new DesktopKeyRouting();
+	var down = routing.Route(0x2E, true, true, false, false, false, false, false);
+	Require(down.Intercept && down.Command == DesktopInputCommand.Unsupported, "Delete 会落到隐藏的系统图标上。");
+	Require(routing.Route(0x2E, false, false, true, false, false, false, false).Intercept, "切换前台后松开没有与吞下的按下配对。");
+	Require(!routing.Route(0x2E, false, false, false, false, false, false, false).Intercept, "没有对应按下时误吞了松开。");
+	Require(!routing.Route(0x44, true, true, true, false, false, false, false).Intercept, "Win+D 被拦截。");
+	Require(!routing.Route(0x41, true, true, false, true, false, false, true).Intercept, "系统菜单或编辑框中的按键被拦截。");
+	Require(!routing.Route(0x2E, true, false, false, false, false, false, false).Intercept, "影响了其他程序中的 Delete。");
+	Require(routing.Route(0x41, true, true, false, true, false, false, false).Command == DesktopInputCommand.SelectAll, "全选没有交给 WinUI 图标视图。");
 }

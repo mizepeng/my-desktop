@@ -21,6 +21,7 @@ internal sealed class DesktopSession : IDisposable
 	readonly List<DesktopSurface> _surfaces = [];
 	readonly DispatcherQueueTimer _saveTimer;
 	Window? _welcome;
+	DesktopTakeover? _takeover;
 	bool _dirty, _disposed;
 
 	public DesktopSession(AppSettings settings, StartupOptions options, Action exit)
@@ -44,6 +45,7 @@ internal sealed class DesktopSession : IDisposable
 
 	internal IReadOnlyList<DesktopSurface> Surfaces => _surfaces;
 	internal AppSettings Settings => _settings;
+	internal DesktopTakeover? Takeover => _takeover;
 
 	public void Start()
 	{
@@ -66,10 +68,6 @@ internal sealed class DesktopSession : IDisposable
 				var rectangle = new RECT(model.X, model.Y, model.X + model.Width, model.Y + model.Height);
 				return MonitorFromRect(ref rectangle, MONITOR_DEFAULTTONEAREST) == monitor;
 			}).ToArray();
-			if (frames.Length == 0)
-			{
-				continue;
-			}
 			var (workArea, scale) = GetMonitorWorkArea(monitor);
 			var surface = new DesktopSurface(workArea, scale, frames, _settings, _images, _rename, _options.PreviewFile != null);
 			surface.SaveRequested += SaveSoon;
@@ -77,10 +75,31 @@ internal sealed class DesktopSession : IDisposable
 			surface.Closed += (_, _) => { if (!_disposed) { _exit(); } };
 			_surfaces.Add(surface);
 		}
+		if (_options.PreviewFile == null)
+		{
+			_takeover = new DesktopTakeover(this, _options.IsProbe);
+		}
 		if (_options.IsProbe)
 		{
-			_surfaces[0].Ready += () => DispatcherQueue.GetForCurrentThread().TryEnqueue(async () =>
+			_surfaces.First(surface => surface.Fences.Count > 0).Ready += () => DispatcherQueue.GetForCurrentThread().TryEnqueue(async () =>
 			{
+				if (_options.IsCrashProbe)
+				{
+					try
+					{
+						await _takeover!.FirstActive.WaitAsync(TimeSpan.FromSeconds(10));
+						var state = new MyDesktop.Verification.RecoveryProbeState(Environment.ProcessId, _takeover.GuardProcessId!.Value, _takeover.Target!.List.ToInt64());
+						File.WriteAllText(_options.ReportFile! + ".tmp", System.Text.Json.JsonSerializer.Serialize(state));
+						File.Move(_options.ReportFile! + ".tmp", _options.ReportFile!, true);
+					}
+					catch (Exception ex)
+					{
+						File.AppendAllText(_options.ReportFile!, ex + Environment.NewLine);
+						Environment.ExitCode = 1;
+						_exit();
+					}
+					return;
+				}
 				try
 				{
 					await Verification.UiChecks.RunAsync(this, _options.ReportFile!);
@@ -100,6 +119,7 @@ internal sealed class DesktopSession : IDisposable
 		{
 			surface.ShowOnDesktop();
 		}
+		_takeover?.Start();
 		Log.Info($"WinUI 已创建 {_surfaces.Count} 个桌面宿主、{workspace.Frames.Count} 个分区视图。");
 	}
 
@@ -136,6 +156,7 @@ internal sealed class DesktopSession : IDisposable
 			return;
 		}
 		_dirty = true;
+		_takeover?.Refresh();
 		_saveTimer.Stop();
 		_saveTimer.Start();
 	}
@@ -157,6 +178,7 @@ internal sealed class DesktopSession : IDisposable
 		}
 		_disposed = true;
 		_saveTimer.Stop();
+		_takeover?.Dispose();
 		Save();
 		foreach (var surface in _surfaces.Where(surface => !surface.IsClosed))
 		{

@@ -13,7 +13,7 @@ internal static class RenameChecks
 	public static async Task RunAsync(DesktopSession session)
 	{
 		Require(!DesktopInput.IsInputDesktop(), "编辑验证只能在非输入桌面运行");
-		var surface = session.Surfaces[0];
+		var surface = session.Surfaces.First(surface => surface.Fences.Count > 0);
 		var frame = surface.Fences[0];
 		var other = surface.Fences[1];
 		var hwnd = surface.Handle;

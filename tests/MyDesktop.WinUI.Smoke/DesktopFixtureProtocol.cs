@@ -8,6 +8,8 @@ internal static class DesktopFixtureProtocol
 {
 	public const string FloorClass = "MyDesktopVerificationFloor";
 	public const string ControlClass = "MyDesktopVerificationControl";
+	public const string HiddenIconsProperty = "MyDesktopVerification.HiddenIcons";
+	public const string QueueEventPrefix = "Local\\MyDesktopVerification-Queue-";
 	public const int DesktopProbeMessage = 0x8050;
 	public static (RECT WorkArea, double Scale) PrimaryArea() => GetMonitorWorkArea(MonitorFromPoint(new POINT(0, 0), MONITOR_DEFAULTTOPRIMARY));
 
@@ -40,4 +42,11 @@ internal enum DesktopProbeCommand
 	RemoveDesktop,
 	RecreateDesktop,
 	CloseApplication,
+	GetIconList,
+	IconsVisible,
+	HideIconsBySystem,
+	ShowIconsBySystem,
+	PauseMessages,
 }
+
+internal sealed record RecoveryProbeState(int ParentProcessId, int GuardProcessId, long ListHandle);

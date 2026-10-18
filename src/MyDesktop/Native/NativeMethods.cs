@@ -691,6 +691,9 @@ internal struct POINT
 		X = x;
 		Y = y;
 	}
+
+	public static implicit operator System.Drawing.Point(POINT point) => new(point.X, point.Y);
+	public static implicit operator POINT(System.Drawing.Point point) => new(point.X, point.Y);
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -718,6 +721,9 @@ internal struct RECT
 	public readonly bool Contains(POINT p) => p.X >= Left && p.X < Right && p.Y >= Top && p.Y < Bottom;
 
 	public readonly RECT Inflate(int size) => new(Left - size, Top - size, Right + size, Bottom + size);
+
+	public static implicit operator System.Drawing.Rectangle(RECT rect) => new(rect.Left, rect.Top, rect.Width, rect.Height);
+	public static implicit operator RECT(System.Drawing.Rectangle rect) => new(rect.Left, rect.Top, rect.Right, rect.Bottom);
 }
 
 [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]

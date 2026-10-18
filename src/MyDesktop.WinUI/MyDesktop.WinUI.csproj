@@ -4,6 +4,7 @@
 		<TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
 		<TargetPlatformMinVersion>10.0.22621.0</TargetPlatformMinVersion>
 		<UseWinUI>true</UseWinUI>
+		<DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
 		<WindowsPackageType>None</WindowsPackageType>
 		<WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
 		<RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -24,6 +25,8 @@
 		<Compile Include="../MyDesktop/Native/ShellInterop.cs" Link="Native/ShellInterop.cs" />
 		<Compile Include="../MyDesktop/Native/ShellFileOps.cs" Link="Native/ShellFileOps.cs" />
 		<Compile Include="../MyDesktop/Native/DesktopViewInterop.cs" Link="Native/DesktopViewInterop.cs" />
+		<Compile Include="../MyDesktop/Native/ExplorerDesktopReader.cs" Link="Native/ExplorerDesktopReader.cs" />
+		<Compile Include="../MyDesktop/Native/ExplorerDesktopWindow.cs" Link="Native/ExplorerDesktopWindow.cs" />
 		<Compile Include="../MyDesktop/Core/ExplorerShell.cs" Link="Services/ExplorerShell.cs" />
 		<Compile Include="../../tests/MyDesktop.WinUI.Smoke/DesktopFixtureProtocol.cs" Link="Verification/DesktopFixtureProtocol.cs" />
 		<RuntimeHostConfigurationOption Include="System.GC.Gen0MaxBudget" Value="6291456" />

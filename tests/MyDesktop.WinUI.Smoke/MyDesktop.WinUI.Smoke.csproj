@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 	<PropertyGroup>
 		<OutputType>Exe</OutputType>
+		<ApplicationManifest>../../src/MyDesktop.WinUI/app.manifest</ApplicationManifest>
 		<TargetFramework>net10.0-windows</TargetFramework>
 		<Nullable>enable</Nullable>
 		<ImplicitUsings>enable</ImplicitUsings>
@@ -10,5 +11,9 @@
 	<ItemGroup>
 		<ProjectReference Include="../../src/MyDesktop.Core/MyDesktop.Core.csproj" />
 		<Compile Include="../../src/MyDesktop/Native/NativeMethods.cs" Link="NativeMethods.cs" />
+		<Compile Include="../../src/MyDesktop/Native/ShellInterop.cs" Link="ShellInterop.cs" />
+		<Compile Include="../../src/MyDesktop/Native/DesktopViewInterop.cs" Link="DesktopViewInterop.cs" />
+		<Compile Include="../../src/MyDesktop/Native/ExplorerDesktopReader.cs" Link="ExplorerDesktopReader.cs" />
+		<Compile Include="../../src/MyDesktop/Native/ExplorerDesktopWindow.cs" Link="ExplorerDesktopWindow.cs" />
 	</ItemGroup>
 </Project>

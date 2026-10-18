@@ -24,6 +24,9 @@ public sealed partial class DesktopSurface : Window
 	readonly double _scale;
 	readonly List<FenceView> _fences = [];
 	readonly double _cornerRadius;
+	readonly DesktopIconsView _desktopIcons;
+	readonly Border _notice;
+	readonly TextBlock _noticeText;
 	FenceView? _editingFence;
 
 	internal DesktopSurface(RECT workArea, double scale, IEnumerable<FenceFrame> frames, AppSettings settings, ShellItemLoader images, FileRename rename, bool readOnly)
@@ -48,6 +51,17 @@ public sealed partial class DesktopSurface : Window
 		AppWindow.MoveAndResize(new RectInt32(workArea.Left, workArea.Top, workArea.Width, workArea.Height));
 		SystemBackdrop = new TransparentBackdrop(Handle);
 		_placement = new DesktopPlacement(Handle);
+		_desktopIcons = new DesktopIconsView(images, workArea, scale);
+		_desktopIcons.BoundsChanged += UpdateRegion;
+		_desktopIcons.SelectionRequested += (_, _) =>
+		{
+			_editingFence?.CancelEdit();
+			if (DesktopInput.IsInputDesktop() && !_placement.ActivateDesktop())
+			{
+				SetNotice("未能将键盘焦点交给桌面，请再次点击图标。");
+			}
+		};
+		Surface.Children.Add(_desktopIcons);
 		foreach (var frame in frames)
 		{
 			var model = frame.Active;
@@ -90,6 +104,24 @@ public sealed partial class DesktopSurface : Window
 			Surface.Children.Add(fence);
 			_fences.Add(fence);
 		}
+		_noticeText = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = new SolidColorBrush(Microsoft.UI.Colors.White) };
+		_notice = new Border
+		{
+			Child = _noticeText, Width = Math.Min(440, workArea.Width / scale - 24), Height = 72, Padding = new Thickness(10), CornerRadius = new CornerRadius(8),
+			Background = new SolidColorBrush(Windows.UI.Color.FromArgb(240, 45, 45, 45)), Visibility = Visibility.Collapsed,
+		};
+		var dismiss = new Button { Content = "×", AllowFocusOnInteraction = false, VerticalAlignment = VerticalAlignment.Top, Padding = new Thickness(6, 0, 6, 0) };
+		dismiss.Click += (_, _) => SetNotice(null);
+		var noticeContent = new Grid();
+		noticeContent.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+		noticeContent.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+		_notice.Child = noticeContent;
+		noticeContent.Children.Add(_noticeText);
+		Grid.SetColumn(dismiss, 1);
+		noticeContent.Children.Add(dismiss);
+		Canvas.SetLeft(_notice, 12);
+		Canvas.SetTop(_notice, 12);
+		Surface.Children.Add(_notice);
 		UpdateRegion();
 		Surface.PointerPressed += Surface_PointerPressed;
 		Activated += (_, args) =>
@@ -102,6 +134,7 @@ public sealed partial class DesktopSurface : Window
 		Closed += (_, _) =>
 		{
 			IsClosed = true;
+			_desktopIcons.Invalidate();
 			foreach (var fence in _fences)
 			{
 				fence.Dispose();
@@ -119,6 +152,17 @@ public sealed partial class DesktopSurface : Window
 	internal event Action? Ready;
 	internal void ShowOnDesktop() => _placement.Show();
 	internal bool IsEditing => _editingFence != null;
+	internal RECT WorkArea => _workArea;
+	internal double Scale => _scale;
+	internal DesktopIconsView DesktopIcons => _desktopIcons;
+	internal string Notice => _noticeText.Text;
+
+	internal void SetNotice(string? message)
+	{
+		_noticeText.Text = message ?? "";
+		_notice.Visibility = string.IsNullOrEmpty(message) ? Visibility.Collapsed : Visibility.Visible;
+		UpdateRegion();
+	}
 
 	void CancelDeactivatedEdit()
 	{
@@ -154,7 +198,22 @@ public sealed partial class DesktopSurface : Window
 			(int)Math.Round((left + fence.Width) * _scale), (int)Math.Round((top + fence.VisibleHeight) * _scale));
 	}
 
-	void UpdateRegion() => WindowApi.SetRegion(Handle, _fences.Select(BoundsOf), (int)Math.Round(_cornerRadius * _scale));
+	void UpdateRegion()
+	{
+		var rectangles = _fences.Select(BoundsOf).ToList();
+		if (_desktopIcons != null)
+		{
+			foreach (var bounds in _desktopIcons.HitRectangles)
+			{
+				rectangles.Add(new RECT(bounds.Left - _workArea.Left, bounds.Top - _workArea.Top, bounds.Right - _workArea.Left, bounds.Bottom - _workArea.Top));
+			}
+		}
+		if (_notice?.Visibility == Visibility.Visible)
+		{
+			rectangles.Add(new RECT((int)(12 * _scale), (int)(12 * _scale), (int)((12 + _notice.Width) * _scale), (int)(84 * _scale)));
+		}
+		WindowApi.SetRegion(Handle, rectangles, (int)Math.Round(_cornerRadius * _scale));
+	}
 
 	nint WindowMessage(nint hwnd, uint message, nint wParam, nint lParam, nuint id, nuint data)
 	{

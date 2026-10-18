@@ -1,16 +1,17 @@
 namespace MyDesktop.WinUI.Services;
 
-internal sealed record StartupOptions(string? DataDirectory, string? PreviewFile, string? ReportFile, bool IsProbe)
+internal sealed record StartupOptions(string? DataDirectory, string? PreviewFile, string? ReportFile, bool IsProbe, bool IsCrashProbe)
 {
 	public static StartupOptions Parse(string[] args)
 	{
 		string? data = null, preview = null, report = null;
-		bool probe = false;
+		bool probe = false, crash = false;
 		for (int index = 0; index < args.Length; index++)
 		{
-			if (args[index] == "--probe")
+			if (args[index] is "--probe" or "--probe-crash")
 			{
 				probe = true;
+				crash = args[index] == "--probe-crash";
 				continue;
 			}
 			string name = args[index];
@@ -30,6 +31,6 @@ internal sealed record StartupOptions(string? DataDirectory, string? PreviewFile
 		{
 			throw new ArgumentException("隔离验证必须明确指定 --data 和 --report，不能使用正式配置或预览模式。");
 		}
-		return new StartupOptions(data, preview, report, probe);
+		return new StartupOptions(data, preview, report, probe, crash);
 	}
 }

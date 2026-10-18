@@ -35,8 +35,18 @@ internal static class UiChecks
 			GetWindowThreadProcessId(floor, out uint floorProcess);
 			Require(floorProcess != Environment.ProcessId, "底层窗口来自另一个进程");
 			Require(!AppDomain.CurrentDomain.GetAssemblies().Any(assembly => assembly.GetName().Name == "PresentationFramework"), "新入口没有加载 WPF 框架");
-			Require(session.Surfaces.Count == 1 && session.Surfaces[0].Fences.Count == 2, "三个真实配置分区投影成两个视图、一个宿主");
-			var surface = session.Surfaces[0];
+			int monitorCount = 0;
+			EnumDisplayMonitors(0, 0, (nint monitor, nint dc, ref RECT bounds, nint data) => { monitorCount++; return true; }, 0);
+			Require(session.Surfaces.Count == monitorCount && session.Surfaces.Sum(surface => surface.Fences.Count) == 2, "每屏一个宿主，三个真实配置分区投影成两个视图");
+			try
+			{
+				await session.Takeover!.FirstActive.WaitAsync(TimeSpan.FromSeconds(10));
+			}
+			catch (TimeoutException)
+			{
+				throw new InvalidOperationException("隔离桌面接管未就绪：" + string.Join("；", session.Surfaces.Select(surface => surface.Notice)));
+			}
+			var surface = session.Surfaces.First(surface => surface.Fences.Count > 0);
 			var hwnd = surface.Handle;
 			var foreground = GetForegroundWindow();
 			var frame = surface.Fences[0];
@@ -90,11 +100,12 @@ internal static class UiChecks
 				}
 				return true;
 			}, 0);
-			Require(visible == 1, "除输入指示器外只有一个可见顶层窗口");
+			Require(visible == session.Surfaces.Count, "除输入指示器外每屏只有一个可见顶层窗口");
 			await DesktopPlacementChecks.RunAsync(hwnd);
 			await RenameChecks.RunAsync(session);
 			await DesktopPlacementChecks.RunAsync(hwnd);
-			Write("通过：真实配置、标签、Shell 图像、布局保存、标题编辑、文件改名、穿透及编辑前后层级。未操作实际桌面或注入输入。");
+			await TakeoverChecks.RunAsync(session);
+			Write("通过：分区、标签、改名、散放图标、接管恢复与层级回归。未操作实际桌面或注入输入。");
 		}
 		finally
 		{
@@ -104,7 +115,7 @@ internal static class UiChecks
 
 	static nint RootAt(int x, int y) => GetAncestor(WindowFromPoint(new POINT(x, y)), 2);
 
-	static IEnumerable<DependencyObject> Descendants(DependencyObject parent)
+	internal static IEnumerable<DependencyObject> Descendants(DependencyObject parent)
 	{
 		for (int index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
 		{

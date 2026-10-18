@@ -1,6 +1,9 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
+using MyDesktop.Core;
 using MyDesktop.Models;
 using MyDesktop.Native;
 using MyDesktop.Services;
@@ -10,11 +13,36 @@ using static MyDesktop.Native.NativeMethods;
 internal static class Program
 {
 	static readonly WindowProc FloorProc = FloorMessage;
-	static nint _floor, _app, _taskbar;
+	static nint _floor, _app, _taskbar, _iconList;
 
 	[STAThread]
 	static int Main(string[] args)
 	{
+		if (args is ["--recovery", var executable, var dataDirectory, var reportFile, var verificationDesktop])
+		{
+			try
+			{
+				var controller = FindWindowEx(0, 0, DesktopFixtureProtocol.ControlClass, null);
+				if (controller == 0)
+				{
+					throw new InvalidOperationException("恢复检查只能在独立测试桌面运行。");
+				}
+				RunRecoveryChecks(executable, dataDirectory, reportFile, verificationDesktop, controller);
+				return 0;
+			}
+			catch (Exception ex)
+			{
+				File.AppendAllText(reportFile, "恢复验证失败：" + ex + Environment.NewLine);
+				return 1;
+			}
+		}
+		if (args is ["--read-desktop"])
+		{
+			using var reader = new MyDesktop.Core.ExplorerDesktopReader();
+			var snapshot = reader.Read() ?? throw new InvalidOperationException("没有读到 Explorer 桌面视图。");
+			Console.WriteLine($"只读快照：{snapshot.Items.Count} 个项目，图标 {snapshot.IconSize}，间距 {snapshot.Spacing.X}×{snapshot.Spacing.Y}，范围 {snapshot.ListBounds}。");
+			return 0;
+		}
 		if (args is ["--floor", var readyName])
 		{
 			return RunFloor(readyName);
@@ -32,6 +60,7 @@ internal static class Program
 		}
 		var floor = default(ProcessInfo);
 		var app = default(ProcessInfo);
+		var recovery = default(ProcessInfo);
 		try
 		{
 			using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, desktopName);
@@ -56,13 +85,24 @@ internal static class Program
 			{
 				throw new Win32Exception();
 			}
+			if (code == 0)
+			{
+				CloseHandle(app.Thread);
+				CloseHandle(app.Process);
+				app = default;
+				recovery = Launch(Environment.ProcessPath!, $"--recovery \"{Path.GetFullPath(args[0])}\" \"{data}\" \"{reportPath}\" {desktopName}", desktopName);
+				if (WaitForSingleObject(recovery.Process, 40000) != 0 || !GetExitCodeProcess(recovery.Process, out code))
+				{
+					throw new InvalidOperationException("隔离恢复检查没有完成。");
+				}
+			}
 			Console.WriteLine(File.Exists(reportPath) ? File.ReadAllText(reportPath) : "WinUI 验证进程没有生成报告，启动失败。");
 			Console.WriteLine($"WinUI 验证退出码：{code}");
 			return File.Exists(reportPath) ? code : 1;
 		}
 		finally
 		{
-			foreach (var process in new[] { app, floor })
+			foreach (var process in new[] { app, recovery, floor })
 			{
 				if (process.Process != 0)
 				{
@@ -79,6 +119,144 @@ internal static class Program
 		}
 	}
 
+	static void RunRecoveryChecks(string executable, string data, string report, string desktopName, nint controller)
+	{
+		WaitUntil(() => ProbeCommand(controller, DesktopProbeCommand.IconsVisible) == 1, "正常退出没有恢复测试列表。");
+		File.AppendAllText(report, "通过：正常退出恢复隔离桌面的系统图标列表。" + Environment.NewLine);
+		RunQueuedVisibilityCheck(executable, report, desktopName, controller);
+		foreach (bool hiddenByUser in new[] { false, true })
+		{
+			string marker = report + (hiddenByUser ? ".hidden-crash.json" : ".crash.json");
+			if (File.Exists(marker))
+			{
+				File.Delete(marker);
+			}
+			var process = Launch(executable, $"--probe-crash --data \"{data}\" --report \"{marker}\"", desktopName);
+			try
+			{
+				WaitUntil(() => File.Exists(marker) && new FileInfo(marker).Length > 0, "恢复验证进程未就绪。");
+				var state = JsonSerializer.Deserialize<RecoveryProbeState>(File.ReadAllText(marker))
+					?? throw new InvalidOperationException("恢复验证缺少主进程和恢复进程信息。");
+				if (state.ParentProcessId != process.ProcessId || state.ListHandle != ProbeCommand(controller, DesktopProbeCommand.GetIconList).ToInt64()
+					|| ProbeCommand(controller, DesktopProbeCommand.IconsVisible) != 2)
+				{
+					throw new InvalidOperationException("恢复验证没有接管本次测试图标列表。");
+				}
+				if (hiddenByUser)
+				{
+					ProbeCommand(controller, DesktopProbeCommand.HideIconsBySystem);
+				}
+				if (!TerminateProcess(process.Process, 137) || WaitForSingleObject(process.Process, 5000) != 0)
+				{
+					throw new InvalidOperationException("未能结束本次隔离测试主进程。");
+				}
+				WaitUntil(() => HasExited(state.GuardProcessId), "恢复进程没有完成恢复并退出。");
+				bool visible = ProbeCommand(controller, DesktopProbeCommand.IconsVisible) == 1;
+				if (visible == hiddenByUser)
+				{
+					throw new InvalidOperationException("强制结束后的图标恢复状态不符合用户的显示设置。");
+				}
+				File.AppendAllText(report, hiddenByUser
+					? "通过：主进程强制结束后保留用户主动隐藏图标的选择。" + Environment.NewLine
+					: "通过：主进程强制结束后由独立恢复进程恢复测试图标列表。" + Environment.NewLine);
+			}
+			finally
+			{
+				if (WaitForSingleObject(process.Process, 0) != 0)
+				{
+					TerminateProcess(process.Process, 1);
+					WaitForSingleObject(process.Process, 5000);
+				}
+				CloseHandle(process.Thread);
+				CloseHandle(process.Process);
+				ProbeCommand(controller, DesktopProbeCommand.ShowIconsBySystem);
+			}
+		}
+	}
+
+	static void RunQueuedVisibilityCheck(string executable, string report, string desktopName, nint controller)
+	{
+		var list = ProbeCommand(controller, DesktopProbeCommand.GetIconList);
+		var root = GetAncestor(list, 2);
+		GetWindowThreadProcessId(root, out uint owner);
+		string token = "Local\\MyDesktop-WinUI-Recovery-" + Guid.NewGuid().ToString("N");
+		using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, token + "-ready");
+		using var stop = new EventWaitHandle(false, EventResetMode.ManualReset, token + "-stop");
+		string queueToken = DesktopFixtureProtocol.QueueEventPrefix + owner;
+		using var blocked = new EventWaitHandle(false, EventResetMode.ManualReset, queueToken + "-ready");
+		using var resume = new EventWaitHandle(false, EventResetMode.ManualReset, queueToken + "-resume");
+		var guard = Launch(executable, $"--guard {Environment.ProcessId} {root.ToInt64()} {list.ToInt64()} {owner} 1 {token}", desktopName);
+		try
+		{
+			if (!ready.WaitOne(5000) || !PostMessage(controller, DesktopFixtureProtocol.DesktopProbeMessage, (nint)DesktopProbeCommand.PauseMessages, 0)
+				|| !blocked.WaitOne(3000) || !ShowWindowAsync(list, SW_HIDE) || !IsWindowVisible(list))
+			{
+				throw new InvalidOperationException("未能模拟尚未执行的图标隐藏请求。");
+			}
+			stop.Set();
+			if (WaitForSingleObject(guard.Process, 3000) != 0 || !GetExitCodeProcess(guard.Process, out int code) || code != 0)
+			{
+				throw new InvalidOperationException("排队恢复请求的测试进程没有正常退出。");
+			}
+			resume.Set();
+			// 让测试窗口处理已排队的隐藏和恢复请求，再核对最后状态。
+			Thread.Sleep(500);
+			if (ProbeCommand(controller, DesktopProbeCommand.IconsVisible) != 1)
+			{
+				throw new InvalidOperationException("恢复进程退出后，先前排队的隐藏请求又把图标藏起来。");
+			}
+			File.AppendAllText(report, "通过：Explorer 消息队列滞后时，恢复请求仍覆盖先前排队的隐藏请求。" + Environment.NewLine);
+		}
+		finally
+		{
+			resume.Set();
+			stop.Set();
+			if (WaitForSingleObject(guard.Process, 1000) != 0)
+			{
+				TerminateProcess(guard.Process, 1);
+				WaitForSingleObject(guard.Process, 5000);
+			}
+			CloseHandle(guard.Thread);
+			CloseHandle(guard.Process);
+			ProbeCommand(controller, DesktopProbeCommand.ShowIconsBySystem);
+		}
+	}
+
+	static bool HasExited(int id)
+	{
+		try
+		{
+			using var process = Process.GetProcessById(id);
+			return process.HasExited;
+		}
+		catch (ArgumentException)
+		{
+			return true;
+		}
+	}
+
+	static nint ProbeCommand(nint controller, DesktopProbeCommand command)
+	{
+		if (SendMessageTimeout(controller, DesktopFixtureProtocol.DesktopProbeMessage, (nint)command, 0, 2, 1000, out var result) == 0 || result == 0)
+		{
+			throw new InvalidOperationException("隔离恢复控制失败：" + command);
+		}
+		return result;
+	}
+
+	static void WaitUntil(Func<bool> condition, string error)
+	{
+		var watch = Stopwatch.StartNew();
+		while (!condition())
+		{
+			if (watch.Elapsed > TimeSpan.FromSeconds(12))
+			{
+				throw new TimeoutException(error);
+			}
+			Thread.Sleep(20);
+		}
+	}
+
 	static string CreateFixture(string reportDirectory)
 	{
 		var directory = Path.Combine(reportDirectory, "data-" + Guid.NewGuid().ToString("N"));
@@ -88,6 +266,8 @@ internal static class Program
 		Directory.CreateDirectory(portal);
 		File.WriteAllText(Path.Combine(portal, "资料一.txt"), "资料一");
 		File.WriteAllText(Path.Combine(portal, "资料二.txt"), "资料二");
+		File.WriteAllText(Path.Combine(directory, "散放一.txt"), "散放图标一");
+		File.WriteAllText(Path.Combine(directory, "散放二.txt"), "散放图标二");
 		var (area, scale) = DesktopFixtureProtocol.PrimaryArea();
 		var first = new FenceSettings
 		{
@@ -107,6 +287,14 @@ internal static class Program
 			Groups = [new FenceGroup { Members = [first.Id, second.Id], Active = first.Id }],
 		};
 		SettingsStore.SaveTo(settings, Path.Combine(directory, "settings.json"));
+		int originY = Math.Max((int)(470 * scale), area.Height / 2);
+		var snapshot = new DesktopSnapshot(true, new POINT((int)(96 * scale), (int)(104 * scale)), 48, area,
+		[
+			new DesktopEntry(Path.Combine(directory, "工作.txt"), "工作", true, false, new POINT((int)(32 * scale), originY)),
+			new DesktopEntry(Path.Combine(directory, "散放一.txt"), "散放一", true, false, new POINT((int)(32 * scale), originY + (int)(104 * scale))),
+			new DesktopEntry(Path.Combine(directory, "散放二.txt"), "散放二", true, false, new POINT((int)(32 * scale), originY + (int)(208 * scale))),
+		]);
+		File.WriteAllText(Path.Combine(directory, "desktop-snapshot.json"), JsonSerializer.Serialize(snapshot));
 		return directory;
 	}
 
@@ -158,7 +346,12 @@ internal static class Program
 				DesktopProbeCommand.LowerDesktop => MoveFloor(HWND_BOTTOM),
 				DesktopProbeCommand.RemoveDesktop => RemoveFloor(),
 				DesktopProbeCommand.RecreateDesktop => CreateFloor(),
-				DesktopProbeCommand.CloseApplication => CloseApplication()
+				DesktopProbeCommand.CloseApplication => CloseApplication(),
+				DesktopProbeCommand.GetIconList => _iconList,
+				DesktopProbeCommand.IconsVisible => IsWindowVisible(_iconList) ? 1 : 2,
+				DesktopProbeCommand.HideIconsBySystem => SetHiddenIcons(true),
+				DesktopProbeCommand.ShowIconsBySystem => SetHiddenIcons(false),
+				DesktopProbeCommand.PauseMessages => PauseMessages(),
 			};
 		}
 		return DefWindowProc(hwnd, message, wParam, lParam);
@@ -169,8 +362,16 @@ internal static class Program
 		var (area, _) = DesktopFixtureProtocol.PrimaryArea();
 		_floor = CreateWindowEx(0, DesktopFixtureProtocol.FloorClass, "跨进程底层测试窗口", (uint)WS_POPUP,
 			area.Left, area.Top, area.Width, area.Height, 0, 0, GetModuleHandle(null), 0);
-		if (_floor == 0 || CreateWindowEx(0, "SHELLDLL_DefView", "隔离桌面图标视图", 0x50000000,
-			0, 0, area.Width, area.Height, _floor, 0, GetModuleHandle(null), 0) == 0)
+		var view = CreateWindowEx(0, "SHELLDLL_DefView", "隔离桌面图标视图", 0x50000000,
+			0, 0, area.Width, area.Height, _floor, 0, GetModuleHandle(null), 0);
+		var controls = new CommonControls { Size = 8, Classes = 1 };
+		if (_floor == 0 || view == 0 || !InitCommonControlsEx(ref controls))
+		{
+			throw new Win32Exception();
+		}
+		_iconList = CreateWindowEx(0, "SysListView32", "FolderView", 0x50000000,
+			0, 0, area.Width, area.Height, view, 0, GetModuleHandle(null), 0);
+		if (_iconList == 0)
 		{
 			throw new Win32Exception();
 		}
@@ -196,6 +397,42 @@ internal static class Program
 		_floor = 0;
 		return 1;
 	}
+
+	static nint SetHiddenIcons(bool hidden)
+	{
+		if (!SetProp(_floor, DesktopFixtureProtocol.HiddenIconsProperty, hidden ? 1 : 0))
+		{
+			throw new Win32Exception();
+		}
+		DesktopFixtureProtocol.ShowWindow(_iconList, hidden ? SW_HIDE : SW_SHOWNA);
+		return 1;
+	}
+
+	static nint PauseMessages()
+	{
+		string token = DesktopFixtureProtocol.QueueEventPrefix + Environment.ProcessId;
+		using var ready = EventWaitHandle.OpenExisting(token + "-ready");
+		using var resume = EventWaitHandle.OpenExisting(token + "-resume");
+		ready.Set();
+		// 使用原生等待，避免 STA 的托管等待在阻塞期间仍分派窗口消息。
+		if (WaitForSingleObject(resume.SafeWaitHandle.DangerousGetHandle(), 10000) != 0)
+		{
+			throw new TimeoutException("隔离桌面的消息队列没有恢复。");
+		}
+		return 1;
+	}
+
+	[StructLayout(LayoutKind.Sequential)]
+	struct CommonControls
+	{
+		public int Size;
+		public uint Classes;
+	}
+
+	[DllImport("comctl32.dll", SetLastError = true)]
+	static extern bool InitCommonControlsEx(ref CommonControls controls);
+	[DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+	static extern bool SetProp(nint hwnd, string name, nint value);
 
 	static nint OpenApplication()
 	{
