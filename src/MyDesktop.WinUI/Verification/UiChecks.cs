@@ -104,6 +104,7 @@ internal static class UiChecks
 			await DesktopPlacementChecks.RunAsync(hwnd);
 			await FencePlacementChecks.RunAsync(session);
 			await RenameChecks.RunAsync(session);
+			await FenceTabChecks.RunAsync(session);
 			await DesktopPlacementChecks.RunAsync(hwnd);
 			await TakeoverChecks.RunAsync(session);
 			await GestureChecks.RunAsync(session);

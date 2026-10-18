@@ -17,6 +17,8 @@ public sealed partial class FenceView
 	static readonly InputCursor DiagonalCursor = InputSystemCursor.Create(InputSystemCursorShape.SizeNorthwestSoutheast);
 	static readonly InputCursor ReverseDiagonalCursor = InputSystemCursor.Create(InputSystemCursorShape.SizeNortheastSouthwest);
 	uint? _placementPointer;
+	Guid? _placementTab;
+	DrawPoint _placementOrigin;
 	internal event Func<DrawPoint, FenceEdges, bool>? PlacementStarted;
 	internal event Action<DrawPoint>? PlacementMoved;
 	internal event Action<bool>? PlacementFinished;
@@ -37,16 +39,18 @@ public sealed partial class FenceView
 
 	bool TryStartResize(PointerRoutedEventArgs args)
 	{
-		if (_placementPointer != null || !args.GetCurrentPoint(this).Properties.IsLeftButtonPressed) { return false; }
+		if (_placementPointer != null || _tabPointer != null || !args.GetCurrentPoint(this).Properties.IsLeftButtonPressed) { return false; }
 		var edges = ResizeEdgesAt(args.GetCurrentPoint(this).Position);
 		return edges != FenceEdges.None && BeginPlacementPointer(args, edges);
 	}
 
-	bool BeginPlacementPointer(PointerRoutedEventArgs args, FenceEdges edges)
+	bool BeginPlacementPointer(PointerRoutedEventArgs args, FenceEdges edges, Guid? tab = null)
 	{
 		if (_readOnly || _placementPointer != null || !CapturePointer(args.Pointer)) { return false; }
 		if (PlacementStarted?.Invoke(ScreenPoint(args), edges) != true) { ReleasePointerCapture(args.Pointer); return false; }
 		_placementPointer = args.Pointer.PointerId;
+		_placementTab = tab;
+		_placementOrigin = ScreenPoint(args);
 		TargetRequested?.Invoke();
 		args.Handled = true;
 		return true;
@@ -56,7 +60,7 @@ public sealed partial class FenceView
 	{
 		if (_placementPointer == args.Pointer.PointerId)
 		{
-			PlacementMoved?.Invoke(ScreenPoint(args));
+			UpdatePlacementPointer(args);
 			args.Handled = true;
 			return;
 		}
@@ -66,13 +70,24 @@ public sealed partial class FenceView
 			: horizontal ? HorizontalCursor : vertical ? VerticalCursor : null;
 	}
 
+	void UpdatePlacementPointer(PointerRoutedEventArgs args)
+	{
+		var point = ScreenPoint(args);
+		double threshold = 4 * MyDesktop.Native.NativeMethods.GetDpiForWindow(_owner) / 96.0;
+		if (Math.Abs(point.X - _placementOrigin.X) > threshold || Math.Abs(point.Y - _placementOrigin.Y) > threshold) { _placementTab = null; }
+		PlacementMoved?.Invoke(point);
+	}
+
 	void FinishPlacementPointer(bool canceled)
 	{
 		if (_placementPointer == null) { return; }
+		var tab = _placementTab;
+		_placementTab = null;
 		_placementPointer = null;
 		ReleasePointerCaptures();
 		ProtectedCursor = null;
 		PlacementFinished?.Invoke(canceled);
+		if (!canceled && tab is { } id) { ActivateTab(id); }
 	}
 
 	internal void CancelPlacementPointer() => FinishPlacementPointer(true);

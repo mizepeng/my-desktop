@@ -20,6 +20,10 @@ public sealed partial class DesktopSurface : Window
 {
 	readonly WindowApi.SubclassProc _procedure;
 	readonly DesktopPlacement _placement;
+	readonly AppSettings _settings;
+	readonly ShellItemLoader _images;
+	readonly FileRename _rename;
+	readonly bool _readOnly;
 	readonly RECT _workArea;
 	readonly double _scale;
 	readonly List<FenceView> _fences = [];
@@ -36,6 +40,10 @@ public sealed partial class DesktopSurface : Window
 	internal DesktopSurface(RECT workArea, double scale, IEnumerable<FenceFrame> frames, AppSettings settings, ShellItemLoader images, FileRename rename, bool readOnly)
 	{
 		InitializeComponent();
+		_settings = settings;
+		_images = images;
+		_rename = rename;
+		_readOnly = readOnly;
 		Title = "MyDesktop";
 		_workArea = workArea;
 		_scale = scale;
@@ -68,31 +76,6 @@ public sealed partial class DesktopSurface : Window
 			}
 		};
 		Surface.Children.Add(_desktopIcons);
-		foreach (var frame in frames)
-		{
-			var model = frame.Active;
-			if (model.Width <= 0 || model.Height <= 0)
-			{
-				throw new InvalidDataException($"分区「{model.Title}」的尺寸无效：{model.Width}×{model.Height}。");
-			}
-			var fence = new FenceView(frame, settings, images, rename, Handle, readOnly);
-			fence.ArrangeAt((model.X - workArea.Left) / scale, (model.Y - workArea.Top) / scale, model.Width / scale, model.Height / scale);
-			fence.BoundsChanged += UpdateRegion;
-			fence.PlacementStarted += (point, edges) => Placement.Begin(fence, point, edges);
-			fence.PlacementMoved += Placement.Update;
-			fence.PlacementFinished += async canceled => await Placement.EndAsync(canceled);
-			fence.SaveRequested += () =>
-			{
-				var bounds = BoundsOf(fence);
-				frame.SetBounds(bounds.Left + workArea.Left, bounds.Top + workArea.Top,
-					(int)Math.Round(fence.Width * scale), (int)Math.Round(fence.Height * scale), (int)Math.Round(scale * 96));
-				SaveRequested?.Invoke();
-			};
-			fence.ExitRequested += () => ExitRequested?.Invoke();
-			RegisterEditor(fence.EditorControl, fence);
-			Surface.Children.Add(fence);
-			_fences.Add(fence);
-		}
 		_noticeText = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = new SolidColorBrush(Microsoft.UI.Colors.White) };
 		_notice = new Border
 		{
@@ -119,6 +102,7 @@ public sealed partial class DesktopSurface : Window
 		};
 		Surface.Children.Add(_band);
 		Canvas.SetZIndex(_band, _fences.Count + 2);
+		foreach (var frame in frames) { AddFence(frame); }
 		UpdateRegion();
 		Surface.PointerPressed += Surface_PointerPressed;
 		Activated += (_, args) =>
@@ -152,6 +136,7 @@ public sealed partial class DesktopSurface : Window
 	internal event Action? ExitRequested;
 	internal event Action? Ready;
 	internal event Action? ClipboardChanged;
+	internal event Action<FenceView>? FenceAdded;
 	internal void ShowOnDesktop() => _placement.Show();
 	internal bool IsEditing => _editingEditor != null;
 	internal RECT WorkArea => _workArea;
@@ -162,11 +147,56 @@ public sealed partial class DesktopSurface : Window
 	internal bool IsInputCaptured => _captureInput;
 	internal bool IsBandVisible => _band.Visibility == Visibility.Visible;
 
+	internal FenceView AddFence(FenceFrame frame)
+	{
+		var model = frame.Active;
+		if (model.Width <= 0 || model.Height <= 0)
+		{
+			throw new InvalidDataException($"分区「{model.Title}」的尺寸无效：{model.Width}×{model.Height}。");
+		}
+		var fence = new FenceView(frame, _settings, _images, _rename, Handle, _readOnly);
+		fence.ArrangeAt((model.X - _workArea.Left) / _scale, (model.Y - _workArea.Top) / _scale, model.Width / _scale, model.Height / _scale);
+		fence.BoundsChanged += UpdateRegion;
+		fence.PlacementStarted += (point, edges) => Placement.Begin(fence, point, edges);
+		fence.PlacementMoved += Placement.Update;
+		fence.PlacementFinished += async canceled => await Placement.EndAsync(canceled);
+		fence.SaveRequested += () =>
+		{
+			var bounds = BoundsOf(fence);
+			fence.Frame.SetBounds(bounds.Left + _workArea.Left, bounds.Top + _workArea.Top,
+				(int)Math.Round(fence.Width * _scale), (int)Math.Round(fence.Height * _scale), (int)Math.Round(_scale * 96));
+			SaveRequested?.Invoke();
+		};
+		fence.ExitRequested += () => ExitRequested?.Invoke();
+		RegisterEditor(fence.EditorControl, fence);
+		_fences.Add(fence);
+		FenceAdded?.Invoke(fence);
+		Surface.Children.Add(fence);
+		RaiseFence(fence);
+		UpdateRegion();
+		return fence;
+	}
+
+	internal void RemoveFence(FenceView fence)
+	{
+		if (!_fences.Contains(fence)) { throw new ArgumentException("分区视图不属于当前宿主。", nameof(fence)); }
+		fence.Dispose();
+		_fences.Remove(fence);
+		Surface.Children.Remove(fence);
+		int order = 1;
+		foreach (var other in _fences.OrderBy(Canvas.GetZIndex)) { Canvas.SetZIndex(other, order++); }
+		Canvas.SetZIndex(_notice, _fences.Count + 1);
+		Canvas.SetZIndex(_band, _fences.Count + 2);
+		UpdateRegion();
+	}
+
 	internal void RaiseFence(FenceView fence)
 	{
 		int order = 1;
 		foreach (var other in _fences.Where(other => other != fence).OrderBy(Canvas.GetZIndex)) { Canvas.SetZIndex(other, order++); }
 		Canvas.SetZIndex(fence, order);
+		Canvas.SetZIndex(_notice, _fences.Count + 1);
+		Canvas.SetZIndex(_band, _fences.Count + 2);
 	}
 
 	internal void SetInputCapture(bool capture)

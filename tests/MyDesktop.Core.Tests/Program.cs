@@ -16,6 +16,10 @@ var checks = new (string Name, Action Run)[]
 	("分组布局同步且布局字典不共享", GroupFrameSynchronization),
 	("失效标签组沿用旧版规范化规则", NormalizeGroups),
 	("非法标签和 DPI 显式失败", InvalidFrameChanges),
+	("标签合并保留目标布局与双方内容顺序", MergeGroups),
+	("标签排序不切换活动标签且索引不越界", MoveGroupTabs),
+	("拆出活动标签选择相邻标签并解散单成员组", DetachGroupTabs),
+	("锁定与非法合并拒绝修改标签配置", InvalidGroupChanges),
 	("拼音资源随核心程序集迁移", PinyinResource),
 	("整理规则优先级及兜底语义不变", OrganizeRules),
 	("改名保留隐藏扩展名且拒绝非法文件名", RenameNames),
@@ -68,6 +72,64 @@ static void Require(bool condition, string message)
 	{
 		throw new InvalidOperationException(message);
 	}
+}
+
+static void MergeGroups()
+{
+	var source = new FenceSettings { Title = "来源", X = 10, Y = 20, Color = "#123456", Members = ["source"] };
+	var sourceTab = new FenceSettings { FolderPath = "mapped", IsPortal = true };
+	var target = new FenceSettings { Title = "目标", X = 500, Y = 200, Width = 600, Height = 400, RolledUp = true };
+	var targetTab = new FenceSettings();
+	var settings = new AppSettings
+	{
+		Fences = [source, sourceTab, target, targetTab],
+		Groups = [new() { Members = [source.Id, sourceTab.Id], Active = source.Id }, new() { Members = [targetTab.Id, target.Id], Active = target.Id }],
+	};
+	FenceGroups.Normalize(settings);
+	var group = FenceGroups.Merge(settings, source.Id, target.Id);
+	Require(settings.Groups.Count == 1 && group.Members.SequenceEqual([targetTab.Id, target.Id, source.Id, sourceTab.Id]), "合并没有按目标在前、整组来源在后的顺序进行。");
+	Require(group.Active == source.Id && settings.Fences.All(fence => fence.X == 500 && fence.Width == 600 && fence.RolledUp), "合并应显示来源活动标签并沿用目标布局。");
+	Require(source.Members.SequenceEqual(["source"]) && source.Color == "#123456" && sourceTab.FolderPath == "mapped", "合并改写了各标签独立内容。");
+	Require(!ReferenceEquals(source.BoundsByDpi, target.BoundsByDpi), "合并后布局字典被共享。");
+}
+
+static void MoveGroupTabs()
+{
+	var fences = new[] { new FenceSettings(), new FenceSettings(), new FenceSettings() };
+	var group = new FenceGroup { Members = fences.Select(fence => fence.Id).ToList(), Active = fences[1].Id };
+	var settings = new AppSettings { Fences = fences.ToList(), Groups = [group] };
+	Require(FenceGroups.Move(settings, fences[2].Id, -10) && group.Members.SequenceEqual([fences[2].Id, fences[0].Id, fences[1].Id]), "左侧越界没有停在第一个标签。");
+	Require(FenceGroups.Move(settings, fences[2].Id, 100) && group.Members.SequenceEqual(fences.Select(fence => fence.Id)), "右侧越界没有停在最后一个标签。");
+	Require(group.Active == fences[1].Id && !FenceGroups.Move(settings, fences[2].Id, 2), "排序切换了活动标签或重复排序仍报告变化。");
+}
+
+static void DetachGroupTabs()
+{
+	var fences = new[] { new FenceSettings(), new FenceSettings(), new FenceSettings() };
+	var group = new FenceGroup { Members = fences.Select(fence => fence.Id).ToList(), Active = fences[1].Id };
+	var settings = new AppSettings { Fences = fences.ToList(), Groups = [group] };
+	Require(FenceGroups.Detach(settings, fences[1].Id) && group.Active == fences[2].Id, "拆出活动标签后没有选择右侧相邻标签。");
+	Require(new FenceWorkspace(settings).Frames.Count == 2, "拆出后没有新增一个可见框架。");
+	Require(FenceGroups.Detach(settings, fences[2].Id) && settings.Groups.Count == 0 && new FenceWorkspace(settings).Frames.Count == 3, "只剩一个成员的组没有解散。");
+	Require(!FenceGroups.Detach(settings, fences[0].Id) && settings.Fences.Count == 3, "独立分区被重复拆出或误删。");
+}
+
+static void InvalidGroupChanges()
+{
+	var a = new FenceSettings();
+	var b = new FenceSettings();
+	var c = new FenceSettings { Locked = true };
+	var group = new FenceGroup { Members = [a.Id, b.Id], Active = a.Id };
+	var settings = new AppSettings { Fences = [a, b, c], Groups = [group] };
+	Throws<InvalidOperationException>(() => FenceGroups.Merge(settings, a.Id, a.Id));
+	Throws<InvalidOperationException>(() => FenceGroups.Merge(settings, a.Id, b.Id));
+	Throws<InvalidOperationException>(() => FenceGroups.Merge(settings, a.Id, c.Id));
+	Throws<InvalidOperationException>(() => FenceGroups.Merge(settings, c.Id, a.Id));
+	Throws<InvalidOperationException>(() => FenceGroups.Merge(settings, Guid.NewGuid(), a.Id));
+	a.Locked = true;
+	Throws<InvalidOperationException>(() => FenceGroups.Move(settings, a.Id, 1));
+	Throws<InvalidOperationException>(() => FenceGroups.Detach(settings, a.Id));
+	Require(settings.Groups.Count == 1 && group.Members.SequenceEqual([a.Id, b.Id]), "拒绝操作前已经部分修改标签组。");
 }
 
 static void Throws<T>(Action operation) where T : Exception

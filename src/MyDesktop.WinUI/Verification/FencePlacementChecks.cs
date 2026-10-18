@@ -59,7 +59,7 @@ internal static class FencePlacementChecks
 			start = Bounds(surface, frame);
 			point = new(start.Left + Px(60), start.Top + Px(12));
 			surface.Placement.Begin(frame, point, FenceEdges.None);
-			surface.Placement.Update(new(point.X + Px(480), point.Y));
+			surface.Placement.Update(new(point.X + Px(480), point.Y + Px(60)));
 			Require(Bounds(surface, frame).IntersectsWith(Bounds(surface, neighbor)), "移动期间允许经过相邻分区");
 			await surface.Placement.EndAsync(false);
 			Require(!Bounds(surface, frame).IntersectsWith(Bounds(surface, neighbor)), "松手后滑到最近可用位置");

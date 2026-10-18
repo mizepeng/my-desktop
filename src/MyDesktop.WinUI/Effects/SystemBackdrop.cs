@@ -7,6 +7,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using MyDesktop.Core;
 using MyDesktop.Native;
+using WinRT;
 using static MyDesktop.Native.NativeMethods;
 
 namespace MyDesktop.WinUI.Effects;
@@ -145,8 +146,11 @@ internal sealed class SystemAcrylicBackdrop : SystemBackdrop
 
 	protected override void OnTargetDisconnected(ICompositionSupportsSystemBackdrop target)
 	{
+		_controller?.RemoveSystemBackdropTarget(target);
 		_controller?.Dispose();
 		_controller = null;
 		_configuration = null;
+		// 本类只连接 SystemBackdropElement 的外部背景链接；必须在界面线程关闭，不能留给终结线程关闭 ContentSite。
+		target.As<IDisposable>().Dispose();
 	}
 }

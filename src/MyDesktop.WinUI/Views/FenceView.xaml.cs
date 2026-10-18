@@ -22,7 +22,8 @@ namespace MyDesktop.WinUI.Views;
 
 public sealed partial class FenceView : UserControl, IDisposable
 {
-	readonly FenceFrame _frame;
+	FenceFrame _frame;
+	Guid _scope;
 	readonly AppSettings _settings;
 	readonly ShellItemLoader _images;
 	readonly FileRename _rename;
@@ -37,12 +38,14 @@ public sealed partial class FenceView : UserControl, IDisposable
 	int _contentVersion;
 	bool _refreshAfterEdit;
 	bool _settingSelection;
+	bool _disposed;
 	IReadOnlySet<string> _cut = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
 	internal FenceView(FenceFrame frame, AppSettings settings, ShellItemLoader images, FileRename rename, nint owner, bool readOnly)
 	{
 		InitializeComponent();
 		_frame = frame;
+		_scope = frame.Active.Id;
 		_settings = settings;
 		_images = images;
 		_rename = rename;
@@ -50,7 +53,7 @@ public sealed partial class FenceView : UserControl, IDisposable
 		_readOnly = readOnly;
 		AddHandler(PointerPressedEvent, new PointerEventHandler((_, args) =>
 		{
-			if (TryStartResize(args) || _placementPointer != null) { return; }
+			if (TryStartResize(args) || _placementPointer != null || _tabPointer != null) { return; }
 			if (!IsEditing) { TargetRequested?.Invoke(); }
 			if (_bandPointer != null && args.GetCurrentPoint(this).Properties.IsRightButtonPressed)
 			{
@@ -114,23 +117,17 @@ public sealed partial class FenceView : UserControl, IDisposable
 					NativeMethods.GetAsyncKeyState(NativeMethods.VK_CONTROL) < 0 || NativeMethods.GetAsyncKeyState(NativeMethods.VK_SHIFT) < 0);
 			}
 		};
-		Header.PointerPressed += Header_PointerPressed;
+		Header.AddHandler(PointerPressedEvent, new PointerEventHandler(Header_PointerPressed), true);
+		InitializeTabs();
 		PointerMoved += Placement_PointerMoved;
-		PointerReleased += (_, args) => { if (_placementPointer == args.Pointer.PointerId) { FinishPlacementPointer(false); } };
+		PointerReleased += (_, args) =>
+		{
+			if (_placementPointer != args.Pointer.PointerId) { return; }
+			UpdatePlacementPointer(args);
+			FinishPlacementPointer(false);
+		};
 		PointerCaptureLost += (_, args) => { if (_placementPointer == args.Pointer.PointerId) { FinishPlacementPointer(true); } };
 		PointerExited += (_, _) => { if (_placementPointer == null) { ProtectedCursor = null; } };
-		var menu = new MenuFlyout();
-		var renameTitle = new MenuFlyoutItem { Text = "重命名分区", IsEnabled = !readOnly };
-		renameTitle.Click += (_, _) => BeginTitleEdit();
-		var refresh = new MenuFlyoutItem { Text = "刷新" };
-		refresh.Click += (_, _) => RefreshContent();
-		var exit = new MenuFlyoutItem { Text = "退出 MyDesktop" };
-		exit.Click += (_, _) => ExitRequested?.Invoke();
-		menu.Items.Add(renameTitle);
-		menu.Items.Add(refresh);
-		menu.Items.Add(new MenuFlyoutSeparator());
-		menu.Items.Add(exit);
-		Header.ContextFlyout = menu;
 		Loaded += async (_, _) =>
 		{
 			_contentTask = LoadItemsAsync();
@@ -210,24 +207,31 @@ public sealed partial class FenceView : UserControl, IDisposable
 
 	internal void ActivateTab(Guid id)
 	{
+		if (!_frame.Members.Any(member => member.Id == id)) { throw new ArgumentException("指定分区不属于这个标签组。", nameof(id)); }
+		if (_frame.Active.Id == id || TabSwitchAllowed?.Invoke() == false) { return; }
 		CancelEdit();
-		ScopeHidden?.Invoke(_frame.Active.Id);
 		_frame.Activate(id);
-		RefreshTabs();
-		RefreshAppearance();
-		_contentTask = LoadItemsAsync();
+		RebindFrame(_frame);
 		SaveRequested?.Invoke();
 	}
 
-	void RefreshTabs()
+	internal void RebindFrame(FenceFrame frame)
 	{
-		Tabs.Children.Clear();
-		foreach (var member in _frame.Members)
+		StopTabHover();
+		_frame = frame;
+		if (_scope != frame.Active.Id)
 		{
-			var tab = new ToggleButton { Content = member.Title, IsChecked = member == _frame.Active, AllowFocusOnInteraction = false };
-			tab.Click += (_, _) => ActivateTab(member.Id);
-			Tabs.Children.Add(tab);
+			CancelEdit();
+			ScopeHidden?.Invoke(_scope);
+			_scope = frame.Active.Id;
+			// 新标签加载完成前不能把旧标签的图标当作新标签的文件进行操作。
+			_settingSelection = true;
+			try { _items.Clear(); }
+			finally { _settingSelection = false; }
+			_contentTask = LoadItemsAsync();
 		}
+		RefreshTabs();
+		RefreshAppearance();
 	}
 
 	void RefreshAppearance()
@@ -239,12 +243,13 @@ public sealed partial class FenceView : UserControl, IDisposable
 		Tint.CornerRadius = new CornerRadius(_settings.CornerRadius);
 		_backdrop.CornerRadius = Tint.CornerRadius;
 		var background = model.Background ?? _settings.DefaultBackground;
+		// 非空替换会复用外部链接，不能关闭后重接；相同材质保持原对象，变为半透明时才拆除链接。
 		_backdrop.SystemBackdrop = background switch
 		{
 			BackgroundEffect.Translucent => null,
 			// 新界面的毛玻璃统一由系统材质承载，保留旧配置枚举以兼容数据。
-			BackgroundEffect.Blur => new SystemAcrylicBackdrop(),
-			BackgroundEffect.Acrylic => new SystemAcrylicBackdrop(),
+			BackgroundEffect.Blur => _backdrop.SystemBackdrop ?? new SystemAcrylicBackdrop(),
+			BackgroundEffect.Acrylic => _backdrop.SystemBackdrop ?? new SystemAcrylicBackdrop(),
 		};
 		_geometry.Size = new Vector2((float)Width, (float)VisibleHeight);
 	}
@@ -263,12 +268,18 @@ public sealed partial class FenceView : UserControl, IDisposable
 
 	void Header_PointerPressed(object sender, PointerRoutedEventArgs args)
 	{
+		StopTabHover();
+		var tab = TabAt(args.OriginalSource as DependencyObject);
 		if (IsEditing || _frame.Active.Locked || !args.GetCurrentPoint(null).Properties.IsLeftButtonPressed
-			|| IsButton(args.OriginalSource as DependencyObject) || ResizeEdgesAt(args.GetCurrentPoint(this).Position) != FenceEdges.None)
+			|| IsButton(args.OriginalSource as DependencyObject) && tab == null || ResizeEdgesAt(args.GetCurrentPoint(this).Position) != FenceEdges.None)
 		{
 			return;
 		}
-		BeginPlacementPointer(args, FenceEdges.None);
+		if (tab is { } id && NativeMethods.GetAsyncKeyState(NativeMethods.VK_SHIFT) < 0 && _frame.Members.Count > 1)
+		{
+			BeginTabPointer(args, id);
+		}
+		else { BeginPlacementPointer(args, FenceEdges.None, tab); }
 	}
 
 	internal void TranslateTo(double x, double y)
@@ -293,6 +304,7 @@ public sealed partial class FenceView : UserControl, IDisposable
 
 	async Task LoadItemsAsync()
 	{
+		if (_disposed) { return; }
 		int version = ++_contentVersion;
 		var model = _frame.Active;
 		var loaded = new List<FenceItem>();
@@ -429,6 +441,8 @@ public sealed partial class FenceView : UserControl, IDisposable
 			throw new InvalidOperationException("预览模式不能修改分区或文件名称。");
 		}
 		CancelPlacementPointer();
+		CancelTabPointer();
+		StopTabHover();
 	}
 
 	internal bool CommitEdit() => Editor.Commit();
@@ -491,6 +505,10 @@ public sealed partial class FenceView : UserControl, IDisposable
 
 	public void Dispose()
 	{
+		_disposed = true;
+		StopTabHover();
+		CancelTabPointer();
+		CancelPlacementPointer();
 		CancelEdit();
 		_contentVersion++;
 		_backdrop.SystemBackdrop = null;

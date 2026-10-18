@@ -11,13 +11,16 @@ namespace MyDesktop.WinUI.Services;
 internal sealed class FencePlacement(DesktopSurface surface, AppSettings settings, bool readOnly)
 {
 	FenceView? _active;
+	FenceView? _mergeTarget;
 	Rectangle _start;
 	Point _origin;
 	FenceEdges _edges;
 	(IReadOnlyList<int> Widths, IReadOnlyList<int> Heights) _grid;
 	int _version;
+	bool _moved;
 	public bool IsActive => _active != null;
 	internal event Action? Changed;
+	internal event Func<FenceView, FenceView, bool>? MergeRequested;
 
 	internal bool Begin(FenceView fence, Point point, FenceEdges edges)
 	{
@@ -31,6 +34,8 @@ internal sealed class FencePlacement(DesktopSurface surface, AppSettings setting
 			previous.CommitPosition();
 		}
 		_active = fence;
+		SetMergeTarget(null);
+		_moved = false;
 		surface.RaiseFence(fence);
 		_start = Bounds(fence);
 		_origin = point;
@@ -44,6 +49,8 @@ internal sealed class FencePlacement(DesktopSurface surface, AppSettings setting
 	{
 		if (_active is not { } fence) { return; }
 		var delta = new Point(point.X - _origin.X, point.Y - _origin.Y);
+		if (!_moved && _edges == FenceEdges.None && Math.Abs(delta.X) <= 4 * surface.Scale && Math.Abs(delta.Y) <= 4 * surface.Scale) { return; }
+		_moved = true;
 		Rectangle bounds;
 		if (_edges == FenceEdges.None)
 		{
@@ -58,6 +65,8 @@ internal sealed class FencePlacement(DesktopSurface surface, AppSettings setting
 				settings, surface.Scale, minimum, _grid.Widths, _grid.Heights);
 		}
 		Apply(fence, bounds);
+		SetMergeTarget(_edges == FenceEdges.None ? surface.Fences.FirstOrDefault(other => other != fence && !other.Frame.Active.Locked && !other.IsEditing
+			&& FenceTabs.HeaderBounds(surface, other).Contains(point)) : null);
 	}
 
 	internal async Task EndAsync(bool canceled)
@@ -65,6 +74,14 @@ internal sealed class FencePlacement(DesktopSurface surface, AppSettings setting
 		if (_active is not { } fence) { return; }
 		if (canceled) { Cancel(); return; }
 		int version = ++_version;
+		var merge = _mergeTarget;
+		SetMergeTarget(null);
+		if (merge != null && _moved && _edges == FenceEdges.None)
+		{
+			_active = null;
+			if (MergeRequested?.Invoke(fence, merge) == true) { Changed?.Invoke(); return; }
+			_active = fence;
+		}
 		var bounds = Bounds(fence);
 		var target = bounds;
 		if (bounds != _start)
@@ -96,9 +113,18 @@ internal sealed class FencePlacement(DesktopSurface surface, AppSettings setting
 		if (_active is not { } fence) { return; }
 		_version++;
 		_active = null;
+		SetMergeTarget(null);
 		Apply(fence, _start);
 		fence.CancelPlacementPointer();
 		Changed?.Invoke();
+	}
+
+	void SetMergeTarget(FenceView? target)
+	{
+		if (_mergeTarget == target) { return; }
+		_mergeTarget?.SetMergeTarget(false);
+		_mergeTarget = target;
+		target?.SetMergeTarget(true);
 	}
 
 	Rectangle Bounds(FenceView fence)
