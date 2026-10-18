@@ -31,6 +31,7 @@
 		<Compile Include="../MyDesktop/Native/ExplorerDesktopReader.cs" Link="Native/ExplorerDesktopReader.cs" />
 		<Compile Include="../MyDesktop/Native/ExplorerDesktopWindow.cs" Link="Native/ExplorerDesktopWindow.cs" />
 		<Compile Include="../MyDesktop/Core/ExplorerShell.cs" Link="Services/ExplorerShell.cs" />
+		<Compile Include="../MyDesktop/Core/AppCommand.cs" Link="Services/AppCommand.cs" />
 		<Compile Include="../../tests/MyDesktop.WinUI.Smoke/DesktopFixtureProtocol.cs" Link="Verification/DesktopFixtureProtocol.cs" />
 		<RuntimeHostConfigurationOption Include="System.GC.Gen0MaxBudget" Value="6291456" />
 	</ItemGroup>

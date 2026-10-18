@@ -12,6 +12,7 @@ public partial class App : Application
 	Mutex? _mutex;
 	bool _ownsMutex;
 	DesktopSession? _session;
+	Native.InstanceCommands? _commands;
 
 	public App()
 	{
@@ -39,6 +40,7 @@ public partial class App : Application
 					throw new InvalidOperationException("这份配置已有 MyDesktop 实例在运行。请先退出该实例，或使用独立的 --data 数据目录。");
 				}
 				Log.Init(AppPaths.DataDir);
+				_commands = new Native.InstanceCommands(Shutdown);
 			}
 			var settings = options.PreviewFile == null ? SettingsStore.Load(out _) : SettingsStore.ReadFrom(options.PreviewFile);
 			_session = new DesktopSession(settings, options, Shutdown);
@@ -62,6 +64,8 @@ public partial class App : Application
 
 	void Shutdown()
 	{
+		_commands?.Dispose();
+		_commands = null;
 		_session?.Dispose();
 		_session = null;
 		if (_ownsMutex)

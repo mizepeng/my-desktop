@@ -9,11 +9,18 @@
 #else
   #define PublishDir AddBackslash(SourcePath) + "..\publish\"
 #endif
+#ifdef WinUITest
+  #define AppExe "MyDesktop.WinUI.exe"
+  #define InstalledExe "WinUI-Test\MyDesktop.WinUI.exe"
+#else
+  #define AppExe "MyDesktop.exe"
+  #define InstalledExe "MyDesktop.exe"
+#endif
 #define VerMajor
 #define VerMinor
 #define VerRev
 #define VerBuild
-#expr GetVersionComponents(PublishDir + "MyDesktop.exe", VerMajor, VerMinor, VerRev, VerBuild)
+#expr GetVersionComponents(PublishDir + AppExe, VerMajor, VerMinor, VerRev, VerBuild)
 #define AppVersion Str(VerMajor) + "." + Str(VerMinor) + "." + Str(VerRev)
 ; 卸载时按指纹删除导入的证书；.cer 是 DER 格式，文件本身的 SHA-1 就是证书指纹
 #define CertThumbprint GetSHA1OfFile(AddBackslash(SourcePath) + "MyDesktop.cer")
@@ -36,7 +43,7 @@ MinVersion=10.0
 OutputDir=..\publish
 OutputBaseFilename=MyDesktop-Setup-{#AppVersion}
 SetupIconFile=..\src\MyDesktop\Assets\app.ico
-UninstallDisplayIcon={app}\MyDesktop.exe
+UninstallDisplayIcon={app}\{#InstalledExe}
 UninstallDisplayName=MyDesktop 桌面分区
 WizardStyle=modern
 Compression=lzma2
@@ -50,20 +57,29 @@ UsedUserAreasWarning=no
 Name: "chs"; MessagesFile: "ChineseSimplified.isl"
 
 [Tasks]
+#ifndef WinUITest
 Name: "autostart"; Description: "开机自动启动"
+#endif
 
 [Files]
+#ifdef WinUITest
+Source: "{#PublishDir}*"; DestDir: "{app}\WinUI-Test"; Excludes: "InstallerExit\*"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#PublishDir}InstallerExit\MyDesktop.exe"; DestDir: "{tmp}"; Flags: dontcopy
+#else
 Source: "{#PublishDir}MyDesktop.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PublishDir}MyDesktop.DesktopMenu.msix"; DestDir: "{app}"; Flags: ignoreversion
 Source: "MyDesktop.cer"; DestDir: "{tmp}"; Flags: deleteafterinstall
+#endif
 
 [Icons]
-Name: "{autoprograms}\MyDesktop 桌面分区"; Filename: "{app}\MyDesktop.exe"
+Name: "{autoprograms}\MyDesktop 桌面分区"; Filename: "{app}\{#InstalledExe}"
 
 [Registry]
 ; 勾选开机自动启动时写当前用户的 Run 项，登录 Windows 后由系统启动。
 ; 自动更新时不写：用户在程序里关掉开机自启后，静默升级不能又把它打开
+#ifndef WinUITest
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "MyDesktop"; ValueData: """{app}\MyDesktop.exe"" --autostart"; Tasks: autostart; Check: not IsAutoUpdate
+#endif
 ; 卸载时删除开机自启（程序里也能开关，不论安装时是否勾选都要删），以及没有扩展包时程序退而写入的注册表右键菜单
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "MyDesktop"; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"; ValueName: "MyDesktop"; Flags: uninsdeletevalue dontcreatekey
@@ -71,14 +87,16 @@ Root: HKCU; Subkey: "Software\Classes\DesktopBackground\Shell\MyDesktop"; Flags:
 
 [Run]
 ; 信任右键菜单扩展包的签名证书，程序启动时会自动注册扩展包
+#ifndef WinUITest
 Filename: "{sys}\certutil.exe"; Parameters: "-addstore -f TrustedPeople ""{tmp}\MyDesktop.cer"""; Flags: runhidden; StatusMsg: "正在配置桌面右键菜单…"
-Filename: "{app}\MyDesktop.exe"; Description: "启动 MyDesktop"; Flags: nowait postinstall skipifsilent
+#endif
+Filename: "{app}\{#InstalledExe}"; Description: "启动 MyDesktop"; Flags: nowait postinstall skipifsilent
 ; 程序自动更新时静默安装（参数 /autoupdate=1），装完以原来的用户身份重新启动它
-Filename: "{app}\MyDesktop.exe"; Flags: nowait runasoriginaluser; Check: IsAutoUpdate
+Filename: "{app}\{#InstalledExe}"; Flags: nowait runasoriginaluser; Check: IsAutoUpdate
 
 [UninstallRun]
 ; 先让程序正常退出（恢复桌面图标），再注销右键菜单扩展包、删除证书
-Filename: "{app}\MyDesktop.exe"; Parameters: "--command exit"; Flags: runhidden waituntilterminated; RunOnceId: "ExitApp"
+Filename: "{app}\{#InstalledExe}"; Parameters: "--command exit"; Flags: runhidden waituntilterminated; RunOnceId: "ExitApp"
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -Command ""Get-AppxPackage -Name MyDesktop.DesktopMenu | Remove-AppxPackage"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveMenuPackage"
 Filename: "{sys}\certutil.exe"; Parameters: "-delstore TrustedPeople {#CertThumbprint}"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveCertificate"
 ; 清理旧版本留下的各用户开机自启计划任务

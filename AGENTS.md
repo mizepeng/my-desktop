@@ -58,6 +58,8 @@ powershell -ExecutionPolicy Bypass -File installer/Build-Installer.ps1
 - WinUI 层级检查覆盖编辑前、首次输入后及文件改名后。首次激活会生成归属于宿主的隐藏 IME 窗口；桌面已在最前且没有安全参照时，`HWND_TOP` 会被解析为该 IME 窗口，宿主及其名下窗口会掉到底层。此时直接以 `HWND_TOPMOST` 临时提起，普通应用回到桌面上方后随参照撤销置顶。不要改动输入法窗口的 owner，也不要把桌面设为 owner。
 - 编译偶尔报找不到 `obj\...\*.g.cs` 或 `App.baml`：VS Code 的 C# 扩展在后台同时编译、抢了中间文件，重试即可。
 - 测试包用 `Build-Installer.ps1 -Test`：输出 `publish\测试\MyDesktop-Setup-<版本>-测试.exe`，不动 `publish` 根目录里的正式包，`publish\测试` 里只留这一个；个别情况要同时留几个测试包测不同场景时加 `-Label <场景>`。
+- WinUI 重构测试包用 `Build-Installer.ps1 -Test -WinUI -TestVersion 1.3.0 -Label WinUI3`；版本覆盖仅用于本次产物，完整依赖安装在 `WinUI-Test` 子目录，沿用同一安装标识与用户配置。
+  新入口支持安装程序共用的 `--command exit`，正常退出时先恢复系统图标。WinUI 尚未接入自动更新，测试后用最新正式安装包覆盖安装恢复；测试包不注册新的开机启动或右键菜单扩展。
 - 发行版安装包一律用 `Build-Installer.ps1` 生成：发布程序、用 ISCC 编译安装包、用 `CN=MyDesktop` 证书给安装包签名，`publish` 里只留下 `MyDesktop-Setup-<版本>.exe`。自动更新只接受这张证书签名的安装包，漏签会让所有用户更新失败。版本号只改 csproj 的 `<Version>`，exe、扩展包、安装包文件名都跟着它。发版时在 `docs/CHANGELOG.md` 顶部补上本版改动。
 - 桌面右键菜单扩展包（msix）在编译时生成并签名，需要签名证书（见「开发环境」），没有时跳过并给出提示。公钥 `installer/MyDesktop.cer` 随仓库提交，安装程序把它导入「受信任人」。
 - 推送到 main 和提交 PR 时 GitHub Actions 会编译一遍（`.github/workflows/build.yml`，不签名）；Issue 模板在 `.github/ISSUE_TEMPLATE`。

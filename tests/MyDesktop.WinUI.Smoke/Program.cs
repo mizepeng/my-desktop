@@ -135,6 +135,7 @@ internal static class Program
 		WaitUntil(() => ProbeCommand(controller, DesktopProbeCommand.IconsVisible) == 1, "正常退出没有恢复测试列表。");
 		File.AppendAllText(report, "通过：正常退出恢复隔离桌面的系统图标列表。" + Environment.NewLine);
 		RunQueuedVisibilityCheck(executable, report, desktopName, controller);
+		RunInstallExitCheck(executable, data, report, desktopName, controller);
 		foreach (bool hiddenByUser in new[] { false, true })
 		{
 			string marker = report + (hiddenByUser ? ".hidden-crash.json" : ".crash.json");
@@ -181,6 +182,43 @@ internal static class Program
 				CloseHandle(process.Thread);
 				CloseHandle(process.Process);
 				ProbeCommand(controller, DesktopProbeCommand.ShowIconsBySystem);
+			}
+		}
+	}
+
+	static void RunInstallExitCheck(string executable, string data, string report, string desktopName, nint controller)
+	{
+		string marker = report + ".install-exit.json";
+		if (File.Exists(marker)) { File.Delete(marker); }
+		var app = Launch(executable, $"--probe-crash --data \"{data}\" --report \"{marker}\"", desktopName);
+		var command = default(ProcessInfo);
+		try
+		{
+			WaitUntil(() => File.Exists(marker) && new FileInfo(marker).Length > 0, "安装退出验证进程未就绪。");
+			var state = JsonSerializer.Deserialize<RecoveryProbeState>(File.ReadAllText(marker))
+				?? throw new InvalidOperationException("安装退出验证缺少恢复保护信息。");
+			command = Launch(executable, $"--command exit --data \"{data}\"", desktopName);
+			if (WaitForSingleObject(command.Process, 25000) != 0 || !GetExitCodeProcess(command.Process, out int commandCode) || commandCode != 0
+				|| WaitForSingleObject(app.Process, 5000) != 0 || !GetExitCodeProcess(app.Process, out int appCode) || appCode != 0)
+			{
+				throw new InvalidOperationException("安装退出命令未能正常结束本次隔离实例。");
+			}
+			WaitUntil(() => HasExited(state.GuardProcessId), "安装退出后恢复进程没有结束。");
+			WaitUntil(() => ProbeCommand(controller, DesktopProbeCommand.IconsVisible) == 1, "安装退出后系统图标未恢复。");
+			File.AppendAllText(report, "通过：安装程序共用的退出消息正常结束 WinUI 实例并恢复系统图标。" + Environment.NewLine);
+		}
+		finally
+		{
+			foreach (var process in new[] { command, app })
+			{
+				if (process.Process == 0) { continue; }
+				if (WaitForSingleObject(process.Process, 0) != 0)
+				{
+					TerminateProcess(process.Process, 1);
+					WaitForSingleObject(process.Process, 5000);
+				}
+				CloseHandle(process.Thread);
+				CloseHandle(process.Process);
 			}
 		}
 	}
