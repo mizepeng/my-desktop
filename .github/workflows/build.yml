@@ -14,5 +14,7 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
-      - name: 编译
-        run: dotnet build src/MyDesktop/MyDesktop.csproj -c Release
+      - name: 完整编译全部工程
+        run: dotnet build MyDesktop.slnx -c Release -t:Rebuild -p:Platform=x64
+      - name: 验证共享核心兼容性
+        run: dotnet tests/MyDesktop.Core.Tests/bin/Release/net10.0/MyDesktop.Core.Tests.dll

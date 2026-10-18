@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<RootNamespace>MyDesktop</RootNamespace>
+		<WarningsAsErrors>$(WarningsAsErrors);CS8509</WarningsAsErrors>
+		<NoWarn>$(NoWarn);CS8524</NoWarn>
+	</PropertyGroup>
+	<ItemGroup>
+		<InternalsVisibleTo Include="MyDesktop" />
+		<InternalsVisibleTo Include="MyDesktop.WinUI" />
+		<InternalsVisibleTo Include="MyDesktop.Core.Tests" />
+		<InternalsVisibleTo Include="MyDesktop.WinUI.Smoke" />
+		<EmbeddedResource Include="Assets/pinyin.txt" LogicalName="MyDesktop.pinyin.txt" />
+	</ItemGroup>
+</Project>

@@ -1,0 +1,14 @@
+<Solution>
+	<Configurations>
+		<Platform Name="x64" />
+	</Configurations>
+	<Folder Name="/src/">
+		<Project Path="src/MyDesktop.Core/MyDesktop.Core.csproj" />
+		<Project Path="src/MyDesktop.WinUI/MyDesktop.WinUI.csproj" />
+		<Project Path="src/MyDesktop/MyDesktop.csproj" />
+	</Folder>
+	<Folder Name="/tests/">
+		<Project Path="tests/MyDesktop.Core.Tests/MyDesktop.Core.Tests.csproj" />
+		<Project Path="tests/MyDesktop.WinUI.Smoke/MyDesktop.WinUI.Smoke.csproj" />
+	</Folder>
+</Solution>

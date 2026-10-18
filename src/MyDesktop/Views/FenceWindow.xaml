@@ -4,7 +4,7 @@
 		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
 		xmlns:sys="clr-namespace:System;assembly=System.Runtime"
 		xmlns:local="clr-namespace:MyDesktop.Views"
-		xmlns:models="clr-namespace:MyDesktop.Models"
+		xmlns:models="clr-namespace:MyDesktop.Models;assembly=MyDesktop.Core"
 		Title="MyDesktop 分区"
 		WindowStyle="None"
 		AllowsTransparency="True"

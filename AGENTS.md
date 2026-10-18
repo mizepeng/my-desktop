@@ -3,7 +3,13 @@
 本文件为在此仓库中工作的 AI 编程助手提供项目约定和开发指导。
 
 ## 项目概况
-MyDesktop：Windows 11 桌面分区整理工具（对标 Fences），.NET 10 + WPF，单个项目 `src/MyDesktop`，没有第三方依赖。没有测试项目和 lint 配置，验证靠编译加实机运行。README 面向最终用户，开发说明写在脚本开头：`installer/MyDesktop.iss`、`src/MyDesktop/ShellExtension/Pack-DesktopMenu.ps1`。
+MyDesktop：Windows 11 桌面分区整理工具（对标 Fences），.NET 10，正在迁移到 WinUI 3 + Composition。
+- `src/MyDesktop.Core`：不依赖界面框架的模型、配置存储、备份、使用记录、拼音搜索和标签组规则；保留现有命名空间及 JSON 格式。
+- `src/MyDesktop.WinUI`：新界面入口，使用 Windows App SDK 2.5.1；每屏一个桌面宿主，分区和标签均为内部视图。
+- `src/MyDesktop`：迁移期间保留的 WPF 入口，引用同一个核心工程；安装包仍使用此入口，尚未切换发行入口。
+- `tests/MyDesktop.Core.Tests`：无第三方依赖的控制台回归检查，直接运行返回通过或失败退出码。
+- `tests/MyDesktop.WinUI.Smoke`：不切换过去的独立桌面验证启动器，生成独立配置及测试文件，不在真实桌面注入鼠标键盘。
+README 面向最终用户；构建与迁移说明维护在本文件及现有脚本中，不把原型产物当成已经完成的正式功能。
 ## 开发环境
 换电脑后按下面准备（Windows 11 64 位）。其中导入 PFX、信任证书要输入 PFX 密码或管理员确认，由开发者本人在自己的终端里执行，PFX 密码不要交给 agent：
 - Git、.NET 10 SDK：`winget install Git.Git`、`winget install Microsoft.DotNet.SDK.10`。
@@ -18,8 +24,14 @@ MyDesktop：Windows 11 桌面分区整理工具（对标 Fences），.NET 10 + W
 ## 常用命令
 ```bash
 dotnet build src/MyDesktop/MyDesktop.csproj
+dotnet build MyDesktop.slnx -t:Rebuild -p:Platform=x64
+dotnet run --project tests/MyDesktop.Core.Tests/MyDesktop.Core.Tests.csproj
 powershell -ExecutionPolicy Bypass -File installer/Build-Installer.ps1
 ```
+- 修改代码后使用 `-t:Rebuild` 完整重建，不能只依赖增量编译结果。WinUI 单独构建需加 `-p:Platform=x64`。
+- WinUI 默认数据目录和单实例互斥体与 WPF 相同，同一份配置不能由两个入口同时运行。使用 `--data <独立目录>` 做可保存的独立实例验证；`--preview <settings.json>` 只读预览指定配置，不回写配置。
+- 隔离 UI 验证：完整构建后，运行 `MyDesktop.WinUI.Smoke.exe <MyDesktop.WinUI.exe绝对路径> <报告log绝对路径>`。启动器只创建及操作它自己的测试桌面和测试进程，不切换当前桌面；测试文件与独立配置保存在报告目录。
+- WinUI 首阶段已接入真实分区及标签组、Shell 图像、映射目录、物理像素位置保存、基础收起和桌面层级维护。尚未接管散放图标，也未迁移完整设置、文件改名/输入法、系统菜单/OLE 拖放、四向收起动画、跨屏拖动和动态显示器布局；不能作为现有完整功能的替代发行版。旧毛玻璃枚举暂映射为系统亚克力，拖动延迟按 Max 要求保留为后续优化。
 - 编译偶尔报找不到 `obj\...\*.g.cs` 或 `App.baml`：VS Code 的 C# 扩展在后台同时编译、抢了中间文件，重试即可。
 - 测试包用 `Build-Installer.ps1 -Test`：输出 `publish\测试\MyDesktop-Setup-<版本>-测试.exe`，不动 `publish` 根目录里的正式包，`publish\测试` 里只留这一个；个别情况要同时留几个测试包测不同场景时加 `-Label <场景>`。
 - 发行版安装包一律用 `Build-Installer.ps1` 生成：发布程序、用 ISCC 编译安装包、用 `CN=MyDesktop` 证书给安装包签名，`publish` 里只留下 `MyDesktop-Setup-<版本>.exe`。自动更新只接受这张证书签名的安装包，漏签会让所有用户更新失败。版本号只改 csproj 的 `<Version>`，exe、扩展包、安装包文件名都跟着它。发版时在 `docs/CHANGELOG.md` 顶部补上本版改动。

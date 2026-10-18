@@ -690,13 +690,7 @@ internal sealed class FenceManager
 	/// <summary>
 	/// 位置、大小、缩放和显示器布局记忆、卷起和锁定：标签组内各分区保持一致的那部分设置。
 	/// </summary>
-	static void CopyFrame(FenceSettings from, FenceSettings to)
-	{
-		(to.X, to.Y, to.Width, to.Height, to.LayoutDpi) = (from.X, from.Y, from.Width, from.Height, from.LayoutDpi);
-		(to.RolledUp, to.RollDirection, to.RollEdge, to.Locked) = (from.RolledUp, from.RollDirection, from.RollEdge, from.Locked);
-		to.BoundsByDpi = new Dictionary<int, FenceBounds>(from.BoundsByDpi);
-		to.LayoutByDisplay = new Dictionary<string, FenceLayout>(from.LayoutByDisplay);
-	}
+	static void CopyFrame(FenceSettings from, FenceSettings to) => FenceGroups.CopyFrame(from, to);
 
 	/// <summary>
 	/// 标签组里显示着的分区移动、调整大小、卷起或锁定后，同组的其他分区跟着一致（它们不显示，切过去时就在原处）。
@@ -715,41 +709,7 @@ internal sealed class FenceManager
 	/// 启动时整理标签组：去掉已不存在或重复归组的分区，不足两个的组解散，组内各分区的框架设置按当前标签统一。
 	/// </summary>
 	/// <returns>配置被改动时返回 true。</returns>
-	bool NormalizeGroups()
-	{
-		bool changed = false;
-		var fences = Settings.Fences.ToDictionary(f => f.Id);
-		var grouped = new HashSet<Guid>();
-		foreach (var group in Settings.Groups.ToList())
-		{
-			var members = new List<Guid>();
-			foreach (var id in group.Members)
-			{
-				if (fences.ContainsKey(id) && grouped.Add(id))
-				{
-					members.Add(id);
-				}
-			}
-			changed |= members.Count != group.Members.Count;
-			group.Members = members;
-			if (members.Count < 2)
-			{
-				Settings.Groups.Remove(group);
-				changed = true;
-				continue;
-			}
-			if (!members.Contains(group.Active))
-			{
-				group.Active = members[0];
-				changed = true;
-			}
-			foreach (var id in members.Where(id => id != group.Active))
-			{
-				CopyFrame(fences[group.Active], fences[id]);
-			}
-		}
-		return changed;
-	}
+	bool NormalizeGroups() => FenceGroups.Normalize(Settings);
 
 	/// <summary>
 	/// 拖动分区时鼠标所在的、可以合并进去的分区标题栏：别的、显示着的、没锁定的分区，同组的不算。
