@@ -74,8 +74,6 @@ internal partial class FenceWindow : Window
 	long _crumbClickedAt;
 	bool _allowClose;
 	bool _tempExpanded;
-	// 从卷起改为固定展开之后保持盖住普通应用，直到再次卷起。一直展开、没有卷起过的分区不置顶
-	bool _heldOpen;
 	// 详细信息视图里名称列至少留的宽度，后三列的宽度
 	const double DetailsNameMinWidth = 120;
 	const double DetailsDateWidth = 116;
@@ -319,7 +317,7 @@ internal partial class FenceWindow : Window
 		IsVisibleChanged += (_, _) =>
 		{
 			// 先记下展开置顶再摆亚克力，免得亚克力按平时的规则落到桌面层、再被提上来闪一下
-			if (IsVisible && (_tempExpanded || (_heldOpen && !Model.RolledUp)))
+			if (IsVisible && _tempExpanded)
 			{
 				SyncExpandedZOrder();
 				UpdateBackdrop();
@@ -339,8 +337,7 @@ internal partial class FenceWindow : Window
 		StopWatcher();
 		_clickRename.Cancel();
 		_tempExpanded = false;
-		_heldOpen = false;
-		// 关掉之前先退出展开置顶，别把已销毁的窗口留在置顶名单里
+		// 关掉之前先退出悬停展开的置顶，别把已销毁的窗口留在置顶名单里
 		SyncExpandedZOrder(deferCollapse: false);
 		_standIn?.Dispose();
 		_backdrop?.Dispose();
@@ -1414,20 +1411,14 @@ internal partial class FenceWindow : Window
 		Model.RolledUp = !Model.RolledUp;
 		_tempExpanded = false;
 		_collapseTimer.Stop();
-		// 固定展开期间盖住普通应用，卷起后回到桌面层。一直展开着的分区不会从这里变成置顶
-		_heldOpen = !Model.RolledUp;
-		if (_heldOpen)
+		// 固定展开后可能盖到旁边的分区，放在它们上面。固定展开不置顶，和一直展开的分区一样留在普通应用之下
+		if (!Model.RolledUp)
 		{
-			SyncExpandedZOrder();
-			// 固定展开后可能盖到旁边的分区，放在它们上面
 			_manager.BringToFront(this);
 		}
 		ApplyRollBounds();
-		if (!_heldOpen)
-		{
-			// 收起动画还在播时先保持置顶，结束再放回桌面层
-			SyncExpandedZOrder();
-		}
+		// 悬停展开时改成固定展开或卷起：立刻撤掉悬停置顶，不等收起动画（固定展开没有收起动画）
+		SyncExpandedZOrder(deferCollapse: false);
 		_manager.SyncGroup(this);
 		_manager.SaveSoon();
 		_manager.OnFenceLayoutChanged();
@@ -2224,7 +2215,7 @@ internal partial class FenceWindow : Window
 	}
 
 	/// <summary>
-	/// 悬停展开、拖放展开或固定展开期间临时盖住普通应用；收起动画播完、隐藏或关闭后再回到桌面层。
+	/// 悬停展开或拖放展开期间临时盖住普通应用；收起动画播完、隐藏或关闭后再回到桌面层。固定展开不置顶。
 	/// </summary>
 	/// <param name="deferCollapse">收起动画还在播时先不放回去，让收起过程仍显示在应用上面。</param>
 	void SyncExpandedZOrder(bool deferCollapse = true)
@@ -2233,8 +2224,7 @@ internal partial class FenceWindow : Window
 		{
 			return;
 		}
-		// 固定展开只在没卷起时算数：同组隐藏标签会留下过期的标记，卷起状态才是准的
-		bool raise = IsVisible && (_tempExpanded || (_heldOpen && !Model.RolledUp));
+		bool raise = IsVisible && _tempExpanded;
 		if (deferCollapse && !raise && IsVisible && _rollClip != null)
 		{
 			return;
@@ -2250,12 +2240,11 @@ internal partial class FenceWindow : Window
 	}
 
 	/// <summary>
-	/// 切换标签或拆出标签时，新显示的分区接过悬停展开、固定展开的置顶。窗口还没显示时先记下，显示时再摆。
+	/// 切换标签或拆出标签时，新显示的分区接过悬停展开的置顶。窗口还没显示时先记下，显示时再摆。固定展开不置顶，不用接。
 	/// </summary>
 	public void CopyExpandStateFrom(FenceWindow current)
 	{
 		_tempExpanded = current._tempExpanded;
-		_heldOpen = current._heldOpen;
 		if (_tempExpanded)
 		{
 			RestartTimer(_collapseTimer);
