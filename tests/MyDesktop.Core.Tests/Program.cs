@@ -37,6 +37,12 @@ var checks = new (string Name, Action Run)[]
 	("追加框选以开始时的选择为基准且取消可恢复", AdditiveRectangleSelection),
 	("拖放区分桌面归属与文件复制移动并拒绝非法目标", FileDropDecisions),
 	("拖回桌面保持相对位置并按目标显示器缩放写回", DesktopDropPositions),
+	("分区移动吸附按绝对位移与缩放计算", FenceMoveSnapping),
+	("分区调整大小保持对边与最小尺寸", FenceResizeMinimum),
+	("分区扩展止于邻区且不修正原有重叠", FenceResizeNeighbors),
+	("分区整行整列吸附独立于边缘吸附", FenceResizeGrid),
+	("分区重叠寻找最近空位且放不下时返回无位置", FenceFreeSpot),
+	("调整分区尺寸同步标签组并拒绝无效值", FenceResizeGroup),
 	("核心程序集不依赖 WPF 或 WinUI", FrameworkIndependence),
 };
 int failures = 0;
@@ -75,6 +81,75 @@ static void Throws<T>(Action operation) where T : Exception
 		return;
 	}
 	throw new InvalidOperationException($"预期抛出 {typeof(T).Name}。");
+}
+
+static void FenceMoveSnapping()
+{
+	var work = new System.Drawing.Rectangle(-1200, 0, 1200, 900);
+	var start = new System.Drawing.Rectangle(-1000, 100, 240, 180);
+	var settings = new AppSettings();
+	Require(FenceGeometry.Move(start, new(-195, 0), work, [], settings, 1.5).Left == -1200, "负坐标屏幕边缘没有吸附。");
+	Require(FenceGeometry.Move(start, new(-160, 0), work, [], settings, 1.5).Left == -1160, "越过阈值后仍粘在边缘。");
+	settings.SnapGap = 8;
+	start = new(100, 100, 150, 150);
+	work = new(0, 0, 2000, 1200);
+	Require(FenceGeometry.Move(start, new(137, 0), work, [new(400, 100, 100, 100)], settings, 1.5).Right == 388, "吸附间距没有随缩放换算。");
+	Require(FenceGeometry.Move(start, new(137, 0), work, [new(400, 700, 100, 100)], settings, 1.5).Right == 387, "远处分区延长线不应吸住当前位置。");
+	settings.SnapToEdges = false;
+	Require(FenceGeometry.Move(start, new(137, 0), work, [new(400, 100, 100, 100)], settings, 1.5).Right == 387, "关闭边缘吸附没有生效。");
+}
+
+static void FenceResizeMinimum()
+{
+	var settings = new AppSettings { SnapToEdges = false, SnapToGrid = false };
+	var start = new System.Drawing.Rectangle(100, 100, 300, 200);
+	var result = FenceGeometry.Resize(start, new(500, 500), FenceEdges.Left | FenceEdges.Top, new(0, 0, 2000, 1200), [], settings, 1,
+		new(120, 36), [], []);
+	Require(result.Right == start.Right && result.Bottom == start.Bottom && result.Width == 120 && result.Height == 36, "拖左上角时对边或最小尺寸不正确。");
+	Throws<ArgumentException>(() => FenceGeometry.Resize(start, new(1, 1), FenceEdges.Left | FenceEdges.Right, new(0, 0, 2000, 1200), [], settings, 1,
+		new(120, 36), [], []));
+}
+
+static void FenceResizeNeighbors()
+{
+	var settings = new AppSettings { SnapToEdges = false, SnapToGrid = false, SnapGap = 8 };
+	var start = new System.Drawing.Rectangle(100, 100, 200, 180);
+	System.Drawing.Rectangle Resize(FenceEdges edge, System.Drawing.Point delta, System.Drawing.Rectangle other) =>
+		FenceGeometry.Resize(start, delta, edge, new(0, 0, 2000, 1200), [other], settings, 1.5, new(180, 54), [], []);
+	Require(Resize(FenceEdges.Right, new(400, 0), new(400, 100, 200, 180)).Right == 388, "右边应止于相邻分区并留出间距。");
+	Require(Resize(FenceEdges.Right, new(100, 0), new(250, 100, 200, 180)).Right == 400, "不应阻止原本已重叠的分区调整大小。");
+	var corner = Resize(FenceEdges.Right | FenceEdges.Bottom, new(200, 100), new(400, 300, 200, 180));
+	Require(corner.Right == 500 && corner.Bottom == 288, "同时压住两条边时没有选择退让更少的边。");
+}
+
+static void FenceResizeGrid()
+{
+	var settings = new AppSettings { SnapToEdges = false, SnapToGrid = true };
+	var result = FenceGeometry.Resize(new(100, 100, 220, 200), new(15, 9), FenceEdges.Right | FenceEdges.Bottom, new(0, 0, 2000, 1200), [],
+		settings, 1, new(120, 36), [240, 336], [210, 300]);
+	Require(result.Width == 240 && result.Height == 210 && result.Location == new System.Drawing.Point(100, 100), "整行整列吸附或固定对边不正确。");
+}
+
+static void FenceFreeSpot()
+{
+	var rect = new System.Drawing.Rectangle(450, 150, 200, 200);
+	var other = new System.Drawing.Rectangle(400, 100, 300, 300);
+	var free = FenceGeometry.FindFreeSpot(rect, new(0, 0, 1000, 800), [other], 10);
+	Require(free is { } value && !value.IntersectsWith(other)
+		&& Math.Pow(value.Left - rect.Left, 2) + Math.Pow(value.Top - rect.Top, 2) == 67600, "没有选择最近的可用空位。");
+	Require(FenceGeometry.FindFreeSpot(rect, new(0, 0, 500, 400), [new(0, 0, 500, 400)], 10) == null, "空间不足时不应返回仍然重叠的位置。");
+	var separate = new System.Drawing.Rectangle(710, 150, 200, 200);
+	Require(FenceGeometry.FindFreeSpot(separate, new(0, 0, 1000, 800), [other], 10) == separate, "未重叠的分区不应被重新摆放。");
+}
+
+static void FenceResizeGroup()
+{
+	var settings = Fixture();
+	var frame = new FenceWorkspace(settings).Frames.First();
+	frame.SetBounds(-500, 80, 720, 450, 144);
+	Require(frame.Members.All(member => member.X == -500 && member.Y == 80 && member.Width == 720 && member.Height == 450 && member.LayoutDpi == 144),
+		"分区尺寸没有同步给同组标签。");
+	Throws<ArgumentOutOfRangeException>(() => frame.SetBounds(0, 0, 0, 100, 96));
 }
 
 static AppSettings Fixture()

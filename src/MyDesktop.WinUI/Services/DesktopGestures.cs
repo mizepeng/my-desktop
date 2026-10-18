@@ -15,7 +15,7 @@ internal sealed class DesktopGestures(DesktopSession session)
 
 	internal void Begin(Point origin, bool additive, DesktopSurface surface, FenceView? fence = null)
 	{
-		if (session.IsPreview || session.Takeover?.IsActive != true || session.DragDrop.IsActive) { return; }
+		if (session.IsPreview || session.Takeover?.IsActive != true || session.DragDrop.IsActive || session.IsMovingFence) { return; }
 		Cancel();
 		surface.ActivateForSelection();
 		session.SetContext(surface, fence);

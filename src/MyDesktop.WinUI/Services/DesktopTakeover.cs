@@ -40,7 +40,7 @@ internal sealed class DesktopTakeover : IDisposable
 			session.Surfaces.FirstOrDefault(surface => surface.WorkArea.Contains(point)) ?? session.ActiveSurface);
 		_hooks.BandMoved += point => _session.Gestures.Move(point);
 		_hooks.BandEnded += point => _session.Gestures.End(point);
-		_hooks.BandCanceled += () => _session.Gestures.Cancel();
+		_hooks.BandCanceled += _session.CancelInteractions;
 		_hooks.Failed += error => Release($"桌面输入保护不可用，已恢复系统图标：{error}");
 		_hooks.NativeEditDetected += () =>
 		{

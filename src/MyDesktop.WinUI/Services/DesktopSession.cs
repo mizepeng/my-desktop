@@ -63,7 +63,8 @@ internal sealed class DesktopSession : IDisposable
 	internal bool IsPreview => _options.PreviewFile != null;
 	internal DesktopGestures Gestures => _gestures ?? throw new InvalidOperationException("框选尚未连接到桌面宿主。");
 	internal FileDragDrop DragDrop => _dragDrop ?? throw new InvalidOperationException("拖放尚未连接到桌面宿主。");
-	internal bool IsInteracting => _gestures?.IsActive == true || _dragDrop?.IsActive == true;
+	internal bool IsMovingFence => _surfaces.Any(surface => surface.Placement.IsActive);
+	internal bool IsInteracting => _gestures?.IsActive == true || _dragDrop?.IsActive == true || IsMovingFence;
 
 	internal IReadOnlyList<string> DesktopFolders() => _options.IsProbe ? [Path.Combine(AppPaths.DataDir, "桌面")] : [AppPaths.Desktop, AppPaths.CommonDesktop];
 
@@ -101,6 +102,9 @@ internal sealed class DesktopSession : IDisposable
 		_dragDrop = new FileDragDrop(this);
 		foreach (var surface in _surfaces)
 		{
+			surface.PlacementAllowed = () => !Gestures.IsActive && !DragDrop.IsActive
+				&& !_surfaces.Any(other => other != surface && other.Placement.IsActive);
+			surface.Placement.Changed += () => { UpdateInteraction(); if (!IsInteracting) { FilesCompleted(false); } };
 			surface.DesktopIcons.SelectionRequested += (key, extend) => SelectLoose(key, extend, surface);
 			surface.DesktopIcons.ItemContextRequested += (_, anchor, point) =>
 			{
@@ -112,7 +116,7 @@ internal sealed class DesktopSession : IDisposable
 			surface.DesktopIcons.DragSourceCreated += (source, key) => DragDrop.ConnectSource(source, () => key, surface, null);
 			foreach (var fence in surface.Fences)
 			{
-				fence.TargetRequested += () => { SetContext(surface, fence); surface.ActivateForSelection(); };
+				fence.TargetRequested += () => { SetContext(surface, fence); surface.RaiseFence(fence); surface.ActivateForSelection(); };
 				DragDrop.ConnectList(fence, surface);
 				DragDrop.ConnectTarget(fence, surface, fence);
 				fence.BandStarted += (point, additive) => Gestures.Begin(point, additive, surface, fence);
@@ -390,6 +394,7 @@ internal sealed class DesktopSession : IDisposable
 
 	internal void CancelInteractions()
 	{
+		foreach (var surface in _surfaces) { surface.Placement.Cancel(); }
 		_gestures?.Cancel();
 		_dragDrop?.End();
 	}

@@ -38,6 +38,14 @@ if ($WinUI) {
 	$project = Join-Path $root 'src\MyDesktop.WinUI\MyDesktop.WinUI.csproj'
 	dotnet publish $project -c Release -r win-x64 --self-contained false -p:Platform=x64 -p:PublishSingleFile=false -o $staging -nologo -v q @versionArguments
 	if ($LASTEXITCODE -ne 0) { throw '发布 WinUI 测试程序失败' }
+	# 直接验证即将装进安装包的发布文件，不能用编译目录代替，避免漏掉 XAML 和 PRI 资源。
+	$smokeProject = Join-Path $root 'tests\MyDesktop.WinUI.Smoke\MyDesktop.WinUI.Smoke.csproj'
+	dotnet build $smokeProject -t:Rebuild -c Release --nologo -v q
+	if ($LASTEXITCODE -ne 0) { throw '编译 WinUI 发布产物验证程序失败' }
+	$smoke = Join-Path $root 'tests\MyDesktop.WinUI.Smoke\bin\Release\net10.0-windows\MyDesktop.WinUI.Smoke.exe'
+	$report = Join-Path $root 'artifacts\verification\winui\installer-publish.log'
+	& $smoke (Join-Path $staging 'MyDesktop.WinUI.exe') $report | Select-Object -Last 16
+	if ($LASTEXITCODE -ne 0) { throw "WinUI 发布文件隔离验证失败，不能打包。详情：$report" }
 	# 沿用安装程序已有的单文件退出助手，解压到临时目录后不需要 WinUI 的配套文件。
 	$exitHelper = Join-Path $staging 'InstallerExit'
 	$legacyProject = Join-Path $root 'src\MyDesktop\MyDesktop.csproj'

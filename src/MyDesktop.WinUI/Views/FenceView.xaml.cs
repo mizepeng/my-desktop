@@ -35,12 +35,9 @@ public sealed partial class FenceView : UserControl, IDisposable
 	uint? _bandPointer;
 	Task _contentTask = Task.CompletedTask;
 	int _contentVersion;
-	bool _dragging;
 	bool _refreshAfterEdit;
 	bool _settingSelection;
 	IReadOnlySet<string> _cut = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-	Point _pointerStart;
-	Vector3 _translationStart;
 
 	internal FenceView(FenceFrame frame, AppSettings settings, ShellItemLoader images, FileRename rename, nint owner, bool readOnly)
 	{
@@ -53,6 +50,7 @@ public sealed partial class FenceView : UserControl, IDisposable
 		_readOnly = readOnly;
 		AddHandler(PointerPressedEvent, new PointerEventHandler((_, args) =>
 		{
+			if (TryStartResize(args) || _placementPointer != null) { return; }
 			if (!IsEditing) { TargetRequested?.Invoke(); }
 			if (_bandPointer != null && args.GetCurrentPoint(this).Properties.IsRightButtonPressed)
 			{
@@ -117,9 +115,10 @@ public sealed partial class FenceView : UserControl, IDisposable
 			}
 		};
 		Header.PointerPressed += Header_PointerPressed;
-		Header.PointerMoved += Header_PointerMoved;
-		Header.PointerReleased += (_, _) => FinishDrag();
-		Header.PointerCaptureLost += (_, _) => FinishDrag();
+		PointerMoved += Placement_PointerMoved;
+		PointerReleased += (_, args) => { if (_placementPointer == args.Pointer.PointerId) { FinishPlacementPointer(false); } };
+		PointerCaptureLost += (_, args) => { if (_placementPointer == args.Pointer.PointerId) { FinishPlacementPointer(true); } };
+		PointerExited += (_, _) => { if (_placementPointer == null) { ProtectedCursor = null; } };
 		var menu = new MenuFlyout();
 		var renameTitle = new MenuFlyoutItem { Text = "重命名分区", IsEnabled = !readOnly };
 		renameTitle.Click += (_, _) => BeginTitleEdit();
@@ -200,11 +199,13 @@ public sealed partial class FenceView : UserControl, IDisposable
 
 	internal void ArrangeAt(double x, double y, double width, double height)
 	{
+		_visual.TransformMatrix = Matrix4x4.Identity;
 		Canvas.SetLeft(this, x);
 		Canvas.SetTop(this, y);
 		Width = width;
 		Height = height;
 		_geometry.Size = new Vector2((float)Width, (float)VisibleHeight);
+		BoundsChanged?.Invoke();
 	}
 
 	internal void ActivateTab(Guid id)
@@ -262,42 +263,18 @@ public sealed partial class FenceView : UserControl, IDisposable
 
 	void Header_PointerPressed(object sender, PointerRoutedEventArgs args)
 	{
-		if (IsEditing || _frame.Active.Locked || !args.GetCurrentPoint(null).Properties.IsLeftButtonPressed || IsButton(args.OriginalSource as DependencyObject))
+		if (IsEditing || _frame.Active.Locked || !args.GetCurrentPoint(null).Properties.IsLeftButtonPressed
+			|| IsButton(args.OriginalSource as DependencyObject) || ResizeEdgesAt(args.GetCurrentPoint(this).Position) != FenceEdges.None)
 		{
 			return;
 		}
-		if (Header.CapturePointer(args.Pointer))
-		{
-			_dragging = true;
-			_pointerStart = args.GetCurrentPoint((UIElement)Parent).Position;
-			_translationStart = _visual.TransformMatrix.Translation;
-		}
-	}
-
-	void Header_PointerMoved(object sender, PointerRoutedEventArgs args)
-	{
-		if (_dragging)
-		{
-			var point = args.GetCurrentPoint((UIElement)Parent).Position;
-			TranslateTo(_translationStart.X + point.X - _pointerStart.X, _translationStart.Y + point.Y - _pointerStart.Y);
-		}
+		BeginPlacementPointer(args, FenceEdges.None);
 	}
 
 	internal void TranslateTo(double x, double y)
 	{
 		_visual.TransformMatrix = Matrix4x4.CreateTranslation((float)x, (float)y, 0);
 		BoundsChanged?.Invoke();
-	}
-
-	void FinishDrag()
-	{
-		if (!_dragging)
-		{
-			return;
-		}
-		_dragging = false;
-		Header.ReleasePointerCaptures();
-		CommitPosition();
 	}
 
 	internal void CommitPosition() => SaveRequested?.Invoke();
@@ -451,7 +428,7 @@ public sealed partial class FenceView : UserControl, IDisposable
 		{
 			throw new InvalidOperationException("预览模式不能修改分区或文件名称。");
 		}
-		FinishDrag();
+		CancelPlacementPointer();
 	}
 
 	internal bool CommitEdit() => Editor.Commit();

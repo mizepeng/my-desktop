@@ -35,4 +35,22 @@
 		<Compile Include="../../tests/MyDesktop.WinUI.Smoke/DesktopFixtureProtocol.cs" Link="Verification/DesktopFixtureProtocol.cs" />
 		<RuntimeHostConfigurationOption Include="System.GC.Gen0MaxBudget" Value="6291456" />
 	</ItemGroup>
+	<!--
+		非 MSIX 发布需要显式携带应用资源；SDK 的复制到编译目录规则不会自动进入 dotnet publish。
+	-->
+	<Target Name="PublishWinUIResources" AfterTargets="ComputeResolvedFilesToPublishList"
+			DependsOnTargets="AddProcessedXamlFilesToCopyLocal;$(GenerateProjectPriFile)">
+		<Error Condition="!Exists('$(ProjectPriFullPath)')" Text="WinUI 应用资源索引尚未生成，不能发布。" />
+		<ItemGroup>
+			<ResolvedFileToPublish Include="$(ProjectPriFullPath)">
+				<RelativePath>$(ProjectPriFileName)</RelativePath>
+				<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+			</ResolvedFileToPublish>
+			<ResolvedFileToPublish Include="@(_ProcessedXamlFilesToCopyLocalWithTargetPath)"
+					Condition="'%(_ProcessedXamlFilesToCopyLocalWithTargetPath.Extension)' == '.xbf'">
+				<RelativePath>%(_ProcessedXamlFilesToCopyLocalWithTargetPath.TargetPath)</RelativePath>
+				<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+			</ResolvedFileToPublish>
+		</ItemGroup>
+	</Target>
 </Project>

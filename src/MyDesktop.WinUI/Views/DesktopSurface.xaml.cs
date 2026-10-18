@@ -57,6 +57,7 @@ public sealed partial class DesktopSurface : Window
 		_placement = new DesktopPlacement(Handle);
 		_desktopIcons = new DesktopIconsView(images, workArea, scale, rename, Handle);
 		_desktopIcons.BoundsChanged += UpdateRegion;
+		Placement = new FencePlacement(this, settings, readOnly);
 		RegisterEditor(_desktopIcons.EditorControl, _desktopIcons);
 		_desktopIcons.SelectionRequested += (_, _) =>
 		{
@@ -77,10 +78,14 @@ public sealed partial class DesktopSurface : Window
 			var fence = new FenceView(frame, settings, images, rename, Handle, readOnly);
 			fence.ArrangeAt((model.X - workArea.Left) / scale, (model.Y - workArea.Top) / scale, model.Width / scale, model.Height / scale);
 			fence.BoundsChanged += UpdateRegion;
+			fence.PlacementStarted += (point, edges) => Placement.Begin(fence, point, edges);
+			fence.PlacementMoved += Placement.Update;
+			fence.PlacementFinished += async canceled => await Placement.EndAsync(canceled);
 			fence.SaveRequested += () =>
 			{
 				var bounds = BoundsOf(fence);
-				frame.MoveTo(bounds.Left + workArea.Left, bounds.Top + workArea.Top, (int)Math.Round(scale * 96));
+				frame.SetBounds(bounds.Left + workArea.Left, bounds.Top + workArea.Top,
+					(int)Math.Round(fence.Width * scale), (int)Math.Round(fence.Height * scale), (int)Math.Round(scale * 96));
 				SaveRequested?.Invoke();
 			};
 			fence.ExitRequested += () => ExitRequested?.Invoke();
@@ -106,12 +111,14 @@ public sealed partial class DesktopSurface : Window
 		Canvas.SetLeft(_notice, 12);
 		Canvas.SetTop(_notice, 12);
 		Surface.Children.Add(_notice);
+		Canvas.SetZIndex(_notice, _fences.Count + 1);
 		_band = new Border
 		{
 			BorderThickness = new Thickness(1), BorderBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(220, 100, 180, 255)),
 			Background = new SolidColorBrush(Windows.UI.Color.FromArgb(55, 70, 150, 240)), IsHitTestVisible = false, Visibility = Visibility.Collapsed,
 		};
 		Surface.Children.Add(_band);
+		Canvas.SetZIndex(_band, _fences.Count + 2);
 		UpdateRegion();
 		Surface.PointerPressed += Surface_PointerPressed;
 		Activated += (_, args) =>
@@ -124,6 +131,7 @@ public sealed partial class DesktopSurface : Window
 		Closed += (_, _) =>
 		{
 			IsClosed = true;
+			Placement.Cancel();
 			if (_clipboardListener) { RemoveClipboardFormatListener(Handle); }
 			_desktopIcons.Invalidate();
 			foreach (var fence in _fences)
@@ -136,6 +144,8 @@ public sealed partial class DesktopSurface : Window
 	}
 
 	internal nint Handle { get; }
+	internal FencePlacement Placement { get; }
+	internal Func<bool>? PlacementAllowed { get; set; }
 	internal bool IsClosed { get; private set; }
 	internal IReadOnlyList<FenceView> Fences => _fences;
 	internal event Action? SaveRequested;
@@ -151,6 +161,13 @@ public sealed partial class DesktopSurface : Window
 	internal Canvas RootElement => Surface;
 	internal bool IsInputCaptured => _captureInput;
 	internal bool IsBandVisible => _band.Visibility == Visibility.Visible;
+
+	internal void RaiseFence(FenceView fence)
+	{
+		int order = 1;
+		foreach (var other in _fences.Where(other => other != fence).OrderBy(Canvas.GetZIndex)) { Canvas.SetZIndex(other, order++); }
+		Canvas.SetZIndex(fence, order);
+	}
 
 	internal void SetInputCapture(bool capture)
 	{

@@ -70,6 +70,15 @@ internal sealed class FenceFrame(IReadOnlyList<FenceSettings> members, FenceGrou
 		Sync();
 	}
 
+	public void SetBounds(int x, int y, int width, int height, int dpi)
+	{
+		if (width <= 0) { throw new ArgumentOutOfRangeException(nameof(width)); }
+		if (height <= 0) { throw new ArgumentOutOfRangeException(nameof(height)); }
+		if (dpi <= 0) { throw new ArgumentOutOfRangeException(nameof(dpi)); }
+		(Active.X, Active.Y, Active.Width, Active.Height, Active.LayoutDpi) = (x, y, width, height, dpi);
+		Sync();
+	}
+
 	void Sync()
 	{
 		foreach (var member in Members.Where(member => member != Active))

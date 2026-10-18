@@ -65,7 +65,7 @@ internal sealed class FileDragDrop(DesktopSession session)
 
 	internal FileDragPayload Prepare(DataPackage data, DesktopSurface surface, FenceView? fence, string anchor, DrawPoint origin)
 	{
-		if (session.IsPreview || session.Takeover?.IsActive != true || IsActive) { throw new InvalidOperationException("当前不能开始桌面拖放。"); }
+		if (session.IsPreview || session.Takeover?.IsActive != true || IsActive || session.IsMovingFence) { throw new InvalidOperationException("当前不能开始桌面拖放。"); }
 		session.Gestures.Cancel();
 		if (!session.Selection.Keys.Contains(anchor, StringComparer.OrdinalIgnoreCase))
 		{
