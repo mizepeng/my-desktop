@@ -19,6 +19,9 @@ internal sealed class DesktopInputHooks : IDisposable
 	readonly DesktopKeyRouting _routing = new();
 	nint _keyboardHook, _mouseHook, _desktop;
 	volatile bool _enabled;
+	volatile bool _bandPending;
+	int _bandVersion, _moveQueued;
+	long _latestPoint;
 
 	public DesktopInputHooks(DispatcherQueue ui)
 	{
@@ -28,9 +31,21 @@ internal sealed class DesktopInputHooks : IDisposable
 	}
 
 	public nint Desktop { set => Volatile.Write(ref _desktop, value); }
-	public bool Enabled { get => _enabled; set => _enabled = value; }
+	public bool Enabled
+	{
+		get => _enabled;
+		set
+		{
+			_enabled = value;
+			if (!value) { _bandPending = false; Interlocked.Increment(ref _bandVersion); }
+		}
+	}
 	public event Action<DesktopInputCommand, uint, bool>? Command;
 	public event Action? BlankPressed;
+	public event Action<System.Drawing.Point, bool>? BandStarted;
+	public event Action<System.Drawing.Point>? BandMoved;
+	public event Action<System.Drawing.Point>? BandEnded;
+	public event Action? BandCanceled;
 	public event Action<string>? Failed;
 	public event Action? NativeEditDetected;
 
@@ -63,6 +78,12 @@ internal sealed class DesktopInputHooks : IDisposable
 		{
 			var key = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(data).vkCode;
 			bool down = (int)message is WM_KEYDOWN or WM_SYSKEYDOWN;
+			if (down && (key is 0x1B or VK_LWIN or VK_RWIN || key == 0x09 && Pressed(VK_MENU)))
+			{
+				_bandPending = false;
+				Interlocked.Increment(ref _bandVersion);
+				_ui.TryEnqueue(() => BandCanceled?.Invoke());
+			}
 			var foreground = GetForegroundWindow();
 			bool desktop = _enabled && foreground != 0 && foreground == Volatile.Read(ref _desktop);
 			var info = new GUITHREADINFO { cbSize = Marshal.SizeOf<GUITHREADINFO>() };
@@ -95,13 +116,48 @@ internal sealed class DesktopInputHooks : IDisposable
 
 	nint Mouse(int code, nint message, nint data)
 	{
-		// 移动和滚轮不参与本阶段的选择逻辑，直接放行，避免影响其他程序的鼠标响应。
-		if (code >= 0 && _enabled && (int)message is WM_LBUTTONDOWN or WM_RBUTTONDOWN)
+		// 只有从桌面空白开始框选后才读取移动；所有鼠标消息始终放行，不破坏系统按键状态。
+		int kind = (int)message;
+		if (code >= 0 && _enabled && (kind is WM_LBUTTONDOWN or WM_LBUTTONUP or WM_RBUTTONDOWN || kind == WM_MOUSEMOVE && _bandPending))
 		{
 			try
 			{
 				var point = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(data).pt;
-				if (GetAncestor(WindowFromPoint(point), 2) == Volatile.Read(ref _desktop))
+				var position = new System.Drawing.Point(point.X, point.Y);
+				if (kind == WM_RBUTTONDOWN)
+				{
+					_bandPending = false;
+					Interlocked.Increment(ref _bandVersion);
+					_ui.TryEnqueue(() => BandCanceled?.Invoke());
+				}
+				if (kind == WM_MOUSEMOVE)
+				{
+					Interlocked.Exchange(ref _latestPoint, (long)(uint)point.X << 32 | (uint)point.Y);
+					int version = _bandVersion;
+					if (Interlocked.Exchange(ref _moveQueued, 1) == 0)
+					{
+						_ui.TryEnqueue(() =>
+						{
+							Interlocked.Exchange(ref _moveQueued, 0);
+							long packed = Interlocked.Read(ref _latestPoint);
+							if (version == Volatile.Read(ref _bandVersion)) { BandMoved?.Invoke(new((int)(packed >> 32), (int)packed)); }
+						});
+					}
+				}
+				else if (kind == WM_LBUTTONUP && _bandPending)
+				{
+					_bandPending = false;
+					_ui.TryEnqueue(() => BandEnded?.Invoke(position));
+				}
+				else if (kind == WM_LBUTTONDOWN && GetAncestor(WindowFromPoint(point), 2) == Volatile.Read(ref _desktop)
+					&& !Pressed(VK_LWIN) && !Pressed(VK_RWIN))
+				{
+					_bandPending = true;
+					Interlocked.Increment(ref _bandVersion);
+					bool additive = Pressed(VK_CONTROL) || Pressed(VK_SHIFT);
+					_ui.TryEnqueue(() => BandStarted?.Invoke(position, additive));
+				}
+				else if (kind == WM_RBUTTONDOWN && GetAncestor(WindowFromPoint(point), 2) == Volatile.Read(ref _desktop))
 				{
 					_ui.TryEnqueue(() => BlankPressed?.Invoke());
 				}

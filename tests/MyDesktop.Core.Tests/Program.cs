@@ -33,6 +33,10 @@ var checks = new (string Name, Action Run)[]
 	("文件操作拒绝系统入口并去重父子项", FileSelectionProtection),
 	("桌面剪切只转移归属并保留目标原有顺序", DesktopMembershipTransfer),
 	("粘贴拒绝目录自身与子目录目标", InvalidPasteTargets),
+	("框选支持反向与负坐标并在缩回时取消临时命中", RectangleSelection),
+	("追加框选以开始时的选择为基准且取消可恢复", AdditiveRectangleSelection),
+	("拖放区分桌面归属与文件复制移动并拒绝非法目标", FileDropDecisions),
+	("拖回桌面保持相对位置并按目标显示器缩放写回", DesktopDropPositions),
 	("核心程序集不依赖 WPF 或 WinUI", FrameworkIndependence),
 };
 int failures = 0;
@@ -398,4 +402,60 @@ static void InvalidPasteTargets()
 	Throws<InvalidOperationException>(() => FileOperationRules.ValidatePaste([@"C:\资料"], @"C:\资料\子目录"));
 	Throws<InvalidOperationException>(() => FileOperationRules.ValidatePaste(["::{CLSID}"], @"C:\资料"));
 	FileOperationRules.ValidatePaste([@"C:\资料\文件.txt"], @"C:\桌面");
+}
+
+static void RectangleSelection()
+{
+	var selected = new ItemSelection();
+	var scope = Guid.NewGuid();
+	SelectionTarget[] targets = [new(scope, "左侧", new(-200, 20, 30, 30)), new(scope, "右侧", new(20, 20, 30, 30))];
+	var band = new SelectionBand(selected, new(80, 80), targets, false);
+	band.Update(new(-250, 0));
+	Require(selected.Keys.Count == 2 && band.Bounds.Left == -250, "反向或跨显示器负坐标框选错误。");
+	band.Update(new(60, 60));
+	Require(selected.Keys.Count == 0, "缩回选框后仍保留暂时命中的项目。");
+	band.Update(new(80, 80));
+	Require(selected.Keys.Count == 0, "零面积框选命中了项目。");
+}
+
+static void AdditiveRectangleSelection()
+{
+	var selected = new ItemSelection();
+	var scope = Guid.NewGuid();
+	selected.Set(scope, ["原分区项目"], false);
+	selected.Click(Guid.Empty, "原散放项目", true);
+	var band = new SelectionBand(selected, new(0, 0), [new(Guid.Empty, "新项目", new(20, 20, 30, 30))], true);
+	band.Update(new(70, 70));
+	Require(selected.Keys.Count == 3, "追加框选丢失其他区域的选择。");
+	band.Update(new(10, 10));
+	Require(selected.Keys.Count == 2, "追加框选没有按起始选择重算。");
+	band.Cancel();
+	Require(selected.InScope(scope).Single() == "原分区项目" && selected.InScope(Guid.Empty).Single() == "原散放项目", "取消框选没有恢复原选择。");
+}
+
+static void FileDropDecisions()
+{
+	var all = FileDropEffect.Copy | FileDropEffect.Move;
+	Require(FileDropRules.Choose([@"C:\桌面\文件.txt"], @"C:\桌面", true, all, true, false, false) == FileDropEffect.Move, "桌面拖放没有保持只转移归属。");
+	Require(FileDropRules.Choose([@"C:\来源\文件.txt"], @"C:\目标", false, all, false, false, false) == FileDropEffect.Move, "同盘默认没有移动。");
+	Require(FileDropRules.Choose([@"C:\来源\文件.txt"], @"D:\目标", false, all, false, false, false) == FileDropEffect.Copy, "跨盘默认没有复制。");
+	Require(FileDropRules.Choose([@"C:\来源\文件.txt"], @"C:\目标", false, all, true, false, false) == FileDropEffect.Copy, "Ctrl 没有选择复制。");
+	Require(FileDropRules.Choose([@"C:\来源\文件.txt"], @"D:\目标", false, all, false, true, false) == FileDropEffect.Move, "Shift 没有选择移动。");
+	Require(FileDropRules.Choose([@"C:\目录"], @"C:\目录\子目录", false, all, false, false, false) == FileDropEffect.None, "允许目录拖进自身。");
+	Require(FileDropRules.Choose([@"C:\来源\文件.txt"], @"C:\目标", false, all, false, false, true) == FileDropEffect.None, "未实现快捷方式却回报了成功动作。");
+	Require(FileDropRules.Choose([@"C:\目录\文件.txt"], @"C:\目录", false, all, false, false, false) == FileDropEffect.None, "映射目录原地拖动意外移动了文件。");
+}
+
+static void DesktopDropPositions()
+{
+	var snapshot = new DesktopSnapshot(false, new(100, 100), 48, new(-1920, 0, 3840, 1080), []);
+	DesktopMonitor[] monitors = [new(new(-1920, 0, 1920, 1080), 1), new(new(0, 0, 1920, 1080), 1.5)];
+	var cells = new Dictionary<string, System.Drawing.Rectangle> { ["一"] = new(-1800, 100, 100, 100), ["二"] = new(-1800, 200, 100, 100) };
+	var moved = DesktopLayout.DropPositions(snapshot, ["一", "二"], new(0, 0), new(50, 25), cells, monitors);
+	Require(moved[0] == new System.Drawing.Point(196, 123) && moved[1] == new System.Drawing.Point(196, 223), "多选拖动没有保持格子之间的相对位置。");
+	var placed = DesktopLayout.DropPositions(snapshot, ["一", "二"], new(150, 350), null, cells, monitors);
+	Require(placed[0] == new System.Drawing.Point(2034, 322) && placed[1] == new System.Drawing.Point(2034, 422), "跨屏放置没有采用目标显示器的缩放及列表原点。");
+	var arranged = new DesktopSnapshot(true, snapshot.Spacing, snapshot.IconSize, snapshot.ListBounds, []);
+	Require(DesktopLayout.DropPositions(arranged, ["一"], new(150, 350), null, cells, monitors).Single() == new System.Drawing.Point(2020, 325),
+		"自动排列错误套用了自由排列的图像偏移。");
 }

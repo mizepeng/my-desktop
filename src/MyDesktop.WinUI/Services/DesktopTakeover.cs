@@ -36,6 +36,11 @@ internal sealed class DesktopTakeover : IDisposable
 		_hooks = new DesktopInputHooks(queue);
 		_hooks.Command += HandleKey;
 		_hooks.BlankPressed += () => Select(null, false);
+		_hooks.BandStarted += (point, additive) => _session.Gestures.Begin(point, additive,
+			session.Surfaces.FirstOrDefault(surface => surface.WorkArea.Contains(point)) ?? session.ActiveSurface);
+		_hooks.BandMoved += point => _session.Gestures.Move(point);
+		_hooks.BandEnded += point => _session.Gestures.End(point);
+		_hooks.BandCanceled += () => _session.Gestures.Cancel();
 		_hooks.Failed += error => Release($"桌面输入保护不可用，已恢复系统图标：{error}");
 		_hooks.NativeEditDetected += () =>
 		{
@@ -57,6 +62,25 @@ internal sealed class DesktopTakeover : IDisposable
 	internal DesktopSnapshot? Snapshot => _snapshot;
 	internal DesktopIconTarget? Target => _target;
 	internal IReadOnlyList<string> SelectedKeys => _session.Selection.InScope(Guid.Empty);
+
+	internal async Task PlaceAsync(string[] keys, System.Drawing.Point destination, System.Drawing.Point? delta,
+		IReadOnlyDictionary<string, System.Drawing.Rectangle> originalCells)
+	{
+		if (!_fixture)
+		{
+			for (int attempt = 0; _snapshot == null || keys.Any(key => !_snapshot.ByKey.ContainsKey(key)); attempt++)
+			{
+				if (attempt >= 50) { throw new TimeoutException("Explorer 尚未识别全部放置项目，未保存图标位置。"); }
+				if (attempt % 5 == 0) { _source.Refresh(); }
+				await Task.Delay(100);
+			}
+		}
+		if (!IsActive || _snapshot == null) { throw new InvalidOperationException("桌面接管已结束，不能保存图标位置。"); }
+		var monitors = _session.Surfaces.Select(surface => new DesktopMonitor(surface.WorkArea, surface.Scale)).ToArray();
+		var positions = DesktopLayout.DropPositions(_snapshot, keys, destination, delta, originalCells, monitors);
+		await _source.MoveAsync(keys, positions).WaitAsync(TimeSpan.FromSeconds(3));
+		Refresh();
+	}
 
 	public void Start()
 	{
@@ -107,7 +131,7 @@ internal sealed class DesktopTakeover : IDisposable
 
 	async Task ApplyAsync()
 	{
-		if (_disposed || _restoring || _nativeEditing || _snapshot == null)
+		if (_disposed || _restoring || _nativeEditing || _snapshot == null || _session.IsInteracting)
 		{
 			return;
 		}
@@ -175,6 +199,7 @@ internal sealed class DesktopTakeover : IDisposable
 			// 当前桌面分区也要画好，不能只因散放图标已就绪就把分区成员在 Explorer 中一并藏掉。
 			var desktopFences = _session.Surfaces.SelectMany(surface => surface.Fences).Where(fence => !fence.Frame.Active.IsPortal).ToArray();
 			await Task.WhenAll(desktopFences.Select(fence => fence.ContentReady)).WaitAsync(TimeSpan.FromSeconds(3));
+			if (_session.IsInteracting) { return; }
 			foreach (var fence in desktopFences)
 			{
 				var expected = snapshot.Items.Where(entry => fence.Frame.Active.Members.Contains(entry.Key, StringComparer.OrdinalIgnoreCase));
@@ -298,6 +323,7 @@ internal sealed class DesktopTakeover : IDisposable
 	{
 		_generation++;
 		IsActive = false;
+		_session.CancelInteractions();
 		_signature = null;
 		_dirty = true;
 		_recovery?.Dispose();

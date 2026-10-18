@@ -39,13 +39,17 @@ public sealed partial class DesktopIconsView : UserControl
 	}
 
 	internal IReadOnlyList<string> Keys => _cells.Keys.ToArray();
+	internal bool SuspendContentUpdates { get; set; }
 	internal IReadOnlyList<string> SelectedKeys => _selected.ToArray();
+	internal IReadOnlyDictionary<string, System.Drawing.Rectangle> Cells => _cells.ToDictionary(pair => pair.Key, pair => pair.Value.Placement.Bounds,
+		StringComparer.OrdinalIgnoreCase);
 	internal IEnumerable<RECT> HitRectangles => Visibility == Visibility.Visible ? IconRectangles() : [];
 	internal NameEditor EditorControl => Editor;
 	internal event Action? BoundsChanged;
 	internal event Action<string, bool>? SelectionRequested;
 	internal event Action<string>? OpenRequested;
 	internal event Action<string, FrameworkElement, Point>? ItemContextRequested;
+	internal event Action<FrameworkElement, string>? DragSourceCreated;
 
 	internal async Task SetItemsAsync(IReadOnlyList<DesktopIconPlacement> items)
 	{
@@ -77,7 +81,7 @@ public sealed partial class DesktopIconsView : UserControl
 			Canvas.SetTop(button, (item.Bounds.Top - _work.Top) / _scale);
 			cells.Add(item.Entry.Key, (item, button, item.Entry.IconKey));
 		}
-		if (version != _version)
+		if (version != _version || SuspendContentUpdates)
 		{
 			return;
 		}
@@ -108,6 +112,7 @@ public sealed partial class DesktopIconsView : UserControl
 		});
 		var button = new Button
 		{
+			Tag = key,
 			Content = stack, Padding = new Thickness(3, 1, 3, 2), AllowFocusOnInteraction = false, IsTabStop = false,
 			MinWidth = 0, MinHeight = 0,
 			HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Top,
@@ -129,7 +134,17 @@ public sealed partial class DesktopIconsView : UserControl
 			ItemContextRequested?.Invoke(key, button, args.GetPosition(button));
 			args.Handled = true;
 		};
+		DragSourceCreated?.Invoke(button, key);
 		return button;
+	}
+
+	internal string? KeyAt(DependencyObject? source)
+	{
+		for (var element = source; element != null && element != this; element = VisualTreeHelper.GetParent(element))
+		{
+			if (element is Button { Tag: string key } && _cells.ContainsKey(key)) { return key; }
+		}
+		return null;
 	}
 
 	internal void BeginRename(string key)

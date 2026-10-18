@@ -105,21 +105,52 @@ internal sealed class FileCommands
 	async Task PasteAsync(nint owner, FenceSettings? target)
 	{
 		var data = _clipboard.Read(owner) ?? throw new InvalidOperationException("剪贴板中没有可粘贴的文件。");
+		var result = await TransferFilesAsync(owner, target, data.Paths, data.Cut);
+		if (data.Cut && !result.Aborted && result.Error == null && result.Completed.Count == data.Paths.Distinct(StringComparer.OrdinalIgnoreCase).Count())
+		{
+			_clipboard.Clear(owner, data.Sequence);
+		}
+		Report(result);
+	}
+
+	internal async Task<FileOperationResult?> DropAsync(nint owner, FenceSettings? target, IReadOnlyList<string> paths, bool move)
+	{
+		if (_busy) { _session.Notice("正在处理上一项文件操作。"); return null; }
+		_busy = true;
+		LastResult = null;
+		try
+		{
+			if (_session.IsPreview) { throw new InvalidOperationException("预览模式不能执行文件操作。"); }
+			var result = await TransferFilesAsync(owner, target, paths, move);
+			Report(result);
+			return result;
+		}
+		catch (Exception ex)
+		{
+			Log.Error("拖放文件未完成", ex);
+			_session.Notice(ex.Message);
+			return null;
+		}
+		finally { _busy = false; }
+	}
+
+	async Task<FileOperationResult> TransferFilesAsync(nint owner, FenceSettings? target, IReadOnlyList<string> source, bool move)
+	{
 		bool desktop = target?.IsPortal != true;
 		string folder = desktop ? _session.DesktopFolders()[0] : target!.FolderPath;
-		FileOperationRules.ValidatePaste(data.Paths, folder);
+		FileOperationRules.ValidatePaste(source, folder);
 		if (!Directory.Exists(folder)) { throw new DirectoryNotFoundException("粘贴目标目录不存在。"); }
-		var paths = data.Paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+		var paths = source.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 		foreach (string path in paths) { _ = File.GetAttributes(path); }
-		var logical = paths.Where(path => data.Cut && (desktop && FileOperationRules.IsDesktopFile(path, _session.DesktopFolders())
+		var logical = paths.Where(path => move && (desktop && FileOperationRules.IsDesktopFile(path, _session.DesktopFolders())
 			|| PathUtil.AreEqual(Path.GetDirectoryName(path), folder))).ToHashSet(StringComparer.OrdinalIgnoreCase);
 		var physical = paths.Where(path => !logical.Contains(path)).ToArray();
 		var result = physical.Length == 0 ? new FileOperationResult([], false, null)
-			: await TransferAsync(owner, data.Cut ? FileAction.Move : FileAction.Copy, physical, folder);
+			: await TransferAsync(owner, move ? FileAction.Move : FileAction.Copy, physical, folder);
 		var logicalDone = result.Aborted || result.Error != null ? [] : logical.ToArray();
 		var completed = result.Completed.Concat(logicalDone.Select(path => new CompletedFile(path, path, Directory.Exists(path)))).ToArray();
 		bool save = false;
-		foreach (var item in result.Completed.Where(item => data.Cut && item.Destination != null))
+		foreach (var item in result.Completed.Where(item => move && item.Destination != null))
 		{
 			foreach (var fence in _session.Settings.Fences.Where(fence => !fence.IsPortal))
 			{
@@ -143,11 +174,7 @@ internal sealed class FileCommands
 		}
 		LastResult = result with { Completed = completed };
 		_session.FilesCompleted(save);
-		if (data.Cut && !result.Aborted && result.Error == null && completed.Length == paths.Length)
-		{
-			_clipboard.Clear(owner, data.Sequence);
-		}
-		Report(LastResult);
+		return LastResult;
 	}
 
 	Task<FileOperationResult> TransferAsync(nint owner, FileAction action, IReadOnlyList<string> paths, string? folder)

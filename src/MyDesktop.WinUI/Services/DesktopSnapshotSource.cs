@@ -113,6 +113,47 @@ internal sealed class DesktopSnapshotSource : IDisposable
 		return completion.Task;
 	}
 
+	public Task MoveAsync(string[] keys, System.Drawing.Point[] positions)
+	{
+		var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+		if (!_worker.DispatcherQueue.TryEnqueue(() =>
+		{
+			try
+			{
+				if (keys.Length == 0 || keys.Length != positions.Length) { throw new ArgumentException("拖动项目与位置数量不一致。"); }
+				if (_fixture)
+				{
+					if (DesktopIconTarget.Find(true) == null) { throw new InvalidOperationException("隔离桌面不存在。"); }
+					var snapshot = JsonSerializer.Deserialize<DesktopSnapshot>(File.ReadAllText(_fixtureFile))!;
+					var entries = snapshot.Items.ToList();
+					for (int index = 0; index < keys.Length; index++)
+					{
+						string key = keys[index];
+						if (!PathUtil.AreEqual(Path.GetDirectoryName(key), Path.Combine(AppPaths.DataDir, "桌面")) || !Path.Exists(key))
+						{
+							throw new InvalidOperationException("隔离图标位置只能写入本次测试桌面的普通项目。");
+						}
+						int entry = entries.FindIndex(item => PathUtil.AreEqual(item.Key, key));
+						if (entry >= 0) { entries[entry] = entries[entry] with { Position = positions[index] }; }
+						else { entries.Add(new DesktopEntry(key, Path.GetFileName(key), true, Directory.Exists(key), positions[index])); }
+					}
+					var updated = new DesktopSnapshot(snapshot.AutoArrange, snapshot.Spacing, snapshot.IconSize, snapshot.ListBounds, entries);
+					File.WriteAllText(_fixtureFile + ".tmp", JsonSerializer.Serialize(updated));
+					File.Move(_fixtureFile + ".tmp", _fixtureFile, true);
+				}
+				else
+				{
+					var reader = _reader ?? throw new InvalidOperationException("Explorer 桌面读取器尚未就绪。");
+					reader.Move(keys, positions.Select(point => new MyDesktop.Native.POINT(point.X, point.Y)).ToArray(), required: true);
+				}
+				Read();
+				completion.SetResult();
+			}
+			catch (Exception ex) { completion.SetException(ex); }
+		})) { completion.SetException(new InvalidOperationException("桌面读取线程已关闭。")); }
+		return completion.Task;
+	}
+
 	public void Dispose()
 	{
 		_disposed = true;

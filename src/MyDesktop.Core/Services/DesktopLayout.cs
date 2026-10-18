@@ -72,4 +72,29 @@ internal static class DesktopLayout
 		double dy = Math.Max(Math.Max(work.Top - point.Y, 0), point.Y - work.Bottom);
 		return dx * dx + dy * dy;
 	})!;
+
+	public static Point[] DropPositions(DesktopSnapshot snapshot, IReadOnlyList<string> keys, Point destination, Point? delta,
+		IReadOnlyDictionary<string, Rectangle> originalCells, IReadOnlyList<DesktopMonitor> monitors)
+	{
+		if (snapshot.Spacing.X <= 0 || snapshot.Spacing.Y <= 0 || monitors.Count == 0 || keys.Count == 0)
+		{
+			throw new InvalidOperationException("缺少桌面间距、显示器或拖动项目，不能保存图标位置。");
+		}
+		var positions = new List<Point>();
+		for (int index = 0; index < keys.Count; index++)
+		{
+			Point cell;
+			if (delta is { } offset)
+			{
+				var original = originalCells[keys[index]];
+				cell = new Point(original.Left + offset.X, original.Top + offset.Y);
+			}
+			else { cell = new Point(destination.X - snapshot.Spacing.X / 2, destination.Y - snapshot.Spacing.Y / 4 + index * snapshot.Spacing.Y); }
+			double scale = MonitorAt(cell, monitors).Scale;
+			int dx = snapshot.AutoArrange ? 0 : Math.Max(0, (snapshot.Spacing.X - (int)Math.Round(snapshot.IconSize * scale)) / 2);
+			int dy = snapshot.AutoArrange ? 0 : (int)Math.Round(2 * scale);
+			positions.Add(new Point(cell.X + dx - snapshot.ListBounds.Left, cell.Y - dy - snapshot.ListBounds.Top));
+		}
+		return positions.ToArray();
+	}
 }

@@ -185,12 +185,13 @@ internal sealed class ExplorerDesktopReader : IDisposable
 		return _desktopFolders.Any(f => string.Equals(f, parent, StringComparison.OrdinalIgnoreCase));
 	}
 
-	public void Move(string[] keys, POINT[] points)
+	public void Move(string[] keys, POINT[] points, bool required = false)
 	{
 		try
 		{
 			if (!EnsureView())
 			{
+				if (required) { throw new InvalidOperationException("Explorer 桌面视图尚未连接，无法保存图标位置。"); }
 				return;
 			}
 			var view = _view!;
@@ -220,10 +221,12 @@ internal sealed class ExplorerDesktopReader : IDisposable
 					}
 				}
 				var found = Enumerable.Range(0, keys.Length).Where(i => pidls[i] != IntPtr.Zero).ToArray();
+				if (required && found.Length != keys.Length) { throw new InvalidOperationException("部分桌面项目已变化，无法完整保存拖动位置。"); }
 				if (found.Length > 0)
 				{
-					view.SelectAndPositionItems((uint)found.Length, found.Select(i => pidls[i]).ToArray(), found.Select(i => points[i]).ToArray(),
+					int result = view.SelectAndPositionItems((uint)found.Length, found.Select(i => pidls[i]).ToArray(), found.Select(i => points[i]).ToArray(),
 							SVSI_POSITIONITEM | SVSI_NOTAKEFOCUS);
+					if (required) { Marshal.ThrowExceptionForHR(result); }
 				}
 			}
 			finally
@@ -238,6 +241,7 @@ internal sealed class ExplorerDesktopReader : IDisposable
 		{
 			Log.Warn("写回桌面图标位置失败", ex);
 			ResetView();
+			if (required) { throw; }
 		}
 	}
 

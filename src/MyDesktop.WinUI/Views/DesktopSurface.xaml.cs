@@ -27,9 +27,11 @@ public sealed partial class DesktopSurface : Window
 	readonly DesktopIconsView _desktopIcons;
 	readonly Border _notice;
 	readonly TextBlock _noticeText;
+	readonly Border _band;
 	NameEditor? _editingEditor;
 	FrameworkElement? _editingOwner;
 	bool _clipboardListener;
+	bool _captureInput;
 
 	internal DesktopSurface(RECT workArea, double scale, IEnumerable<FenceFrame> frames, AppSettings settings, ShellItemLoader images, FileRename rename, bool readOnly)
 	{
@@ -104,6 +106,12 @@ public sealed partial class DesktopSurface : Window
 		Canvas.SetLeft(_notice, 12);
 		Canvas.SetTop(_notice, 12);
 		Surface.Children.Add(_notice);
+		_band = new Border
+		{
+			BorderThickness = new Thickness(1), BorderBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(220, 100, 180, 255)),
+			Background = new SolidColorBrush(Windows.UI.Color.FromArgb(55, 70, 150, 240)), IsHitTestVisible = false, Visibility = Visibility.Collapsed,
+		};
+		Surface.Children.Add(_band);
 		UpdateRegion();
 		Surface.PointerPressed += Surface_PointerPressed;
 		Activated += (_, args) =>
@@ -140,6 +148,47 @@ public sealed partial class DesktopSurface : Window
 	internal double Scale => _scale;
 	internal DesktopIconsView DesktopIcons => _desktopIcons;
 	internal string Notice => _noticeText.Text;
+	internal Canvas RootElement => Surface;
+	internal bool IsInputCaptured => _captureInput;
+	internal bool IsBandVisible => _band.Visibility == Visibility.Visible;
+
+	internal void SetInputCapture(bool capture)
+	{
+		_captureInput = capture;
+		Surface.Background = capture ? new SolidColorBrush(Microsoft.UI.Colors.Transparent) : null;
+		UpdateRegion();
+	}
+
+	internal void DrawBand(System.Drawing.Rectangle? bounds)
+	{
+		var visible = bounds == null ? System.Drawing.Rectangle.Empty : System.Drawing.Rectangle.Intersect(bounds.Value, _workArea);
+		_band.Visibility = visible.Width > 0 && visible.Height > 0 ? Visibility.Visible : Visibility.Collapsed;
+		Canvas.SetLeft(_band, (visible.Left - _workArea.Left) / _scale);
+		Canvas.SetTop(_band, (visible.Top - _workArea.Top) / _scale);
+		_band.Width = Math.Max(0, visible.Width / _scale);
+		_band.Height = Math.Max(0, visible.Height / _scale);
+	}
+
+	internal System.Drawing.Rectangle ContentBoundsOf(FenceView fence)
+	{
+		var bounds = BoundsOf(fence);
+		int top = bounds.Top + (int)Math.Round(36 * _scale);
+		return System.Drawing.Rectangle.FromLTRB(bounds.Left + _workArea.Left, top + _workArea.Top, bounds.Right + _workArea.Left,
+			Math.Max(top, bounds.Bottom) + _workArea.Top);
+	}
+
+	internal SelectionTarget[] SelectionTargets(FenceView? fence)
+	{
+		if (fence == null) { return _desktopIcons.Cells.Select(pair => new SelectionTarget(Guid.Empty, pair.Key, pair.Value)).ToArray(); }
+		var content = ContentBoundsOf(fence);
+		var bounds = BoundsOf(fence);
+		return fence.ItemRectangles().Select(item =>
+		{
+			var rectangle = new System.Drawing.Rectangle(_workArea.Left + bounds.Left + (int)Math.Round(item.Bounds.X * _scale),
+				_workArea.Top + bounds.Top + (int)Math.Round(item.Bounds.Y * _scale), (int)Math.Round(item.Bounds.Width * _scale), (int)Math.Round(item.Bounds.Height * _scale));
+			return new SelectionTarget(fence.Frame.Active.Id, item.Key, System.Drawing.Rectangle.Intersect(content, rectangle));
+		}).Where(item => item.Bounds.Width > 0 && item.Bounds.Height > 0).ToArray();
+	}
 
 	internal void WatchClipboard()
 	{
@@ -227,6 +276,11 @@ public sealed partial class DesktopSurface : Window
 
 	void UpdateRegion()
 	{
+		if (_captureInput)
+		{
+			WindowApi.SetRegion(Handle, [new RECT(0, 0, _workArea.Width, _workArea.Height)], 0);
+			return;
+		}
 		var rectangles = _fences.Select(BoundsOf).ToList();
 		if (_desktopIcons != null)
 		{

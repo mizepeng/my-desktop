@@ -25,6 +25,8 @@ internal sealed class DesktopSession : IDisposable
 	DesktopTakeover? _takeover;
 	FileChangeMonitor? _files;
 	FileCommands? _commands;
+	DesktopGestures? _gestures;
+	FileDragDrop? _dragDrop;
 	FenceView? _activeFence;
 	DesktopSurface? _activeSurface;
 	bool _dirty, _disposed;
@@ -59,6 +61,9 @@ internal sealed class DesktopSession : IDisposable
 	internal FenceView? ActiveFence => _activeFence;
 	internal DesktopSurface ActiveSurface => _activeSurface ?? throw new InvalidOperationException("桌面输入宿主尚未就绪。");
 	internal bool IsPreview => _options.PreviewFile != null;
+	internal DesktopGestures Gestures => _gestures ?? throw new InvalidOperationException("框选尚未连接到桌面宿主。");
+	internal FileDragDrop DragDrop => _dragDrop ?? throw new InvalidOperationException("拖放尚未连接到桌面宿主。");
+	internal bool IsInteracting => _gestures?.IsActive == true || _dragDrop?.IsActive == true;
 
 	internal IReadOnlyList<string> DesktopFolders() => _options.IsProbe ? [Path.Combine(AppPaths.DataDir, "桌面")] : [AppPaths.Desktop, AppPaths.CommonDesktop];
 
@@ -92,6 +97,8 @@ internal sealed class DesktopSession : IDisposable
 		}
 		_activeSurface = _surfaces[0];
 		_commands = new FileCommands(this, _options.IsProbe);
+		_gestures = new DesktopGestures(this);
+		_dragDrop = new FileDragDrop(this);
 		foreach (var surface in _surfaces)
 		{
 			surface.DesktopIcons.SelectionRequested += (key, extend) => SelectLoose(key, extend, surface);
@@ -101,9 +108,16 @@ internal sealed class DesktopSession : IDisposable
 				Commands.CreateMenu().ShowAt(anchor, point);
 			};
 			surface.ClipboardChanged += () => Commands.RefreshClipboard();
+			DragDrop.ConnectTarget(surface.RootElement, surface, null);
+			surface.DesktopIcons.DragSourceCreated += (source, key) => DragDrop.ConnectSource(source, () => key, surface, null);
 			foreach (var fence in surface.Fences)
 			{
 				fence.TargetRequested += () => { SetContext(surface, fence); surface.ActivateForSelection(); };
+				DragDrop.ConnectList(fence, surface);
+				DragDrop.ConnectTarget(fence, surface, fence);
+				fence.BandStarted += (point, additive) => Gestures.Begin(point, additive, surface, fence);
+				fence.BandMoved += point => Gestures.Move(point);
+				fence.BandFinished += (point, canceled) => { if (canceled) { Gestures.Cancel(); } else { Gestures.End(point); } };
 				fence.SelectionRequested += (keys, extend) => SelectFence(fence, keys, extend);
 				fence.ScopeHidden += scope => Selection.Remove(scope);
 				fence.ContentChanged += () =>
@@ -222,6 +236,7 @@ internal sealed class DesktopSession : IDisposable
 
 	void RefreshFiles()
 	{
+		if (_disposed || IsInteracting) { return; }
 		foreach (var fence in _surfaces.SelectMany(surface => surface.Fences))
 		{
 			fence.RefreshContent(true);
@@ -304,6 +319,7 @@ internal sealed class DesktopSession : IDisposable
 
 	internal void HandleKey(DesktopInputCommand command, uint key, bool extend)
 	{
+		if (IsInteracting) { return; }
 		if (command is DesktopInputCommand.Copy or DesktopInputCommand.Cut or DesktopInputCommand.Paste or DesktopInputCommand.Delete)
 		{
 			_ = Commands.ExecuteAsync(command);
@@ -357,9 +373,25 @@ internal sealed class DesktopSession : IDisposable
 
 	internal void FilesCompleted(bool save)
 	{
+		if (_disposed) { return; }
 		if (save) { SaveSoon(); }
 		_files?.CheckFolders();
 		RefreshFiles();
+	}
+
+	internal void UpdateInteraction()
+	{
+		foreach (var surface in _surfaces)
+		{
+			surface.DesktopIcons.SuspendContentUpdates = IsInteracting;
+			foreach (var fence in surface.Fences) { fence.SuspendContentUpdates = IsInteracting; }
+		}
+	}
+
+	internal void CancelInteractions()
+	{
+		_gestures?.Cancel();
+		_dragDrop?.End();
 	}
 
 	void SaveSoon()
@@ -390,6 +422,7 @@ internal sealed class DesktopSession : IDisposable
 			return;
 		}
 		_disposed = true;
+		CancelInteractions();
 		_saveTimer.Stop();
 		_files?.Dispose();
 		_takeover?.Dispose();

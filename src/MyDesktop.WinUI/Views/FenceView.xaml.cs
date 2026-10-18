@@ -32,6 +32,7 @@ public sealed partial class FenceView : UserControl, IDisposable
 	readonly CompositionRoundedRectangleGeometry _geometry;
 	readonly ObservableCollection<FenceItem> _items = [];
 	readonly SystemBackdropElement _backdrop;
+	uint? _bandPointer;
 	Task _contentTask = Task.CompletedTask;
 	int _contentVersion;
 	bool _dragging;
@@ -50,10 +51,40 @@ public sealed partial class FenceView : UserControl, IDisposable
 		_rename = rename;
 		_owner = owner;
 		_readOnly = readOnly;
-		AddHandler(PointerPressedEvent, new PointerEventHandler((_, _) =>
+		AddHandler(PointerPressedEvent, new PointerEventHandler((_, args) =>
 		{
 			if (!IsEditing) { TargetRequested?.Invoke(); }
+			if (_bandPointer != null && args.GetCurrentPoint(this).Properties.IsRightButtonPressed)
+			{
+				_bandPointer = null;
+				ReleasePointerCaptures();
+				BandFinished?.Invoke(ScreenPoint(args), true);
+			}
+			if (!_readOnly && !IsEditing && !_frame.Active.RolledUp && args.GetCurrentPoint(this).Properties.IsLeftButtonPressed
+				&& !args.GetCurrentPoint(this).Properties.IsRightButtonPressed
+				&& args.GetCurrentPoint(this).Position.Y >= 36 && ItemAt(args.OriginalSource as DependencyObject) == null
+				&& !IsScrollBar(args.OriginalSource as DependencyObject) && CapturePointer(args.Pointer))
+			{
+				_bandPointer = args.Pointer.PointerId;
+				BandStarted?.Invoke(ScreenPoint(args), NativeMethods.GetAsyncKeyState(NativeMethods.VK_CONTROL) < 0
+					|| NativeMethods.GetAsyncKeyState(NativeMethods.VK_SHIFT) < 0);
+				args.Handled = true;
+			}
 		}), true);
+		PointerMoved += (_, args) => { if (_bandPointer == args.Pointer.PointerId) { BandMoved?.Invoke(ScreenPoint(args)); } };
+		PointerReleased += (_, args) =>
+		{
+			if (_bandPointer == args.Pointer.PointerId)
+			{
+				_bandPointer = null;
+				BandFinished?.Invoke(ScreenPoint(args), false);
+				ReleasePointerCapture(args.Pointer);
+			}
+		};
+		PointerCaptureLost += (_, args) =>
+		{
+			if (_bandPointer == args.Pointer.PointerId) { _bandPointer = null; BandFinished?.Invoke(ScreenPoint(args), true); }
+		};
 		Editor.Opened += () => UpdateEditing(false);
 		Editor.Closed += () =>
 		{
@@ -118,6 +149,7 @@ public sealed partial class FenceView : UserControl, IDisposable
 	internal string ContentStatus => Status.Text;
 	internal GridView ItemList => Items;
 	internal bool IsEditing => Editor.IsEditing;
+	internal bool SuspendContentUpdates { get; set; }
 	internal bool IsComposing => Editor.IsComposing;
 	internal NameEditor EditorControl => Editor;
 	internal TextBox NameInput => Editor.NameInput;
@@ -127,9 +159,44 @@ public sealed partial class FenceView : UserControl, IDisposable
 	internal event Action? ExitRequested;
 	internal event Action<IReadOnlyList<string>, bool>? SelectionRequested;
 	internal event Action? TargetRequested;
+	internal event Action<System.Drawing.Point, bool>? BandStarted;
+	internal event Action<System.Drawing.Point>? BandMoved;
+	internal event Action<System.Drawing.Point, bool>? BandFinished;
 	internal event Action<Guid>? ScopeHidden;
 	internal event Action? ContentChanged;
 	internal event Action<FrameworkElement, Point>? ItemContextRequested;
+
+	System.Drawing.Point ScreenPoint(PointerRoutedEventArgs args)
+	{
+		var point = args.GetCurrentPoint(this).Position;
+		var window = NativeMethods.GetWindowRect(_owner);
+		double scale = NativeMethods.GetDpiForWindow(_owner) / 96.0;
+		var translation = _visual.TransformMatrix.Translation;
+		return new System.Drawing.Point(window.Left + (int)Math.Round((Canvas.GetLeft(this) + translation.X + point.X) * scale),
+			window.Top + (int)Math.Round((Canvas.GetTop(this) + translation.Y + point.Y) * scale));
+	}
+
+	internal IEnumerable<(string Key, Rect Bounds)> ItemRectangles()
+	{
+		foreach (var item in _items)
+		{
+			if (Items.ContainerFromItem(item) is GridViewItem container && container.ActualWidth > 0 && container.ActualHeight > 0)
+			{
+				yield return (item.Path, container.TransformToVisual(this).TransformBounds(new Rect(0, 0, container.ActualWidth, container.ActualHeight)));
+			}
+		}
+	}
+
+	internal static string? ItemKeyAt(DependencyObject? source) => ItemAt(source)?.Path;
+
+	static bool IsScrollBar(DependencyObject? source)
+	{
+		for (var element = source; element != null; element = VisualTreeHelper.GetParent(element))
+		{
+			if (element is ScrollBar) { return true; }
+		}
+		return false;
+	}
 
 	internal void ArrangeAt(double x, double y, double width, double height)
 	{
@@ -277,7 +344,7 @@ public sealed partial class FenceView : UserControl, IDisposable
 				}
 				loaded.Add(new FenceItem(path, data.Name, data.ToBitmap()));
 			}
-			if (version == _contentVersion)
+			if (version == _contentVersion && !SuspendContentUpdates)
 			{
 				_settingSelection = true;
 				_items.Clear();

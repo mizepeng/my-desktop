@@ -9,6 +9,17 @@ internal sealed class ItemSelection
 	public event Action? Changed;
 	public IReadOnlyList<string> Keys => _scopes.Values.SelectMany(keys => keys).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 	public IReadOnlyList<string> InScope(Guid scope) => _scopes.TryGetValue(scope, out var keys) ? keys.ToArray() : [];
+	public IReadOnlyDictionary<Guid, IReadOnlyList<string>> Capture() => _scopes.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<string>)pair.Value.ToArray());
+
+	public void Replace(IReadOnlyDictionary<Guid, IReadOnlyList<string>> scopes)
+	{
+		_scopes.Clear();
+		foreach (var (scope, keys) in scopes.Where(pair => pair.Value.Count > 0))
+		{
+			_scopes.Add(scope, keys.ToHashSet(StringComparer.OrdinalIgnoreCase));
+		}
+		Changed?.Invoke();
+	}
 
 	public void Set(Guid scope, IEnumerable<string> keys, bool extend)
 	{
