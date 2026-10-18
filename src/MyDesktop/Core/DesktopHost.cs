@@ -104,6 +104,18 @@ internal static class DesktopHost
 	static bool _lifting;
 
 	/// <summary>
+	/// 卷起的分区在悬停展开、拖放展开或固定展开期间临时置顶的分区窗口。和 <see cref="_lifted"/> 分开：
+	/// 那边是全体图标层、亚克力和分区一起短暂置顶；这里只把正在展开的几个放到置顶层最下面（普通应用之上、任务栏之下），收起后移除。
+	/// 只在界面线程上读写。
+	/// </summary>
+	static readonly HashSet<IntPtr> _expanded = [];
+
+	/// <summary>
+	/// 展开置顶的分区对应的亚克力窗口。半透明分区不带着它一起上去的话，展开的部分会透出盖在上面的应用。
+	/// </summary>
+	static readonly Dictionary<IntPtr, IntPtr> _expandedBackdrop = [];
+
+	/// <summary>
 	/// 正在临时置顶、撤销置顶或调整分区之间的上下（SetZOrder 进行中）。
 	/// </summary>
 	public static bool IsAdjustingZOrder => _lifting;
@@ -121,6 +133,7 @@ internal static class DesktopHost
 
 	/// <summary>
 	/// 撤销临时置顶：放到所有普通窗口之上，桌面此时在普通窗口的最上层，它们也就仍在桌面之上，之后由调用方按平时的规则摆好。
+	/// 展开中的分区不跟着撤销，仍留在置顶层，这里再摆回置顶层最下面。
 	/// </summary>
 	public static void Unlift(IEnumerable<IntPtr> fences)
 	{
@@ -130,17 +143,273 @@ internal static class DesktopHost
 		}
 		_lifted = false;
 		TraceZOrder("撤销临时置顶");
-		SetZOrder(_layers.Windows.Concat(Backdrops).Concat(BottomToTop(fences)), HWND_NOTOPMOST);
+		var raisedBackdrops = ExpandedBackdropSet();
+		var ordinary = _layers.Windows.Concat(Backdrops.Where(h => !raisedBackdrops.Contains(h)))
+				.Concat(BottomToTop(fences.Where(h => !_expanded.Contains(h))));
+		SetZOrder(ordinary, HWND_NOTOPMOST);
+		RestackExpanded(IntPtr.Zero);
+	}
+
+	/// <summary>
+	/// 卷起的分区开始悬停展开、拖放展开或固定展开：把它和它的亚克力放到置顶层最下面，盖住普通应用，任务栏和其他置顶窗口仍在上面。
+	/// 全体临时置顶（<see cref="Lift"/>）进行中时只记下，等 <see cref="Unlift"/> 再摆。
+	/// </summary>
+	/// <param name="backdrop">该分区的亚克力窗口，没有时为 0。</param>
+	public static void RaiseExpanded(IntPtr fence, IntPtr backdrop)
+	{
+		if (fence == IntPtr.Zero || !IsWindow(fence))
+		{
+			return;
+		}
+		bool added = _expanded.Add(fence);
+		_expandedBackdrop.TryGetValue(fence, out var previous);
+		bool hasBackdrop = backdrop != IntPtr.Zero && IsWindow(backdrop);
+		if (hasBackdrop)
+		{
+			_expandedBackdrop[fence] = backdrop;
+		}
+		else
+		{
+			_expandedBackdrop.Remove(fence);
+		}
+		// 正在调整层级时只记下，避免 SetZOrder 重入把 _lifting 提前清掉；下次同步时若还没进置顶层会再摆
+		bool placed = !added && previous == (hasBackdrop ? backdrop : IntPtr.Zero) && IsTopmost(fence);
+		if (_lifted || _lifting || placed)
+		{
+			return;
+		}
+		RestackExpanded(added ? fence : IntPtr.Zero);
+	}
+
+	static bool IsTopmost(IntPtr hwnd) => hwnd != IntPtr.Zero && IsWindow(hwnd)
+			&& (GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0;
+
+	/// <summary>
+	/// 收起或悬停展开结束：撤掉这个分区的临时置顶，连同亚克力放回桌面层（普通应用之下）。没在展开置顶中时不做任何事。
+	/// </summary>
+	public static void LowerExpanded(IntPtr fence)
+	{
+		if (!_expanded.Contains(fence))
+		{
+			return;
+		}
+		// 全体置顶进行中：从名单去掉即可，Unlift 时和大家一起回到普通层。
+		// 单次层级调整进行中先不挪，免得重入；调用方之后还会再同步
+		if (_lifting)
+		{
+			return;
+		}
+		_expanded.Remove(fence);
+		_expandedBackdrop.Remove(fence, out var backdrop);
+		if (backdrop != IntPtr.Zero && !IsWindow(backdrop))
+		{
+			backdrop = IntPtr.Zero;
+		}
+		if (_lifted || !IsWindow(fence))
+		{
+			return;
+		}
+		ReturnToDesktopBand(fence, backdrop);
+	}
+
+	/// <summary>
+	/// 展开中的分区或它的亚克力掉出置顶层时再摆回去。层级校正（见 FenceManager.KeepFencesAboveDesktop）里调用。
+	/// </summary>
+	public static void EnsureExpandedAboveApps()
+	{
+		if (_lifted || _lifting || _expanded.Count == 0)
+		{
+			return;
+		}
+		foreach (var fence in _expanded.ToArray())
+		{
+			if (!IsWindow(fence))
+			{
+				_expanded.Remove(fence);
+				_expandedBackdrop.Remove(fence);
+			}
+		}
+		if (_expanded.Count == 0)
+		{
+			return;
+		}
+		foreach (var fence in _expanded)
+		{
+			if (IsWindowVisible(fence) && (GetWindowLongPtr(fence, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) == 0)
+			{
+				RestackExpanded(IntPtr.Zero);
+				return;
+			}
+		}
+		foreach (var backdrop in _expandedBackdrop.Values)
+		{
+			if (IsWindow(backdrop) && IsWindowVisible(backdrop) && (GetWindowLongPtr(backdrop, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) == 0)
+			{
+				RestackExpanded(IntPtr.Zero);
+				return;
+			}
+		}
+	}
+
+	static HashSet<IntPtr> ExpandedBackdropSet() => _expandedBackdrop.Values.Where(h => h != IntPtr.Zero).ToHashSet();
+
+	/// <summary>
+	/// 紧贴图标层的那一串亚克力。展开置顶的不在这串里（它们在置顶层）。没有展开中的分区时直接用 <see cref="Backdrops"/>，避免每次校正都分配。
+	/// </summary>
+	static IReadOnlySet<IntPtr> BackdropBand()
+			=> _expandedBackdrop.Count == 0 ? Backdrops : Backdrops.Where(h => !IsExpandedBackdrop(h)).ToHashSet();
+
+	static bool IsExpandedBackdrop(IntPtr hwnd)
+	{
+		foreach (var backdrop in _expandedBackdrop.Values)
+		{
+			if (backdrop == hwnd)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/// <summary>
+	/// 按从下到上重排展开中的分区：亚克力在下、分区在上，<paramref name="onTop"/> 放在最上面（为 0 时保持现有的上下次序）。
+	/// 插在其他程序最下面的那个置顶窗口之后，于是进置顶层、紧挨在它下面：普通应用在下面，任务栏仍在上面。
+	/// </summary>
+	static void RestackExpanded(IntPtr onTop)
+	{
+		if (_lifted || _lifting || _expanded.Count == 0)
+		{
+			return;
+		}
+		var fences = BottomToTop(_expanded).Where(h => h != onTop && IsWindow(h)).ToList();
+		if (onTop != IntPtr.Zero && IsWindow(onTop))
+		{
+			fences.Add(onTop);
+		}
+		if (fences.Count == 0)
+		{
+			return;
+		}
+		var backdrops = new List<IntPtr>();
+		foreach (var fence in fences)
+		{
+			if (_expandedBackdrop.TryGetValue(fence, out var backdrop) && backdrop != IntPtr.Zero && IsWindow(backdrop))
+			{
+				backdrops.Add(backdrop);
+			}
+		}
+		var moving = backdrops.Concat(fences).ToList();
+		var anchor = LowestForeignTopmost(moving);
+		TraceZOrder(onTop == IntPtr.Zero ? "展开置顶" : "展开的分区提到最前 {0}", onTop);
+		SetZOrder(moving, anchor == IntPtr.Zero ? HWND_TOPMOST : anchor);
+	}
+
+	/// <summary>
+	/// 把刚结束展开的分区和亚克力放回底座上方那一串：亚克力回到图标层之上，分区回到其他普通分区之上、普通应用之下。
+	/// </summary>
+	static void ReturnToDesktopBand(IntPtr fence, IntPtr backdrop)
+	{
+		var desktop = FindDesktopWindow();
+		if (desktop == IntPtr.Zero)
+		{
+			SetZOrder(NonZero(backdrop, fence), HWND_NOTOPMOST);
+			return;
+		}
+		var skip = new HashSet<IntPtr>(_expanded) { fence };
+		if (backdrop != IntPtr.Zero)
+		{
+			skip.Add(backdrop);
+		}
+		foreach (var handle in _expandedBackdrop.Values)
+		{
+			skip.Add(handle);
+		}
+		var floor = TopOfRun(desktop, _layers.Windows, IntPtr.Zero, out _);
+		var backdropAnchor = NormalBandAnchor(AnchorAbove(floor, skip));
+		var bandTop = floor;
+		for (var above = GetWindow(floor, GW_HWNDPREV); above != IntPtr.Zero; above = GetWindow(above, GW_HWNDPREV))
+		{
+			if (skip.Contains(above) || IsIgnorable(above))
+			{
+				continue;
+			}
+			if ((GetWindowLongPtr(above, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0 || IsBlocking(above))
+			{
+				break;
+			}
+			bandTop = above;
+		}
+		var placements = new List<(IntPtr Hwnd, IntPtr InsertAfter)>();
+		if (backdrop != IntPtr.Zero)
+		{
+			placements.Add((backdrop, backdropAnchor));
+		}
+		placements.Add((fence, NormalBandAnchor(AnchorAbove(bandTop, skip))));
+		TraceZOrder("展开结束，放回桌面层 {0}", fence);
+		SetZOrder(placements);
+	}
+
+	/// <summary>
+	/// 插在置顶窗口之后会跟着进入置顶层。要回到普通窗口层时，没有普通窗口可参照就用 HWND_NOTOPMOST（普通窗口的最上面）。
+	/// </summary>
+	static IntPtr NormalBandAnchor(IntPtr anchor)
+	{
+		if (anchor == IntPtr.Zero || (GetWindowLongPtr(anchor, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0)
+		{
+			return HWND_NOTOPMOST;
+		}
+		return anchor;
+	}
+
+	static IEnumerable<IntPtr> NonZero(params IntPtr[] handles) => handles.Where(h => h != IntPtr.Zero);
+
+	/// <summary>
+	/// 置顶层里最下面的、不属于本程序也不在 <paramref name="moving"/> 中的可见窗口。
+	/// 插在它之后就进置顶层、紧挨在它下面。没有这样的窗口时返回 0。
+	/// </summary>
+	static IntPtr LowestForeignTopmost(IReadOnlyCollection<IntPtr> moving)
+	{
+		uint ownProcess = (uint)Environment.ProcessId;
+		var lowest = IntPtr.Zero;
+		EnumWindows((hwnd, _) =>
+		{
+			if (moving.Contains(hwnd) || IsIgnorable(hwnd))
+			{
+				return true;
+			}
+			bool topmost = (GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0;
+			GetWindowThreadProcessId(hwnd, out uint process);
+			if (topmost && (process == ownProcess || IsIconic(hwnd) || IsCloaked(hwnd)))
+			{
+				return true;
+			}
+			if (!topmost)
+			{
+				return false;
+			}
+			lowest = hwnd;
+			return true;
+		}, IntPtr.Zero);
+		return lowest;
 	}
 
 	/// <summary>
 	/// 把分区提到其他分区之上（仍在其他程序的窗口之下）：正在操作、悬停展开的分区盖住旁边的分区，
 	/// 否则半透明的分区叠在一起分不清哪个在上，鼠标还会落到看上去在下面的分区上。
-	/// 不在桌面上方那一段里时不管，由 KeepAboveDesktop 摆回。
+	/// 不在桌面上方那一段里时不管，由 KeepAboveDesktop 摆回。展开置顶的分区只在同样展开的分区之间调整，仍在普通应用之上。
 	/// </summary>
 	public static void BringAboveFences(IntPtr hwnd, IReadOnlySet<IntPtr> fences)
 	{
-		if (_lifted || GetInsertAfterAboveDesktop(hwnd) != null)
+		if (_lifted)
+		{
+			return;
+		}
+		if (_expanded.Contains(hwnd))
+		{
+			BringExpandedToFront(hwnd);
+			return;
+		}
+		if (GetInsertAfterAboveDesktop(hwnd) != null)
 		{
 			return;
 		}
@@ -165,6 +434,18 @@ internal static class DesktopHost
 		// 插到那个分区的上方，即它上面紧挨着的窗口之后
 		var insertAfter = AnchorAbove(topFence);
 		SetZOrder([hwnd], insertAfter == IntPtr.Zero ? HWND_TOP : insertAfter);
+	}
+
+	/// <summary>
+	/// 展开置顶的分区盖住其他同样展开的分区；已经是最上面那个就不动，免得每次点击都重排、分区重画。
+	/// </summary>
+	static void BringExpandedToFront(IntPtr hwnd)
+	{
+		if (TopToBottom(_expanded).FirstOrDefault() == hwnd)
+		{
+			return;
+		}
+		RestackExpanded(hwnd);
 	}
 
 	/// <summary>
@@ -229,15 +510,35 @@ internal static class DesktopHost
 	/// 不能先传 HWND_BOTTOM：目标和参照都已置顶时，即使消息里改写了位置，调用仍会成功却原地不动（Win+D 后切换曾经置顶的隐藏标签，实测）。
 	/// </summary>
 	static void SetZOrder(IEnumerable<IntPtr> windows, IntPtr insertAfter)
+			=> SetZOrder(windows.Where(hwnd => hwnd != IntPtr.Zero).Select(hwnd => (hwnd, insertAfter)).ToList());
+
+	/// <summary>
+	/// 和 <see cref="SetZOrder(IEnumerable{IntPtr}, IntPtr)"/> 一样，但每个窗口可以插在不同的位置：展开结束时亚克力回到底座上、分区回到普通分区之上。
+	/// 先放的在下面。
+	/// </summary>
+	static void SetZOrder(List<(IntPtr Hwnd, IntPtr InsertAfter)> list)
 	{
+		if (list.Count == 0)
+		{
+			return;
+		}
 		const uint flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
-		var list = windows.ToList();
-		insertAfter = NotOwnedBy(insertAfter, list);
-		bool special = insertAfter.ToInt64() is >= -2 and <= 1;
-		var passed = special ? insertAfter : HWND_TOP;
-		TraceZOrder($"调整层级：{string.Join("、", list.Select((_, i) => $"{{{i}}}"))} 插在 {{{list.Count}}} 之后", [.. list, insertAfter]);
+		var moving = list.Select(item => item.Hwnd).ToList();
+		for (int i = 0; i < list.Count; i++)
+		{
+			list[i] = (list[i].Hwnd, NotOwnedBy(list[i].InsertAfter, moving));
+		}
+		bool sameAnchor = list.All(item => item.InsertAfter == list[0].InsertAfter);
+		if (sameAnchor)
+		{
+			TraceZOrder($"调整层级：{string.Join("、", list.Select((_, i) => $"{{{i}}}"))} 插在 {{{list.Count}}} 之后", [.. moving, list[0].InsertAfter]);
+		}
+		else
+		{
+			TraceZOrder($"调整层级：{string.Join("、", list.Select((_, i) => $"{{{i}}} 插在 {{{list.Count + i}}} 之后"))}", [.. moving, .. list.Select(item => item.InsertAfter)]);
+		}
 		// 特殊值也登记：这批窗口自己的 WM_WINDOWPOSCHANGING 照传入的位置摆，不被 KeepAboveDesktop 等改写
-		foreach (var hwnd in list)
+		foreach (var (hwnd, insertAfter) in list)
 		{
 			_pendingInsertAfter[hwnd] = insertAfter;
 		}
@@ -252,10 +553,10 @@ internal static class DesktopHost
 			}
 			for (int i = 0; failure == null && i < list.Count; i++)
 			{
-				info = DeferWindowPos(info, list[i], passed, 0, 0, 0, 0, flags);
+				info = DeferWindowPos(info, list[i].Hwnd, PassedInsertAfter(list[i].InsertAfter), 0, 0, 0, 0, flags);
 				if (info == IntPtr.Zero)
 				{
-					failure = $"DeferWindowPos 第 {i + 1} 个窗口（{GetClassName(list[i])}）错误码 {Marshal.GetLastWin32Error()}";
+					failure = $"DeferWindowPos 第 {i + 1} 个窗口（{GetClassName(list[i].Hwnd)}）错误码 {Marshal.GetLastWin32Error()}";
 				}
 			}
 			if (failure == null && !EndDeferWindowPos(info))
@@ -265,11 +566,11 @@ internal static class DesktopHost
 			if (failure != null)
 			{
 				// 查原因用的日志：窗口个数、各窗口类名、插在哪个窗口之后
-				Log.Warn($"批量调整窗口层级失败，改为逐个调整：{failure}；共 {list.Count} 个窗口（{string.Join("、", list.Select(GetClassName))}），"
-						+ $"插在 {(insertAfter.ToInt64() is >= -2 and <= 1 ? insertAfter.ToInt64().ToString() : GetClassName(insertAfter))} 之后");
-				foreach (var hwnd in list)
+				string anchors = string.Join("、", list.Select(item => item.InsertAfter).Distinct().Select(DescribeInsertAfter));
+				Log.Warn($"批量调整窗口层级失败，改为逐个调整：{failure}；共 {list.Count} 个窗口（{string.Join("、", moving.Select(GetClassName))}），插在 {anchors} 之后");
+				foreach (var (hwnd, insertAfter) in list)
 				{
-					if (!SetWindowPos(hwnd, passed, 0, 0, 0, 0, flags))
+					if (!SetWindowPos(hwnd, PassedInsertAfter(insertAfter), 0, 0, 0, 0, flags))
 					{
 						Log.Warn($"逐个调整窗口层级也失败：{GetClassName(hwnd)} 错误码 {Marshal.GetLastWin32Error()}");
 						return;
@@ -279,13 +580,21 @@ internal static class DesktopHost
 		}
 		finally
 		{
-			foreach (var hwnd in list)
+			foreach (var (hwnd, _) in list)
 			{
 				_pendingInsertAfter.Remove(hwnd);
 			}
 			_lifting = false;
 		}
 	}
+
+	/// <summary>
+	/// 具体窗口不直接传给 DeferWindowPos，先传 HWND_TOP，再在 WM_WINDOWPOSCHANGING 里改写（见 SetZOrder）。特殊值原样传。
+	/// </summary>
+	static IntPtr PassedInsertAfter(IntPtr insertAfter) => insertAfter.ToInt64() is >= -2 and <= 1 ? insertAfter : HWND_TOP;
+
+	static string DescribeInsertAfter(IntPtr insertAfter)
+			=> insertAfter.ToInt64() is >= -2 and <= 1 ? insertAfter.ToInt64().ToString() : GetClassName(insertAfter);
 
 	/// <summary>
 	/// 把本程序的原生分层窗口（飞行图标、截图顶替窗口）逐个放到 insertAfter 的位置，做法见 SetZOrder；
@@ -421,7 +730,9 @@ internal static class DesktopHost
 				problem = $"{labels.GetValueOrDefault(fence)}在桌面下面";
 				break;
 			}
-			var coveringBackdrop = Backdrops.FirstOrDefault(h => IsWindowVisible(h) && order.TryGetValue(h, out int index) && index < fenceIndex);
+			// 展开置顶的亚克力跟着自己的分区在应用之上，盖住其他分区是预期的；盖住自己的分区才算错
+			var coveringBackdrop = Backdrops.FirstOrDefault(h => IsWindowVisible(h) && order.TryGetValue(h, out int index) && index < fenceIndex
+					&& ExpandedBackdropCovers(h, fence));
 			if (coveringBackdrop != IntPtr.Zero)
 			{
 				problem = $"{labels.GetValueOrDefault(coveringBackdrop)}在{labels.GetValueOrDefault(fence)}上面";
@@ -595,13 +906,19 @@ internal static class DesktopHost
 	}
 
 	/// <summary>
-	/// 计算把窗口放到桌面窗口正上方所需的 hwndInsertAfter；已在该位置、找不到桌面或正临时置顶（见 Lift）时返回 null。
+	/// 展开置顶的亚克力是否该被当成盖住这个分区：只有盖住它自己的分区才算，盖住其他分区是它跟分区一起在应用之上。
+	/// </summary>
+	static bool ExpandedBackdropCovers(IntPtr backdrop, IntPtr fence)
+			=> !IsExpandedBackdrop(backdrop) || (_expandedBackdrop.TryGetValue(fence, out var own) && own == backdrop);
+
+	/// <summary>
+	/// 计算把窗口放到桌面窗口正上方所需的 hwndInsertAfter；已在该位置、找不到桌面、正临时置顶（见 Lift）或因展开而单独置顶（见 RaiseExpanded）时返回 null。
 	/// 平时桌面位于最底层，分区也就在所有应用窗口之下；Win+D 时桌面被提到最前，分区紧随其上依然可见。
 	/// 散放图标层紧贴桌面，分区再压在图标层之上，与系统桌面上「窗口盖住图标」的关系一致。
 	/// </summary>
 	public static IntPtr? GetInsertAfterAboveDesktop(IntPtr hwnd)
 	{
-		if (_lifted)
+		if (_lifted || _expanded.Contains(hwnd))
 		{
 			return null;
 		}
@@ -620,8 +937,9 @@ internal static class DesktopHost
 		{
 			return AnchorAbove(desktop);
 		}
-		// 图标层上面那一串亚克力窗口也算底座：分区插到它们上面，否则插到亚克力窗口下面的分区会被别的分区的亚克力（和阴影）盖住
-		floor = TopOfRun(floor, Backdrops, IntPtr.Zero, out _);
+		// 图标层上面那一串亚克力窗口也算底座：分区插到它们上面，否则插到亚克力窗口下面的分区会被别的分区的亚克力（和阴影）盖住。
+		// 展开置顶的亚克力在置顶层，不算进这串，免得底座一直延伸到任务栏下面
+		floor = TopOfRun(floor, BackdropBand(), IntPtr.Zero, out _);
 		// 从底座往上看，在遇到第一个挡着的其他程序窗口之前找到自己，说明已经和其他分区一起紧贴在底座上方
 		for (var above = GetWindow(floor, GW_HWNDPREV); above != IntPtr.Zero; above = GetWindow(above, GW_HWNDPREV))
 		{
@@ -644,13 +962,13 @@ internal static class DesktopHost
 	/// <summary>
 	/// 亚克力窗口（Views/AcrylicBackdrop）的 hwndInsertAfter：紧贴在底座（桌面和紧贴其上的图标层）之上、所有分区之下。
 	/// DWM 给圆角窗口加的阴影去不掉（实测），这样阴影只落在壁纸和图标层上，不会盖住旁边分区的内容。
-	/// 已经在底座上方那一串亚克力窗口里、找不到桌面或正临时置顶（见 Lift）时返回 null。
+	/// 已经在底座上方那一串亚克力窗口里、找不到桌面、正临时置顶（见 Lift）或跟着分区展开置顶时返回 null。
 	/// </summary>
 	public static IntPtr? GetBackdropInsertAfter(IntPtr hwnd)
 	{
 		// 临时置顶、撤销置顶和调整分区上下的过程中（_lifting）分区每挪一下都会来摆亚克力窗口，这时不动它：
 		// 置顶时 _lifted 要等全部挪完才设上，之前按平时的规则摆，会把刚置顶的亚克力窗口摆回桌面上方、被提上来的桌面盖住（用户反馈）
-		if (_lifted || _lifting)
+		if (_lifted || _lifting || IsExpandedBackdrop(hwnd))
 		{
 			return null;
 		}
@@ -660,7 +978,7 @@ internal static class DesktopHost
 			return null;
 		}
 		var floor = TopOfRun(desktop, _layers.Windows, IntPtr.Zero, out _);
-		TopOfRun(floor, Backdrops, hwnd, out bool inBand);
+		TopOfRun(floor, BackdropBand(), hwnd, out bool inBand);
 		// 不在底座上方那一串亚克力窗口里时，插到紧挨底座的那个窗口之后，即底座正上方
 		return inBand ? null : AnchorAbove(floor);
 	}
@@ -707,12 +1025,22 @@ internal static class DesktopHost
 		{
 			return;
 		}
+		// 展开置顶的分区和亚克力留在应用之上，不跟着这批回到底座；参照窗口也要越过它们，
+		// 否则空桌面上紧挨着的就是这个置顶分区，整批会跟着它进入置顶层
+		var raisedBackdrops = ExpandedBackdropSet();
+		var movingFences = fences.Where(h => !_expanded.Contains(h)).ToList();
+		var movingBackdrops = Backdrops.Where(h => !raisedBackdrops.Contains(h)).ToList();
+		if (movingFences.Count == 0 && movingBackdrops.Count == 0)
+		{
+			return;
+		}
 		// 插到底座上方第一个不用挪的窗口之后
 		var floor = TopOfRun(desktop, _layers.Windows, IntPtr.Zero, out _);
-		var insertAfter = AnchorAbove(floor, fences.Concat(Backdrops).ToHashSet());
+		var insertAfter = AnchorAbove(floor, movingFences.Concat(movingBackdrops).Concat(_expanded).Concat(raisedBackdrops).ToHashSet());
 		// 都插到同一个窗口之后，后插的在上面：先亚克力窗口，再从下到上插分区。
 		// 显示桌面时这个窗口是任务栏这类置顶窗口，插在它之后整批跟着进入置顶层（见 SetZOrder）
-		SetZOrder(Backdrops.Concat(fences.Reverse()), insertAfter == IntPtr.Zero ? HWND_TOP : insertAfter);
+		// fences 按从上到下传入，倒过来才是从下到上
+		SetZOrder(movingBackdrops.Concat(Enumerable.Reverse(movingFences)), insertAfter == IntPtr.Zero ? HWND_TOP : insertAfter);
 	}
 
 	/// <summary>
