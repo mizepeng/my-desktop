@@ -71,8 +71,10 @@ internal static class UiChecks
 			Require(frame.Frame.Active.Id == second.Id && frame.DisplayedPaths.Count == 2, "切换标签后读取真实映射文件夹");
 			Require(ReferenceEquals(visual, frame.PanelVisual) && surface.Handle == hwnd && surface.Fences.Count == 2, "切换标签复用父视觉与宿主，不创建隐藏分区窗口");
 			frame.SetRolledUp(true);
+			await frame.RollReady;
 			Require(RootAt(origin.X + bounds.Left + bounds.Width / 2, origin.Y + bounds.Top + bounds.Height - 20) == floor, "收起后释放内容区输入");
 			frame.SetRolledUp(false);
+			await frame.RollReady;
 			frame.TranslateTo(24, 20);
 			frame.CommitPosition();
 			await visual.Compositor.RequestCommitAsync();
@@ -105,6 +107,7 @@ internal static class UiChecks
 			await FencePlacementChecks.RunAsync(session);
 			await RenameChecks.RunAsync(session);
 			await FenceTabChecks.RunAsync(session);
+			await FenceRollChecks.RunAsync(session);
 			await DesktopPlacementChecks.RunAsync(hwnd);
 			await TakeoverChecks.RunAsync(session);
 			await GestureChecks.RunAsync(session);

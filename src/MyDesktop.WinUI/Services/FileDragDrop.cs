@@ -113,6 +113,7 @@ internal sealed class FileDragDrop(DesktopSession session)
 		element.AllowDrop = !session.IsPreview;
 		element.DragEnter += Over;
 		element.DragOver += Over;
+		element.DragLeave += (_, _) => fence?.SetDropInside(false);
 		element.Drop += async (_, args) =>
 		{
 			args.Handled = true;
@@ -123,8 +124,10 @@ internal sealed class FileDragDrop(DesktopSession session)
 			{
 				var payload = await ResolveAsync(args.DataView);
 				string? hover = fence == null ? surface.DesktopIcons.KeyAt(args.OriginalSource as DependencyObject) : FenceView.ItemKeyAt(args.OriginalSource as DependencyObject);
-				var point = args.GetPosition(surface.RootElement);
-				var destination = new DrawPoint(surface.WorkArea.Left + (int)Math.Round(point.X * surface.Scale), surface.WorkArea.Top + (int)Math.Round(point.Y * surface.Scale));
+				var point = args.GetPosition(fence ?? (UIElement)surface.RootElement);
+				var bounds = fence == null ? default : surface.ExpandedBoundsOf(fence);
+				var destination = new DrawPoint(surface.WorkArea.Left + bounds.Left + (int)Math.Round(point.X * surface.Scale),
+					surface.WorkArea.Top + bounds.Top + (int)Math.Round(point.Y * surface.Scale));
 				args.AcceptedOperation = await DropAsync(payload, surface, target, destination, (FileDropEffect)args.AllowedOperations,
 					(args.Modifiers & Windows.ApplicationModel.DataTransfer.DragDrop.DragDropModifiers.Control) != 0,
 					(args.Modifiers & Windows.ApplicationModel.DataTransfer.DragDrop.DragDropModifiers.Shift) != 0,
@@ -139,6 +142,7 @@ internal sealed class FileDragDrop(DesktopSession session)
 			args.Handled = true;
 			args.AcceptedOperation = DataPackageOperation.None;
 			if (!args.DataView.Contains(StandardDataFormats.StorageItems) && !args.DataView.Contains(Format)) { return; }
+			fence?.SetDropInside(true);
 			var deferral = args.GetDeferral();
 			try
 			{
@@ -197,7 +201,8 @@ internal sealed class FileDragDrop(DesktopSession session)
 	{
 		var effect = Effect(payload, target, allowed, control, shift, alt, hover);
 		if (effect == FileDropEffect.None) { return DataPackageOperation.None; }
-		var result = await session.Commands.DropAsync(surface.Handle, target, payload.Paths, effect == FileDropEffect.Move);
+		var owner = surface.Fences.FirstOrDefault(fence => fence.Frame.Active == target)?.InputOwner ?? surface.Handle;
+		var result = await session.Commands.DropAsync(owner, target, payload.Paths, effect == FileDropEffect.Move);
 		if (result == null) { return DataPackageOperation.None; }
 		if (target == null && result.Completed.Count > 0)
 		{
@@ -212,6 +217,7 @@ internal sealed class FileDragDrop(DesktopSession session)
 
 	internal void End()
 	{
+		foreach (var fence in session.Surfaces.SelectMany(surface => surface.Fences)) { fence.SetDropInside(false); }
 		if (_current == null && _reading == null) { return; }
 		_current = null;
 		_offered = null;

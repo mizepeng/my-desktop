@@ -27,7 +27,8 @@ public sealed partial class FenceView : UserControl, IDisposable
 	readonly AppSettings _settings;
 	readonly ShellItemLoader _images;
 	readonly FileRename _rename;
-	readonly nint _owner;
+	nint _owner;
+	readonly nint _desktopOwner;
 	readonly bool _readOnly;
 	readonly Visual _visual;
 	readonly CompositionRoundedRectangleGeometry _geometry;
@@ -50,6 +51,7 @@ public sealed partial class FenceView : UserControl, IDisposable
 		_images = images;
 		_rename = rename;
 		_owner = owner;
+		_desktopOwner = owner;
 		_readOnly = readOnly;
 		AddHandler(PointerPressedEvent, new PointerEventHandler((_, args) =>
 		{
@@ -61,9 +63,9 @@ public sealed partial class FenceView : UserControl, IDisposable
 				ReleasePointerCaptures();
 				BandFinished?.Invoke(ScreenPoint(args), true);
 			}
-			if (!_readOnly && !IsEditing && !_frame.Active.RolledUp && args.GetCurrentPoint(this).Properties.IsLeftButtonPressed
+			if (!_readOnly && !IsEditing && !IsCollapsed && args.GetCurrentPoint(this).Properties.IsLeftButtonPressed
 				&& !args.GetCurrentPoint(this).Properties.IsRightButtonPressed
-				&& args.GetCurrentPoint(this).Position.Y >= 36 && ItemAt(args.OriginalSource as DependencyObject) == null
+				&& ContentBounds.Contains(args.GetCurrentPoint(this).Position) && ItemAt(args.OriginalSource as DependencyObject) == null
 				&& !IsScrollBar(args.OriginalSource as DependencyObject) && CapturePointer(args.Pointer))
 			{
 				_bandPointer = args.Pointer.PointerId;
@@ -104,6 +106,7 @@ public sealed partial class FenceView : UserControl, IDisposable
 		_geometry = _visual.Compositor.CreateRoundedRectangleGeometry();
 		_geometry.CornerRadius = new Vector2((float)settings.CornerRadius);
 		_visual.Clip = _visual.Compositor.CreateGeometricClip(_geometry);
+		InitializeRoll();
 		Items.ItemsSource = _items;
 		Items.ContainerContentChanging += (_, args) =>
 		{
@@ -139,7 +142,13 @@ public sealed partial class FenceView : UserControl, IDisposable
 
 	internal FenceFrame Frame => _frame;
 	internal Visual PanelVisual => _visual;
-	internal double VisibleHeight => _frame.Active.RolledUp && !IsEditing ? 36 : Height;
+	internal double VisibleHeight => RevealedBounds.Height;
+	internal nint InputOwner => _owner;
+	internal void Rehost(nint owner)
+	{
+		_owner = owner;
+		UpdateRollLayout();
+	}
 	internal Task ContentReady => WaitForContentAsync();
 	internal IReadOnlyList<string> DisplayedPaths => _items.Select(item => item.Path).ToArray();
 	internal string ContentStatus => Status.Text;
@@ -201,8 +210,8 @@ public sealed partial class FenceView : UserControl, IDisposable
 		Canvas.SetTop(this, y);
 		Width = width;
 		Height = height;
-		_geometry.Size = new Vector2((float)Width, (float)VisibleHeight);
-		BoundsChanged?.Invoke();
+		UpdateRollLayout();
+		FinishRoll();
 	}
 
 	internal void ActivateTab(Guid id)
@@ -232,6 +241,7 @@ public sealed partial class FenceView : UserControl, IDisposable
 		}
 		RefreshTabs();
 		RefreshAppearance();
+		if (!_frame.Active.RolledUp && _temporaryExpanded) { ResetTemporaryExpansion(); }
 	}
 
 	void RefreshAppearance()
@@ -251,18 +261,22 @@ public sealed partial class FenceView : UserControl, IDisposable
 			BackgroundEffect.Blur => _backdrop.SystemBackdrop ?? new SystemAcrylicBackdrop(),
 			BackgroundEffect.Acrylic => _backdrop.SystemBackdrop ?? new SystemAcrylicBackdrop(),
 		};
-		_geometry.Size = new Vector2((float)Width, (float)VisibleHeight);
+		UpdateRollLayout();
 	}
 
 	void Fold_Click(object sender, RoutedEventArgs args) => SetRolledUp(!_frame.Active.RolledUp);
 
 	internal void SetRolledUp(bool rolledUp)
 	{
+		if (RollInteractionHeld?.Invoke() == true) { return; }
 		CancelEdit();
 		if (rolledUp) { ScopeHidden?.Invoke(_frame.Active.Id); }
+		_temporaryExpanded = false;
+		_collapseTimer.Stop();
 		_frame.SetRolledUp(rolledUp);
-		_geometry.Size = new Vector2((float)Width, (float)VisibleHeight);
-		BoundsChanged?.Invoke();
+		TemporaryHostRequested?.Invoke(false);
+		_rollTask = AnimateRollAsync();
+		FoldButton.Content = rolledUp ? "⌄" : "⌃";
 		SaveRequested?.Invoke();
 	}
 
@@ -285,7 +299,7 @@ public sealed partial class FenceView : UserControl, IDisposable
 	internal void TranslateTo(double x, double y)
 	{
 		_visual.TransformMatrix = Matrix4x4.CreateTranslation((float)x, (float)y, 0);
-		BoundsChanged?.Invoke();
+		UpdateRollLayout();
 	}
 
 	internal void CommitPosition() => SaveRequested?.Invoke();
@@ -455,8 +469,8 @@ public sealed partial class FenceView : UserControl, IDisposable
 		{
 			tab.IsEnabled = enabled;
 		}
-		_geometry.Size = new Vector2((float)Width, (float)VisibleHeight);
-		BoundsChanged?.Invoke();
+		FinishRoll();
+		if (enabled && _temporaryExpanded && !_pointerInside) { _collapseTimer.Start(); }
 	}
 
 	void Items_RightTapped(object sender, RightTappedRoutedEventArgs args)
@@ -505,7 +519,12 @@ public sealed partial class FenceView : UserControl, IDisposable
 
 	public void Dispose()
 	{
+		ResetTemporaryExpansion();
 		_disposed = true;
+		_rollVersion++;
+		_geometry.StopAnimation("Size");
+		_geometry.StopAnimation("Offset");
+		_collapseTimer.Stop();
 		StopTabHover();
 		CancelTabPointer();
 		CancelPlacementPointer();

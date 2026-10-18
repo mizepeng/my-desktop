@@ -194,7 +194,8 @@ internal sealed class DesktopSession : IDisposable
 
 	void ConnectFence(DesktopSurface surface, FenceView fence)
 	{
-		fence.TabSwitchAllowed = () => !IsInteracting;
+		fence.TabSwitchAllowed = () => !IsInteracting && !fence.IsDropInside;
+		fence.RollInteractionHeld = () => IsInteracting || Commands.IsBusy;
 		fence.TabMoveRequested += (id, index) => Tabs.Move(surface, fence, id, index);
 		fence.TabDetachRequested += id => Tabs.Detach(surface, fence, id, null);
 		fence.TabDragStarted += (id, point) => Tabs.BeginDrag(surface, fence, id, point);
@@ -419,6 +420,11 @@ internal sealed class DesktopSession : IDisposable
 		foreach (var surface in _surfaces) { surface.Placement.Cancel(); }
 		_gestures?.Cancel();
 		_dragDrop?.End();
+	}
+
+	internal void ResetTemporaryExpansions()
+	{
+		foreach (var fence in _surfaces.SelectMany(surface => surface.Fences)) { fence.ResetTemporaryExpansion(); }
 	}
 
 	void SaveSoon()

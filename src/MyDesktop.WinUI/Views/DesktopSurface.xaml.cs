@@ -36,6 +36,7 @@ public sealed partial class DesktopSurface : Window
 	FrameworkElement? _editingOwner;
 	bool _clipboardListener;
 	bool _captureInput;
+	ExpandedSurface? _expanded;
 
 	internal DesktopSurface(RECT workArea, double scale, IEnumerable<FenceFrame> frames, AppSettings settings, ShellItemLoader images, FileRename rename, bool readOnly)
 	{
@@ -122,6 +123,7 @@ public sealed partial class DesktopSurface : Window
 			{
 				fence.Dispose();
 			}
+			_expanded?.Dispose();
 			_placement.Dispose();
 			WindowApi.RemoveWindowSubclass(Handle, _procedure, 1);
 		};
@@ -145,11 +147,16 @@ public sealed partial class DesktopSurface : Window
 	internal string Notice => _noticeText.Text;
 	internal Canvas RootElement => Surface;
 	internal bool IsInputCaptured => _captureInput;
-	internal bool IsBandVisible => _band.Visibility == Visibility.Visible;
+	internal bool IsBandVisible => _band.Visibility == Visibility.Visible || IsBandInExpandedHost;
+	internal bool IsBandInExpandedHost => _expanded?.IsBandVisible == true;
+	internal int CornerRadiusPixels => (int)Math.Round(_cornerRadius * _scale);
+	internal nint ExpandedHandle => _expanded?.Handle ?? 0;
 
 	internal FenceView AddFence(FenceFrame frame)
 	{
 		var model = frame.Active;
+		frame.SetRollEdge(model.RollDirection ?? (model.RolledUp ? model.RollEdge
+			: FenceRoll.AutoEdge(new(model.X, model.Y, model.Width, model.Height), _workArea, (int)Math.Round(24 * _scale))), model.RollDirection);
 		if (model.Width <= 0 || model.Height <= 0)
 		{
 			throw new InvalidDataException($"分区「{model.Title}」的尺寸无效：{model.Width}×{model.Height}。");
@@ -157,14 +164,16 @@ public sealed partial class DesktopSurface : Window
 		var fence = new FenceView(frame, _settings, _images, _rename, Handle, _readOnly);
 		fence.ArrangeAt((model.X - _workArea.Left) / _scale, (model.Y - _workArea.Top) / _scale, model.Width / _scale, model.Height / _scale);
 		fence.BoundsChanged += UpdateRegion;
+		fence.TemporaryHostRequested += expanded => HostTemporaryExpansion(fence, expanded);
 		fence.PlacementStarted += (point, edges) => Placement.Begin(fence, point, edges);
 		fence.PlacementMoved += Placement.Update;
 		fence.PlacementFinished += async canceled => await Placement.EndAsync(canceled);
 		fence.SaveRequested += () =>
 		{
-			var bounds = BoundsOf(fence);
+			var bounds = ExpandedBoundsOf(fence);
 			fence.Frame.SetBounds(bounds.Left + _workArea.Left, bounds.Top + _workArea.Top,
 				(int)Math.Round(fence.Width * _scale), (int)Math.Round(fence.Height * _scale), (int)Math.Round(_scale * 96));
+			SaveRollEdge(fence);
 			SaveRequested?.Invoke();
 		};
 		fence.ExitRequested += () => ExitRequested?.Invoke();
@@ -190,6 +199,44 @@ public sealed partial class DesktopSurface : Window
 		UpdateRegion();
 	}
 
+	void HostTemporaryExpansion(FenceView fence, bool expanded)
+	{
+		if (IsClosed || !_fences.Contains(fence)) { return; }
+		if (expanded)
+		{
+			_expanded ??= new ExpandedSurface(this);
+			if (_expanded.Contains(fence)) { return; }
+			Surface.Children.Remove(fence);
+			_expanded.Add(fence);
+		}
+		else if (_expanded?.Contains(fence) == true)
+		{
+			_expanded.Remove(fence);
+			fence.Rehost(Handle);
+			Surface.Children.Add(fence);
+		}
+		UpdateRegion();
+	}
+
+	void SaveRollEdge(FenceView fence)
+	{
+		var frame = fence.Frame;
+		var model = frame.Active;
+		var expanded = new System.Drawing.Rectangle(model.X, model.Y, model.Width, model.Height);
+		var edge = model.RollDirection ?? (fence.IsCollapsed
+			? FenceRoll.MovedEdge(FenceRoll.Collapsed(expanded, model.RollEdge, (int)Math.Round(36 * _scale)), model.RollEdge, _workArea, (int)Math.Round(24 * _scale))
+			: FenceRoll.AutoEdge(expanded, _workArea, (int)Math.Round(24 * _scale)));
+		if (edge == model.RollEdge) { return; }
+		if (fence.IsCollapsed)
+		{
+			var strip = FenceRoll.Collapsed(expanded, model.RollEdge, (int)Math.Round(36 * _scale));
+			expanded = FenceRoll.FromStrip(strip, expanded.Size, edge);
+			frame.SetBounds(expanded.X, expanded.Y, expanded.Width, expanded.Height, model.LayoutDpi);
+		}
+		frame.SetRollEdge(edge, model.RollDirection);
+		fence.ArrangeAt((expanded.Left - _workArea.Left) / _scale, (expanded.Top - _workArea.Top) / _scale, expanded.Width / _scale, expanded.Height / _scale);
+	}
+
 	internal void RaiseFence(FenceView fence)
 	{
 		int order = 1;
@@ -206,8 +253,11 @@ public sealed partial class DesktopSurface : Window
 		UpdateRegion();
 	}
 
-	internal void DrawBand(System.Drawing.Rectangle? bounds)
+	internal void DrawBand(System.Drawing.Rectangle? bounds, FenceView? context = null)
 	{
+		bool expanded = context != null && _expanded?.Contains(context) == true;
+		_expanded?.DrawBand(expanded ? bounds : null);
+		if (expanded) { bounds = null; }
 		var visible = bounds == null ? System.Drawing.Rectangle.Empty : System.Drawing.Rectangle.Intersect(bounds.Value, _workArea);
 		_band.Visibility = visible.Width > 0 && visible.Height > 0 ? Visibility.Visible : Visibility.Collapsed;
 		Canvas.SetLeft(_band, (visible.Left - _workArea.Left) / _scale);
@@ -218,17 +268,20 @@ public sealed partial class DesktopSurface : Window
 
 	internal System.Drawing.Rectangle ContentBoundsOf(FenceView fence)
 	{
-		var bounds = BoundsOf(fence);
-		int top = bounds.Top + (int)Math.Round(36 * _scale);
-		return System.Drawing.Rectangle.FromLTRB(bounds.Left + _workArea.Left, top + _workArea.Top, bounds.Right + _workArea.Left,
-			Math.Max(top, bounds.Bottom) + _workArea.Top);
+		var bounds = ExpandedBoundsOf(fence);
+		var content = fence.ContentBounds;
+		var rectangle = System.Drawing.Rectangle.FromLTRB(bounds.Left + _workArea.Left + (int)Math.Round(content.Left * _scale),
+			bounds.Top + _workArea.Top + (int)Math.Round(content.Top * _scale), bounds.Left + _workArea.Left + (int)Math.Round(content.Right * _scale),
+			bounds.Top + _workArea.Top + (int)Math.Round(content.Bottom * _scale));
+		var visible = BoundsOf(fence);
+		return System.Drawing.Rectangle.Intersect(rectangle, new(visible.Left + _workArea.Left, visible.Top + _workArea.Top, visible.Width, visible.Height));
 	}
 
 	internal SelectionTarget[] SelectionTargets(FenceView? fence)
 	{
 		if (fence == null) { return _desktopIcons.Cells.Select(pair => new SelectionTarget(Guid.Empty, pair.Key, pair.Value)).ToArray(); }
 		var content = ContentBoundsOf(fence);
-		var bounds = BoundsOf(fence);
+		var bounds = ExpandedBoundsOf(fence);
 		return fence.ItemRectangles().Select(item =>
 		{
 			var rectangle = new System.Drawing.Rectangle(_workArea.Left + bounds.Left + (int)Math.Round(item.Bounds.X * _scale),
@@ -250,6 +303,7 @@ public sealed partial class DesktopSurface : Window
 		{
 			SetNotice("未能将键盘焦点交给桌面，请再次点击图标。");
 		}
+		_expanded?.Refresh();
 	}
 
 	internal void SetNotice(string? message)
@@ -259,9 +313,9 @@ public sealed partial class DesktopSurface : Window
 		UpdateRegion();
 	}
 
-	void CancelDeactivatedEdit()
+	internal void CancelDeactivatedEdit()
 	{
-		if (_editingEditor is { IsComposing: false } && DesktopInput.IsInputDesktop() && !DesktopInput.OwnsForeground(Handle))
+		if (_editingEditor is { IsComposing: false } && DesktopInput.IsInputDesktop() && !DesktopInput.OwnsForeground(EditingHandle))
 		{
 			_editingEditor.Cancel();
 		}
@@ -278,24 +332,27 @@ public sealed partial class DesktopSurface : Window
 			{
 				previous?.Cancel();
 			}
-			return DesktopInput.Begin(Handle);
+			return DesktopInput.Begin(EditingHandle);
 		};
 		editor.Closed += () =>
 		{
 			if (_editingEditor == editor)
 			{
+				var handle = EditingHandle;
 				_editingEditor = null;
 				_editingOwner = null;
 				if (!IsClosed)
 				{
-					DesktopInput.End(Handle, _placement.DesktopHandle);
+					DesktopInput.End(handle, _placement.DesktopHandle);
 				}
 			}
 		};
 		editor.CompositionFinished += () => DispatcherQueue.TryEnqueue(CancelDeactivatedEdit);
 	}
 
-	void Surface_PointerPressed(object sender, PointerRoutedEventArgs args)
+	nint EditingHandle => _editingOwner is FenceView fence ? fence.InputOwner : Handle;
+
+	internal void Surface_PointerPressed(object sender, PointerRoutedEventArgs args)
 	{
 		if (_editingEditor == null)
 		{
@@ -315,20 +372,35 @@ public sealed partial class DesktopSurface : Window
 
 	internal RECT BoundsOf(FenceView fence)
 	{
+		var expanded = ExpandedBoundsOf(fence);
+		var visible = fence.RevealedBounds;
+		return new RECT(expanded.Left + (int)Math.Round(visible.Left * _scale), expanded.Top + (int)Math.Round(visible.Top * _scale),
+			expanded.Left + (int)Math.Round(visible.Right * _scale), expanded.Top + (int)Math.Round(visible.Bottom * _scale));
+	}
+
+	internal RECT ExpandedBoundsOf(FenceView fence)
+	{
 		var translation = fence.PanelVisual.TransformMatrix.Translation;
 		double left = Canvas.GetLeft(fence) + translation.X, top = Canvas.GetTop(fence) + translation.Y;
 		return new RECT((int)Math.Round(left * _scale), (int)Math.Round(top * _scale),
-			(int)Math.Round((left + fence.Width) * _scale), (int)Math.Round((top + fence.VisibleHeight) * _scale));
+			(int)Math.Round((left + fence.Width) * _scale), (int)Math.Round((top + fence.Height) * _scale));
+	}
+
+	internal RECT LayoutBoundsOf(FenceView fence)
+	{
+		var expanded = ExpandedBoundsOf(fence);
+		return fence.Frame.Active.RolledUp ? FenceRoll.Collapsed(expanded, fence.Frame.Active.RollEdge, (int)Math.Round(36 * _scale)) : expanded;
 	}
 
 	void UpdateRegion()
 	{
+		_expanded?.UpdateRegion();
 		if (_captureInput)
 		{
 			WindowApi.SetRegion(Handle, [new RECT(0, 0, _workArea.Width, _workArea.Height)], 0);
 			return;
 		}
-		var rectangles = _fences.Select(BoundsOf).ToList();
+		var rectangles = _fences.Where(fence => _expanded?.Contains(fence) != true).Select(BoundsOf).ToList();
 		if (_desktopIcons != null)
 		{
 			foreach (var bounds in _desktopIcons.HitRectangles)
@@ -353,6 +425,7 @@ public sealed partial class DesktopSurface : Window
 		if (message == DesktopPlacement.RefreshMessage)
 		{
 			_placement.Refresh();
+			_expanded?.Refresh();
 			return 0;
 		}
 		if (message == WM_WINDOWPOSCHANGING)

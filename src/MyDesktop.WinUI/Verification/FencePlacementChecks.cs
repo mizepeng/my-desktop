@@ -28,6 +28,7 @@ internal static class FencePlacementChecks
 			settings.SnapGap = 0;
 			frame.SetRolledUp(false);
 			neighbor.SetRolledUp(false);
+			await Task.WhenAll(frame.RollReady, neighbor.RollReady);
 			frame.ArrangeAt(40, 80, 240, 240);
 			neighbor.ArrangeAt(500, 80, 200, 240);
 			frame.CommitPosition();
@@ -91,6 +92,7 @@ internal static class FencePlacementChecks
 			Require(session.Takeover.IsActive, "布局取消后可以重新接管测试桌面");
 
 			frame.SetRolledUp(true);
+			await frame.RollReady;
 			int height = frame.Frame.Active.Height;
 			Require(frame.ResizeEdgesAt(new(frame.Width / 2, frame.VisibleHeight - 1)) == FenceEdges.None, "收起后只允许沿标题条的长边调整大小");
 			surface.Placement.Begin(frame, point, FenceEdges.Right);
@@ -119,7 +121,7 @@ internal static class FencePlacementChecks
 
 	static Rectangle Bounds(DesktopSurface surface, FenceView frame)
 	{
-		var bounds = surface.BoundsOf(frame);
+		var bounds = surface.ExpandedBoundsOf(frame);
 		return new Rectangle(bounds.Left + surface.WorkArea.Left, bounds.Top + surface.WorkArea.Top,
 			(int)Math.Round(frame.Width * surface.Scale), (int)Math.Round(frame.Height * surface.Scale));
 	}

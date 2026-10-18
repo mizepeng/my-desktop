@@ -10,15 +10,17 @@ internal sealed class DesktopPlacement : IDisposable
 {
 	public const uint RefreshMessage = 0x8051;
 	readonly nint _hwnd;
+	readonly bool _temporaryExpansion;
 	readonly nint _root = GetDesktopWindow();
 	readonly WinEventProc _callback;
 	readonly nint _foregroundHook, _windowHook;
 	nint _desktop;
 	bool _started, _queued, _disposed, _activating;
 
-	public DesktopPlacement(nint hwnd)
+	public DesktopPlacement(nint hwnd, bool temporaryExpansion = false)
 	{
 		_hwnd = hwnd;
+		_temporaryExpansion = temporaryExpansion;
 		_callback = OnWindowEvent;
 		_foregroundHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, 0, _callback, 0, 0,
 			WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
@@ -40,6 +42,12 @@ internal sealed class DesktopPlacement : IDisposable
 	{
 		_started = true;
 		Refresh();
+	}
+
+	public void Hide()
+	{
+		_started = false;
+		WindowApi.ShowWindow(_hwnd, SW_HIDE);
 	}
 
 	public nint DesktopHandle => FindDesktop();
@@ -139,7 +147,7 @@ internal sealed class DesktopPlacement : IDisposable
 		bool anchorTopmost = anchor != 0 && (GetWindowLongPtr(anchor, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0;
 		bool currentlyTopmost = (GetWindowLongPtr(_hwnd, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0;
 		// 桌面最前且没有参照时保留临时置顶；普通应用回到桌面上方后，随其参照撤销置顶。
-		return !adjacent || (currentlyTopmost && anchor != 0 && !anchorTopmost);
+		return !adjacent || (_temporaryExpansion ? !currentlyTopmost : currentlyTopmost && anchor != 0 && !anchorTopmost);
 	}
 
 	nint FindDesktop()
@@ -172,6 +180,7 @@ internal sealed class DesktopPlacement : IDisposable
 
 	(nint Anchor, bool Adjacent) AnchorAbove(nint desktop)
 	{
+		if (_temporaryExpansion) { return BelowTopmostWindows(); }
 		bool adjacent = false;
 		for (var above = GetWindow(desktop, GW_HWNDPREV); above != 0; above = GetWindow(above, GW_HWNDPREV))
 		{
@@ -196,6 +205,26 @@ internal sealed class DesktopPlacement : IDisposable
 			return (above, adjacent);
 		}
 		return (0, adjacent);
+	}
+
+	(nint Anchor, bool Adjacent) BelowTopmostWindows()
+	{
+		nint anchor = 0;
+		bool adjacent = false;
+		var owner = GetWindow(_hwnd, GW_OWNER);
+		EnumWindows((window, _) =>
+		{
+			if (window == _hwnd) { adjacent = true; return true; }
+			// 显示桌面把主宿主临时置顶时，浮层必须留在它上方，不能再选它后面的输入指示器作参照。
+			if (window == owner) { return (GetWindowLongPtr(owner, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) == 0; }
+			if (OwnedByHost(window) || !IsWindowVisible(window) || IsIconic(window)) { return true; }
+			if ((GetWindowLongPtr(window, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) == 0) { return true; }
+			if (DwmGetWindowAttribute(window, DWMWA_CLOAKED, out int cloaked, sizeof(int)) == 0 && cloaked != 0) { return true; }
+			anchor = window;
+			adjacent = false;
+			return true;
+		}, 0);
+		return (anchor, adjacent);
 	}
 
 	bool OwnedByHost(nint window)

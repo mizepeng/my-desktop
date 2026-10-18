@@ -122,6 +122,17 @@ public sealed partial class FenceView
 	{
 		bool editable = !_readOnly && TabSwitchAllowed?.Invoke() != false;
 		var menu = new MenuFlyout();
+		HoldExpansion(menu);
+		var fold = new MenuFlyoutItem { Text = _frame.Active.RolledUp ? "展开分区" : "收起分区", IsEnabled = editable };
+		fold.Click += (_, _) => SetRolledUp(!_frame.Active.RolledUp);
+		menu.Items.Add(fold);
+		var directions = new MenuFlyoutSubItem { Text = "收起方向", IsEnabled = editable };
+		AddDirection(null, "自动（按贴着的屏幕边）");
+		AddDirection(MyDesktop.Models.RollEdge.Top, "向上");
+		AddDirection(MyDesktop.Models.RollEdge.Bottom, "向下");
+		AddDirection(MyDesktop.Models.RollEdge.Left, "向左");
+		AddDirection(MyDesktop.Models.RollEdge.Right, "向右");
+		menu.Items.Add(directions);
 		var rename = new MenuFlyoutItem { Text = "重命名分区", IsEnabled = editable };
 		rename.Click += (_, _) => BeginTitleEdit();
 		menu.Items.Add(rename);
@@ -148,6 +159,13 @@ public sealed partial class FenceView
 		exit.Click += (_, _) => ExitRequested?.Invoke();
 		menu.Items.Add(exit);
 		return menu;
+
+		void AddDirection(MyDesktop.Models.RollEdge? direction, string text)
+		{
+			var item = new ToggleMenuFlyoutItem { Text = text, IsChecked = _frame.Active.RollDirection == direction };
+			item.Click += (_, _) => SetRollDirection(direction);
+			directions.Items.Add(item);
+		}
 	}
 
 	void BeginTabPointer(PointerRoutedEventArgs args, Guid id)
@@ -174,11 +192,13 @@ public sealed partial class FenceView
 		UpdateLayout();
 		var window = NativeMethods.GetWindowRect(_owner);
 		double scale = NativeMethods.GetDpiForWindow(_owner) / 96.0;
-		double x = (point.X - window.Left) / scale - Canvas.GetLeft(this) - _visual.TransformMatrix.Translation.X;
+		double along = IsVerticalRoll ? (point.Y - window.Top) / scale - Canvas.GetTop(this) - _visual.TransformMatrix.Translation.Y
+			: (point.X - window.Left) / scale - Canvas.GetLeft(this) - _visual.TransformMatrix.Translation.X;
 		for (int index = 0; index < Tabs.Children.Count; index++)
 		{
 			if (Tabs.Children[index] is not FrameworkElement { ActualWidth: > 0 } tab) { return -1; }
-			if (x < tab.TransformToVisual(this).TransformPoint(new Point(tab.ActualWidth, 0)).X) { return index; }
+			var bounds = tab.TransformToVisual(this).TransformBounds(new Rect(0, 0, tab.ActualWidth, tab.ActualHeight));
+			if (along < (IsVerticalRoll ? bounds.Bottom : bounds.Right)) { return index; }
 		}
 		return Tabs.Children.Count - 1;
 	}

@@ -34,13 +34,14 @@ internal sealed class FencePlacement(DesktopSurface surface, AppSettings setting
 			previous.CommitPosition();
 		}
 		_active = fence;
+		fence.FinishRoll();
 		SetMergeTarget(null);
 		_moved = false;
 		surface.RaiseFence(fence);
 		_start = Bounds(fence);
 		_origin = point;
 		_edges = edges;
-		_grid = fence.Frame.Active.RolledUp ? (Array.Empty<int>(), Array.Empty<int>()) : fence.GridSizes(surface.Scale, surface.WorkArea);
+		_grid = fence.IsCollapsed ? (Array.Empty<int>(), Array.Empty<int>()) : fence.GridSizes(surface.Scale, surface.WorkArea);
 		Changed?.Invoke();
 		return true;
 	}
@@ -54,14 +55,14 @@ internal sealed class FencePlacement(DesktopSurface surface, AppSettings setting
 		Rectangle bounds;
 		if (_edges == FenceEdges.None)
 		{
-			var visible = new Rectangle(_start.Location, new Size(_start.Width, (int)Math.Round(fence.VisibleHeight * surface.Scale)));
+			var visible = VisibleAt(fence, _start);
 			var moved = FenceGeometry.Move(visible, delta, surface.WorkArea, Others(fence), settings, surface.Scale);
-			bounds = new Rectangle(moved.Location, _start.Size);
+			bounds = new Rectangle(_start.X + moved.X - visible.X, _start.Y + moved.Y - visible.Y, _start.Width, _start.Height);
 		}
 		else
 		{
 			var minimum = new Size((int)Math.Ceiling(120 * surface.Scale), (int)Math.Ceiling(36 * surface.Scale));
-			bounds = FenceGeometry.Resize(_start, delta, _edges, surface.WorkArea, fence.Frame.Active.RolledUp ? [] : Others(fence),
+			bounds = FenceGeometry.Resize(_start, delta, _edges, surface.WorkArea, fence.IsCollapsed ? [] : Others(fence),
 				settings, surface.Scale, minimum, _grid.Widths, _grid.Heights);
 		}
 		Apply(fence, bounds);
@@ -86,9 +87,9 @@ internal sealed class FencePlacement(DesktopSurface surface, AppSettings setting
 		var target = bounds;
 		if (bounds != _start)
 		{
-			var visible = new Rectangle(bounds.Location, new Size(bounds.Width, (int)Math.Round(fence.VisibleHeight * surface.Scale)));
+			var visible = VisibleAt(fence, bounds);
 			var spot = FenceGeometry.FindFreeSpot(visible, surface.WorkArea, Others(fence), (int)Math.Round(settings.SnapGap * surface.Scale));
-			target = spot is { } free ? new Rectangle(free.Location, bounds.Size) : _start;
+			target = spot is { } free ? new Rectangle(bounds.X + free.X - visible.X, bounds.Y + free.Y - visible.Y, bounds.Width, bounds.Height) : _start;
 		}
 		if (target != bounds)
 		{
@@ -129,14 +130,22 @@ internal sealed class FencePlacement(DesktopSurface surface, AppSettings setting
 
 	Rectangle Bounds(FenceView fence)
 	{
-		var visible = surface.BoundsOf(fence);
+		var visible = surface.ExpandedBoundsOf(fence);
 		return new Rectangle(visible.Left + surface.WorkArea.Left, visible.Top + surface.WorkArea.Top,
 			(int)Math.Round(fence.Width * surface.Scale), (int)Math.Round(fence.Height * surface.Scale));
 	}
 
+	Rectangle VisibleAt(FenceView fence, Rectangle expanded)
+	{
+		if (fence.Frame.Active.RolledUp) { return FenceRoll.Collapsed(expanded, fence.Frame.Active.RollEdge, (int)Math.Round(36 * surface.Scale)); }
+		var visible = fence.RevealedBounds;
+		return new Rectangle(expanded.X + (int)Math.Round(visible.X * surface.Scale), expanded.Y + (int)Math.Round(visible.Y * surface.Scale),
+			(int)Math.Round(visible.Width * surface.Scale), (int)Math.Round(visible.Height * surface.Scale));
+	}
+
 	Rectangle[] Others(FenceView fence) => surface.Fences.Where(other => other != fence).Select(other =>
 	{
-		var rect = surface.BoundsOf(other);
+		var rect = surface.LayoutBoundsOf(other);
 		return new Rectangle(rect.Left + surface.WorkArea.Left, rect.Top + surface.WorkArea.Top, rect.Width, rect.Height);
 	}).ToArray();
 

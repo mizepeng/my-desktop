@@ -183,7 +183,7 @@ internal sealed class DesktopTakeover : IDisposable
 			var monitors = _session.Surfaces.Select(surface => new DesktopMonitor(surface.WorkArea, surface.Scale)).ToArray();
 			var blocked = _session.Surfaces.SelectMany(surface => surface.Fences.Select(fence =>
 			{
-				var bounds = surface.BoundsOf(fence);
+				var bounds = surface.LayoutBoundsOf(fence);
 				return new System.Drawing.Rectangle(bounds.Left + surface.WorkArea.Left, bounds.Top + surface.WorkArea.Top, bounds.Width, bounds.Height);
 			})).ToArray();
 			var placements = DesktopLayout.Build(snapshot, _session.Settings.Fences, blocked, monitors);
@@ -324,6 +324,7 @@ internal sealed class DesktopTakeover : IDisposable
 		_generation++;
 		IsActive = false;
 		_session.CancelInteractions();
+		_session.ResetTemporaryExpansions();
 		_signature = null;
 		_dirty = true;
 		_recovery?.Dispose();

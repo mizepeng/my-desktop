@@ -8,6 +8,7 @@ namespace MyDesktop.WinUI.Services;
 internal sealed class DesktopGestures(DesktopSession session)
 {
 	SelectionBand? _band;
+	FenceView? _fence;
 	Point _origin;
 	Rectangle? _clip;
 	bool _moved;
@@ -19,6 +20,7 @@ internal sealed class DesktopGestures(DesktopSession session)
 		Cancel();
 		surface.ActivateForSelection();
 		session.SetContext(surface, fence);
+		_fence = fence;
 		_origin = origin;
 		_moved = false;
 		_clip = fence == null ? null : surface.ContentBoundsOf(fence);
@@ -38,7 +40,7 @@ internal sealed class DesktopGestures(DesktopSession session)
 		foreach (var surface in session.Surfaces)
 		{
 			surface.SetInputCapture(_clip == null);
-			surface.DrawBand(bounds);
+			surface.DrawBand(bounds, _fence);
 		}
 	}
 
@@ -59,6 +61,7 @@ internal sealed class DesktopGestures(DesktopSession session)
 	void Finish()
 	{
 		_band = null;
+		_fence = null;
 		session.UpdateInteraction();
 		foreach (var surface in session.Surfaces.Where(item => !item.IsClosed))
 		{

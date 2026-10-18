@@ -46,7 +46,11 @@ internal static class RenameChecks
 		frame.SetRolledUp(true);
 		frame.BeginTitleEdit();
 		await Task.Delay(50);
-		Require(frame.Frame.Active.RolledUp && frame.VisibleHeight == frame.Height, "编辑收起的分区只临时展开视图");
+		Require(frame.Frame.Active.RolledUp && Math.Abs(frame.VisibleHeight - frame.Height) < 0.001,
+			$"编辑收起的分区只临时展开视图（收起={frame.Frame.Active.RolledUp}，可见={frame.VisibleHeight}，展开={frame.Height}）");
+		frame.SetPointerInside(true);
+		Require(!frame.IsTemporarilyExpanded && frame.InputOwner == hwnd, "普通编辑期间悬停不会迁移输入宿主");
+		frame.SetPointerInside(false);
 		frame.CancelEdit();
 		Require(frame.Frame.Active.RolledUp && frame.VisibleHeight == 36, "取消后恢复收起状态");
 		frame.SetRolledUp(false);

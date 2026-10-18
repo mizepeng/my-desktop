@@ -30,10 +30,12 @@ internal sealed class FileCommands
 	internal FileOperationResult? LastResult { get; private set; }
 	internal IReadOnlySet<string> CutPaths => _cut;
 	internal IFileClipboard Clipboard => _clipboard;
+	internal bool IsBusy => _busy;
 
 	public MenuFlyout CreateMenu()
 	{
 		var menu = new MenuFlyout();
+		_session.ActiveFence?.HoldExpansion(menu);
 		var selected = _session.SelectedFiles();
 		bool files = selected.Count > 0 && selected.All(item => item.IsFileSystem);
 		Add("复制", DesktopInputCommand.Copy, files);
@@ -69,7 +71,7 @@ internal sealed class FileCommands
 		try
 		{
 			if (_session.IsPreview) { throw new InvalidOperationException("预览模式不能执行文件操作。"); }
-			nint owner = _session.ActiveSurface.Handle;
+			nint owner = _session.ActiveFence?.InputOwner ?? _session.ActiveSurface.Handle;
 			if (command is DesktopInputCommand.Copy or DesktopInputCommand.Cut)
 			{
 				bool cut = command == DesktopInputCommand.Cut;

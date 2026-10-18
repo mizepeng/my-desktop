@@ -25,14 +25,18 @@ public sealed partial class FenceView
 
 	internal FenceEdges ResizeEdgesAt(Point point)
 	{
-		if (_readOnly || IsEditing || _frame.Active.Locked || point.X < 0 || point.X >= Width || point.Y < 0 || point.Y >= VisibleHeight) { return FenceEdges.None; }
+		var visible = RevealedBounds;
+		if (_readOnly || IsEditing || _frame.Active.Locked || !visible.Contains(point)) { return FenceEdges.None; }
 		var edges = FenceEdges.None;
-		if (point.X < 5) { edges |= FenceEdges.Left; }
-		if (point.X >= Width - 5) { edges |= FenceEdges.Right; }
-		if (!_frame.Active.RolledUp)
+		if (!IsCollapsed || !IsVerticalRoll)
 		{
-			if (point.Y < 5 && Canvas.GetTop(this) + _visual.TransformMatrix.Translation.Y > 0) { edges |= FenceEdges.Top; }
-			if (point.Y >= VisibleHeight - 5) { edges |= FenceEdges.Bottom; }
+			if (point.X < visible.Left + 5) { edges |= FenceEdges.Left; }
+			if (point.X >= visible.Right - 5) { edges |= FenceEdges.Right; }
+		}
+		if (!IsCollapsed || IsVerticalRoll)
+		{
+			if (point.Y < visible.Top + 5 && Canvas.GetTop(this) + _visual.TransformMatrix.Translation.Y > 0) { edges |= FenceEdges.Top; }
+			if (point.Y >= visible.Bottom - 5) { edges |= FenceEdges.Bottom; }
 		}
 		return edges;
 	}

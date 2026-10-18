@@ -5,11 +5,7 @@
 	xmlns:views="using:MyDesktop.WinUI.Views">
 	<Grid x:Name="PanelRoot" RequestedTheme="Dark">
 		<Border x:Name="Tint" />
-		<Grid>
-			<Grid.RowDefinitions>
-				<RowDefinition Height="36" />
-				<RowDefinition Height="*" />
-			</Grid.RowDefinitions>
+		<Canvas>
 			<Grid x:Name="Header" Background="Transparent" Padding="8,0,4,0">
 				<Grid.ColumnDefinitions>
 					<ColumnDefinition Width="*" />
@@ -18,7 +14,7 @@
 				<StackPanel x:Name="Tabs" Orientation="Horizontal" Spacing="4" />
 				<Button x:Name="FoldButton" Grid.Column="1" Content="⌃" Click="Fold_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="收起或展开" />
 			</Grid>
-			<Grid Grid.Row="1">
+			<Grid x:Name="ContentHost">
 				<GridView x:Name="Items" SelectionMode="Extended" IsTabStop="False" Padding="6" DoubleTapped="Items_DoubleTapped" RightTapped="Items_RightTapped">
 					<GridView.ItemTemplate>
 						<DataTemplate>
@@ -31,7 +27,7 @@
 				</GridView>
 				<TextBlock x:Name="Status" Margin="12" TextWrapping="Wrap" IsHitTestVisible="False" Foreground="White" />
 			</Grid>
-		</Grid>
+		</Canvas>
 		<views:NameEditor x:Name="Editor" />
 	</Grid>
 </UserControl>

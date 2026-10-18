@@ -20,6 +20,10 @@ var checks = new (string Name, Action Run)[]
 	("标签排序不切换活动标签且索引不越界", MoveGroupTabs),
 	("拆出活动标签选择相邻标签并解散单成员组", DetachGroupTabs),
 	("锁定与非法合并拒绝修改标签配置", InvalidGroupChanges),
+	("四向收起保持标题锚点与展开范围", RollAnchors),
+	("自动收起方向优先上下屏幕边缘", AutomaticRollEdge),
+	("收起条换边后反推展开范围不跳动", MovedRollStrip),
+	("收起方向与状态在标签组内同步", GroupRollState),
 	("拼音资源随核心程序集迁移", PinyinResource),
 	("整理规则优先级及兜底语义不变", OrganizeRules),
 	("改名保留隐藏扩展名且拒绝非法文件名", RenameNames),
@@ -72,6 +76,57 @@ static void Require(bool condition, string message)
 	{
 		throw new InvalidOperationException(message);
 	}
+}
+
+static void RollAnchors()
+{
+	var expanded = new System.Drawing.Rectangle(-1200, -200, 480, 360);
+	foreach (var edge in Enum.GetValues<RollEdge>())
+	{
+		var strip = FenceRoll.Collapsed(expanded, edge, 54);
+		Require(FenceRoll.FromStrip(strip, expanded.Size, edge) == expanded, "由收起条恢复展开范围时标题位置发生变化。");
+		var reveal = FenceRoll.Reveal(new(480, 360), edge, 54, 0.5);
+		var content = FenceRoll.Content(new(480, 360), edge, 54);
+		Require(reveal.Contains(new System.Drawing.RectangleF(strip.X - expanded.X, strip.Y - expanded.Y, strip.Width, strip.Height)), "动画途中标题被裁掉。");
+		Require(!content.IntersectsWith(new System.Drawing.RectangleF(strip.X - expanded.X, strip.Y - expanded.Y, strip.Width, strip.Height)), "图标内容与标题条重叠。");
+		Require(FenceRoll.Reveal(new(480, 360), edge, 54, 1).Size == new System.Drawing.SizeF(480, 360), "展开后没有恢复完整尺寸。");
+	}
+	Throws<ArgumentOutOfRangeException>(() => FenceRoll.Reveal(new(480, 360), RollEdge.Top, 54, 1.1));
+}
+
+static void AutomaticRollEdge()
+{
+	var work = new System.Drawing.Rectangle(-1600, -200, 1600, 1000);
+	Require(FenceRoll.AutoEdge(new(-1600, -190, 400, 300), work, 24) == RollEdge.Top, "同时靠近上边和左边时应优先上边。");
+	Require(FenceRoll.AutoEdge(new(-1600, 500, 400, 300), work, 24) == RollEdge.Bottom, "同时靠近下边和左边时应优先下边。");
+	Require(FenceRoll.AutoEdge(new(-1600, 200, 400, 300), work, 24) == RollEdge.Left, "只贴左边时没有向左收起。");
+	Require(FenceRoll.AutoEdge(new(-400, 200, 400, 300), work, 24) == RollEdge.Right, "只贴右边时没有向右收起。");
+	Require(FenceRoll.AutoEdge(new(-1500, 200, 400, 300), work, 24) == RollEdge.Top, "不贴边时应默认向上收起。");
+}
+
+static void MovedRollStrip()
+{
+	var work = new System.Drawing.Rectangle(0, 0, 1600, 1000);
+	var strip = new System.Drawing.Rectangle(100, 946, 400, 54);
+	var edge = FenceRoll.MovedEdge(strip, RollEdge.Top, work, 36);
+	var expanded = FenceRoll.FromStrip(strip, new(400, 300), edge);
+	Require(edge == RollEdge.Bottom && expanded.Y == 700 && FenceRoll.Collapsed(expanded, edge, 54) == strip, "拖到屏幕下边后标题条跳离松手位置。");
+	strip = new(1546, 200, 54, 400);
+	edge = FenceRoll.MovedEdge(strip, RollEdge.Left, work, 36);
+	expanded = FenceRoll.FromStrip(strip, new(300, 400), edge);
+	Require(edge == RollEdge.Right && expanded.X == 1300 && FenceRoll.Collapsed(expanded, edge, 54) == strip, "拖到屏幕右边后标题条跳离松手位置。");
+}
+
+static void GroupRollState()
+{
+	var settings = Fixture();
+	var frame = new FenceWorkspace(settings).Frames[0];
+	frame.SetRollEdge(RollEdge.Right, RollEdge.Right);
+	frame.SetRolledUp(true);
+	frame.Activate(frame.Members[1].Id);
+	Require(frame.Members.All(model => model.RollEdge == RollEdge.Right && model.RollDirection == RollEdge.Right && model.RolledUp), "切换标签后丢失了组内收起方向或状态。");
+	frame.SetRolledUp(false);
+	Require(frame.Members.All(model => !model.RolledUp) && frame.Members[1].IsPortal, "固定展开覆盖了其他标签内容。");
 }
 
 static void MergeGroups()

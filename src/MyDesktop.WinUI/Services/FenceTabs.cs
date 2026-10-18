@@ -22,6 +22,7 @@ internal sealed class FenceTabs(DesktopSession session)
 		var sourceIds = source.Frame.Members.Select(member => member.Id).ToArray();
 		var group = FenceGroups.Merge(session.Settings, source.Frame.Active.Id, target.Frame.Active.Id);
 		target.RebindFrame(new FenceWorkspace(session.Settings).Frames.Single(frame => frame.Members.Any(member => member.Id == group.Active)));
+		target.SetTemporaryExpanded(source.IsTemporarilyExpanded);
 		foreach (var id in sourceIds.Where(id => id != group.Active)) { session.Selection.Remove(id); }
 		surface.RemoveFence(source);
 		session.LayoutChanged(surface, target);
@@ -47,13 +48,14 @@ internal sealed class FenceTabs(DesktopSession session)
 		var frames = new FenceWorkspace(session.Settings).Frames;
 		source.RebindFrame(frames.Single(frame => frame.Members.Any(member => member.Id == remaining)));
 		var candidate = DetachedBounds(surface, source, point);
-		var visible = new Rectangle(candidate.Location, new Size(candidate.Width, model.RolledUp ? (int)Math.Round(36 * surface.Scale) : candidate.Height));
+		var visible = model.RolledUp ? FenceRoll.Collapsed(candidate, model.RollEdge, (int)Math.Round(36 * surface.Scale)) : candidate;
 		var others = surface.Fences.Select(fence => HeaderAndContentBounds(surface, fence)).ToArray();
 		var free = FenceGeometry.FindFreeSpot(visible, surface.WorkArea, others, (int)Math.Round(session.Settings.SnapGap * surface.Scale));
-		var location = free?.Location ?? candidate.Location;
+		var location = free is { } spot ? new Point(candidate.X + spot.X - visible.X, candidate.Y + spot.Y - visible.Y) : candidate.Location;
 		var detached = frames.Single(frame => frame.Members.Any(member => member.Id == id));
 		detached.SetBounds(location.X, location.Y, model.Width, model.Height, (int)Math.Round(surface.Scale * 96));
 		var view = surface.AddFence(detached);
+		view.SetTemporaryExpanded(source.IsTemporarilyExpanded);
 		if (selection.Count > 0) { session.Selection.Set(id, selection, true); }
 		session.LayoutChanged(surface, view);
 		return view;
@@ -79,13 +81,14 @@ internal sealed class FenceTabs(DesktopSession session)
 		if (_dragged is not { } fence || _surface is not { } surface) { return; }
 		_point = point;
 		var header = HeaderBounds(surface, fence);
-		header.Inflate(header.Height, header.Height);
+		int padding = Math.Min(header.Width, header.Height);
+		header.Inflate(padding, padding);
 		IsDetaching = !header.Contains(point);
 		if (IsDetaching)
 		{
 			var preview = DetachedBounds(surface, fence, point);
-			if (fence.Frame.Active.RolledUp) { preview.Height = (int)Math.Round(36 * surface.Scale); }
-			surface.DrawBand(preview);
+			if (fence.Frame.Active.RolledUp) { preview = FenceRoll.Collapsed(preview, fence.Frame.Active.RollEdge, (int)Math.Round(36 * surface.Scale)); }
+			surface.DrawBand(preview, fence);
 		}
 		else
 		{
@@ -112,25 +115,28 @@ internal sealed class FenceTabs(DesktopSession session)
 
 	Rectangle DetachedBounds(DesktopSurface surface, FenceView source, Point? point)
 	{
-		var bounds = HeaderAndContentBounds(surface, source);
-		bounds.Height = (int)Math.Round(source.Height * surface.Scale);
+		var local = surface.ExpandedBoundsOf(source);
+		var bounds = new Rectangle(local.Left + surface.WorkArea.Left, local.Top + surface.WorkArea.Top, local.Width, local.Height);
 		var work = surface.WorkArea;
-		int left = point?.X - bounds.Width / 2 ?? bounds.Right + (int)Math.Round(session.Settings.SnapGap * surface.Scale);
-		int top = point?.Y - (int)Math.Round(18 * surface.Scale) ?? bounds.Top;
+		var header = source.HeaderBounds;
+		int left = point?.X - (int)Math.Round((header.X + header.Width / 2) * surface.Scale) ?? bounds.Right + (int)Math.Round(session.Settings.SnapGap * surface.Scale);
+		int top = point?.Y - (int)Math.Round((header.Y + header.Height / 2) * surface.Scale) ?? bounds.Top;
 		return new Rectangle(Math.Clamp(left, work.Left, Math.Max(work.Left, work.Right - bounds.Width)),
 			Math.Clamp(top, work.Top, Math.Max(work.Top, work.Bottom - bounds.Height)), bounds.Width, bounds.Height);
 	}
 
 	internal static Rectangle HeaderBounds(DesktopSurface surface, FenceView fence)
 	{
-		var bounds = HeaderAndContentBounds(surface, fence);
-		bounds.Height = (int)Math.Round(36 * surface.Scale);
-		return bounds;
+		var bounds = surface.ExpandedBoundsOf(fence);
+		var header = fence.HeaderBounds;
+		return new Rectangle(bounds.Left + surface.WorkArea.Left + (int)Math.Round(header.X * surface.Scale),
+			bounds.Top + surface.WorkArea.Top + (int)Math.Round(header.Y * surface.Scale),
+			(int)Math.Round(header.Width * surface.Scale), (int)Math.Round(header.Height * surface.Scale));
 	}
 
 	static Rectangle HeaderAndContentBounds(DesktopSurface surface, FenceView fence)
 	{
-		var bounds = surface.BoundsOf(fence);
+		var bounds = surface.LayoutBoundsOf(fence);
 		return new Rectangle(bounds.Left + surface.WorkArea.Left, bounds.Top + surface.WorkArea.Top, bounds.Width, bounds.Height);
 	}
 }

@@ -70,6 +70,12 @@ internal sealed class FenceFrame(IReadOnlyList<FenceSettings> members, FenceGrou
 		Sync();
 	}
 
+	public void SetRollEdge(RollEdge edge, RollEdge? direction)
+	{
+		(Active.RollEdge, Active.RollDirection) = (edge, direction);
+		Sync();
+	}
+
 	public void SetBounds(int x, int y, int width, int height, int dpi)
 	{
 		if (width <= 0) { throw new ArgumentOutOfRangeException(nameof(width)); }
