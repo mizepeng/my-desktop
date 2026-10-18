@@ -29,6 +29,10 @@ var checks = new (string Name, Action Run)[]
 	("自由排列沿用 Explorer 坐标和显示器缩放", LooseIconCoordinates),
 	("无法完整绘制散放图标时拒绝接管", InvalidDesktopLayout),
 	("桌面键盘保护成对处理且放行系统快捷键", DesktopKeyboardProtection),
+	("跨分区与散放图标共享选择且隐藏标签不残留", SharedItemSelection),
+	("文件操作拒绝系统入口并去重父子项", FileSelectionProtection),
+	("桌面剪切只转移归属并保留目标原有顺序", DesktopMembershipTransfer),
+	("粘贴拒绝目录自身与子目录目标", InvalidPasteTargets),
 	("核心程序集不依赖 WPF 或 WinUI", FrameworkIndependence),
 };
 int failures = 0;
@@ -274,7 +278,7 @@ static void DesktopKeyboardProtection()
 {
 	var routing = new DesktopKeyRouting();
 	var down = routing.Route(0x2E, true, true, false, false, false, false, false);
-	Require(down.Intercept && down.Command == DesktopInputCommand.Unsupported, "Delete 会落到隐藏的系统图标上。");
+	Require(down.Intercept && down.Command == DesktopInputCommand.Delete, "Delete 没有交给文件删除流程。");
 	Require(routing.Route(0x2E, false, false, true, false, false, false, false).Intercept, "切换前台后松开没有与吞下的按下配对。");
 	Require(!routing.Route(0x2E, false, false, false, false, false, false, false).Intercept, "没有对应按下时误吞了松开。");
 	Require(!routing.Route(0x44, true, true, true, false, false, false, false).Intercept, "Win+D 被拦截。");
@@ -283,6 +287,12 @@ static void DesktopKeyboardProtection()
 	Require(routing.Route(0x41, true, true, false, true, false, false, false).Command == DesktopInputCommand.SelectAll, "全选没有交给 WinUI 图标视图。");
 	Require(routing.Route(0x71, true, true, false, false, false, false, false).Command == DesktopInputCommand.Rename, "F2 没有交给 WinUI 改名流程。");
 	Require(routing.Route(0x71, false, false, false, false, false, false, false).Intercept, "F2 的松开没有与按下配对。");
+	foreach (var (key, command) in new[] { (0x43u, DesktopInputCommand.Copy), (0x58u, DesktopInputCommand.Cut), (0x56u, DesktopInputCommand.Paste) })
+	{
+		Require(routing.Route(key, true, true, false, true, false, false, false).Command == command, "剪贴板快捷键没有交给文件命令。");
+		Require(routing.Route(key, false, false, false, false, false, false, false).Intercept, "剪贴板快捷键没有成对处理。");
+	}
+	Require(routing.Route(0x2E, true, true, false, false, true, false, false).Command == DesktopInputCommand.Unsupported, "永久删除被意外放行。");
 }
 
 static void LooseRenameScope()
@@ -331,4 +341,61 @@ static void NestedFolderWatches()
 		"没有嵌套需求的桌面目录被重复或递归监视。");
 	Require(watches.Any(watch => PathUtil.AreEqual(watch.Folder, AppPaths.DataDir) && !watch.Recursive), "缺少对映射根目录改名的父目录监视。");
 	Require(FolderWatch.Build([], [@"C:\"]).Single().Folder == @"C:\", "盘符根目录被改成相对当前目录的路径。");
+}
+
+static void SharedItemSelection()
+{
+	var selected = new ItemSelection();
+	var first = Guid.NewGuid();
+	var second = Guid.NewGuid();
+	selected.Set(first, [@"C:\桌面\工作.txt"], false);
+	selected.Click(Guid.Empty, @"C:\桌面\散放.txt", true);
+	Require(selected.Keys.Count == 2, "追加散放选择清掉了分区选择。");
+	selected.Set(second, [@"C:\资料\映射.txt"], true);
+	Require(selected.Keys.Count == 3, "追加另一个分区选择清掉了其他区域。");
+	selected.Remove(first);
+	Require(selected.Keys.Count == 2 && selected.InScope(first).Count == 0, "切换标签后保留了隐藏标签的选择。");
+	selected.Click(Guid.Empty, @"C:\桌面\散放.txt", true);
+	Require(selected.Keys.Single() == @"C:\资料\映射.txt", "追加点击未取消原来的散放选择。");
+	selected.Set(second, [@"C:\资料\映射.txt"], false);
+	selected.Rename(@"C:\资料", @"C:\新资料", true);
+	Require(selected.Keys.Single() == @"C:\新资料\映射.txt", "目录改名没有同步选择。");
+	selected.Retain(second, []);
+	Require(selected.Keys.Count == 0, "文件消失后仍被选中。");
+}
+
+static void FileSelectionProtection()
+{
+	Throws<InvalidOperationException>(() => FileOperationRules.ValidateSelection([new SelectedFile(AppPaths.Desktop, false, true)], true));
+	Throws<InvalidOperationException>(() => FileOperationRules.ValidateSelection([new SelectedFile(@"C:\桌面\受保护.txt", true, false)], true));
+	var paths = FileOperationRules.ValidateSelection([new SelectedFile(@"C:\桌面\目录", true, true),
+		new SelectedFile(@"C:\桌面\目录\子项.txt", true, true), new SelectedFile(@"c:\桌面\目录", true, true)], true);
+	Require(paths.Length == 1 && paths[0] == @"C:\桌面\目录", "父子项或大小写重复被执行了多次。");
+	Require(!FileOperationRules.IsDesktopFile(AppPaths.Desktop, [AppPaths.Desktop]), "把桌面目录本身当成了直接子项。");
+}
+
+static void DesktopMembershipTransfer()
+{
+	var settings = Fixture();
+	var first = settings.Fences[0];
+	var target = settings.Fences[2];
+	string key = first.Members[0];
+	first.CustomOrder.Add(key);
+	target.Members.Add(@"C:\Desktop\原有.txt");
+	target.CustomOrder.Add(@"C:\Desktop\原有.txt");
+	FileOperationRules.Assign(settings, [key], target);
+	Require(!first.Members.Contains(key) && !first.CustomOrder.Contains(key) && target.Members.Last() == key, "没有把归属从源分区移到目标。");
+	FileOperationRules.Assign(settings, [@"C:\Desktop\原有.txt"], target);
+	Require(target.Members[0] == @"C:\Desktop\原有.txt" && target.CustomOrder.Single() == @"C:\Desktop\原有.txt", "粘贴到原分区改变了既有顺序。");
+	FileOperationRules.Assign(settings, [key], null);
+	Require(settings.Fences.All(fence => !fence.Members.Contains(key)), "移回散放区仍留着分区归属。");
+	Throws<ArgumentException>(() => FileOperationRules.Assign(settings, [key], settings.Fences[1]));
+}
+
+static void InvalidPasteTargets()
+{
+	Throws<InvalidOperationException>(() => FileOperationRules.ValidatePaste([@"C:\资料"], @"C:\资料"));
+	Throws<InvalidOperationException>(() => FileOperationRules.ValidatePaste([@"C:\资料"], @"C:\资料\子目录"));
+	Throws<InvalidOperationException>(() => FileOperationRules.ValidatePaste(["::{CLSID}"], @"C:\资料"));
+	FileOperationRules.ValidatePaste([@"C:\资料\文件.txt"], @"C:\桌面");
 }

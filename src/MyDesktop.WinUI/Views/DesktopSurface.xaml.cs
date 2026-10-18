@@ -29,6 +29,7 @@ public sealed partial class DesktopSurface : Window
 	readonly TextBlock _noticeText;
 	NameEditor? _editingEditor;
 	FrameworkElement? _editingOwner;
+	bool _clipboardListener;
 
 	internal DesktopSurface(RECT workArea, double scale, IEnumerable<FenceFrame> frames, AppSettings settings, ShellItemLoader images, FileRename rename, bool readOnly)
 	{
@@ -54,7 +55,6 @@ public sealed partial class DesktopSurface : Window
 		_placement = new DesktopPlacement(Handle);
 		_desktopIcons = new DesktopIconsView(images, workArea, scale, rename, Handle);
 		_desktopIcons.BoundsChanged += UpdateRegion;
-		_desktopIcons.Failed += SetNotice;
 		RegisterEditor(_desktopIcons.EditorControl, _desktopIcons);
 		_desktopIcons.SelectionRequested += (_, _) =>
 		{
@@ -116,6 +116,7 @@ public sealed partial class DesktopSurface : Window
 		Closed += (_, _) =>
 		{
 			IsClosed = true;
+			if (_clipboardListener) { RemoveClipboardFormatListener(Handle); }
 			_desktopIcons.Invalidate();
 			foreach (var fence in _fences)
 			{
@@ -132,12 +133,28 @@ public sealed partial class DesktopSurface : Window
 	internal event Action? SaveRequested;
 	internal event Action? ExitRequested;
 	internal event Action? Ready;
+	internal event Action? ClipboardChanged;
 	internal void ShowOnDesktop() => _placement.Show();
 	internal bool IsEditing => _editingEditor != null;
 	internal RECT WorkArea => _workArea;
 	internal double Scale => _scale;
 	internal DesktopIconsView DesktopIcons => _desktopIcons;
 	internal string Notice => _noticeText.Text;
+
+	internal void WatchClipboard()
+	{
+		if (!AddClipboardFormatListener(Handle)) { throw new Win32Exception(); }
+		_clipboardListener = true;
+	}
+
+	internal void ActivateForSelection()
+	{
+		_editingEditor?.Cancel();
+		if (DesktopInput.IsInputDesktop() && !_placement.ActivateDesktop())
+		{
+			SetNotice("未能将键盘焦点交给桌面，请再次点击图标。");
+		}
+	}
 
 	internal void SetNotice(string? message)
 	{
@@ -227,6 +244,11 @@ public sealed partial class DesktopSurface : Window
 
 	nint WindowMessage(nint hwnd, uint message, nint wParam, nint lParam, nuint id, nuint data)
 	{
+		if (message == 0x031D)
+		{
+			ClipboardChanged?.Invoke();
+			return 0;
+		}
 		if (message == DesktopPlacement.RefreshMessage)
 		{
 			_placement.Refresh();

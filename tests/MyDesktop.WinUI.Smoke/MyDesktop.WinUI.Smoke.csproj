@@ -15,5 +15,6 @@
 		<Compile Include="../../src/MyDesktop/Native/DesktopViewInterop.cs" Link="DesktopViewInterop.cs" />
 		<Compile Include="../../src/MyDesktop/Native/ExplorerDesktopReader.cs" Link="ExplorerDesktopReader.cs" />
 		<Compile Include="../../src/MyDesktop/Native/ExplorerDesktopWindow.cs" Link="ExplorerDesktopWindow.cs" />
+		<Compile Include="../../src/MyDesktop/Native/FileClipboard.cs" Link="FileClipboard.cs" />
 	</ItemGroup>
 </Project>

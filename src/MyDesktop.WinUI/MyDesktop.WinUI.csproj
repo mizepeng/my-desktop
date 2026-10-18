@@ -24,6 +24,9 @@
 		<Compile Include="../MyDesktop/Native/NativeMethods.cs" Link="Native/NativeMethods.cs" />
 		<Compile Include="../MyDesktop/Native/ShellInterop.cs" Link="Native/ShellInterop.cs" />
 		<Compile Include="../MyDesktop/Native/ShellFileOps.cs" Link="Native/ShellFileOps.cs" />
+		<Compile Include="../MyDesktop/Native/FileClipboard.cs" Link="Native/FileClipboard.cs" />
+		<Compile Include="../MyDesktop/Native/FileOperationInterop.cs" Link="Native/FileOperationInterop.cs" />
+		<Compile Include="../MyDesktop/Native/ShellTransfer.cs" Link="Native/ShellTransfer.cs" />
 		<Compile Include="../MyDesktop/Native/DesktopViewInterop.cs" Link="Native/DesktopViewInterop.cs" />
 		<Compile Include="../MyDesktop/Native/ExplorerDesktopReader.cs" Link="Native/ExplorerDesktopReader.cs" />
 		<Compile Include="../MyDesktop/Native/ExplorerDesktopWindow.cs" Link="Native/ExplorerDesktopWindow.cs" />

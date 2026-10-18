@@ -26,7 +26,7 @@ internal static class UiChecks
 
 	public static async Task RunAsync(DesktopSession session, string reportPath)
 	{
-		using var report = new StreamWriter(reportPath, false) { AutoFlush = true };
+		using var report = new StreamWriter(reportPath, true) { AutoFlush = true };
 		_report = report;
 		try
 		{
@@ -105,8 +105,9 @@ internal static class UiChecks
 			await RenameChecks.RunAsync(session);
 			await DesktopPlacementChecks.RunAsync(hwnd);
 			await TakeoverChecks.RunAsync(session);
+			await FileCommandChecks.RunAsync(session);
 			await FileChangeChecks.RunAsync(session);
-			Write("通过：分区、标签、改名、文件监视、散放图标、接管恢复与层级回归。未操作实际桌面或注入输入。");
+			Write("通过：分区、标签、共享选择、文件命令、改名、文件监视、散放图标、接管恢复与层级回归。未操作实际桌面或注入输入。");
 		}
 		finally
 		{

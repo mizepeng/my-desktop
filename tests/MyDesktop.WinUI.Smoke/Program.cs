@@ -18,6 +18,11 @@ internal static class Program
 	[STAThread]
 	static int Main(string[] args)
 	{
+		if (args is ["--clipboard-probe", var clipboardReport])
+		{
+			try { ClipboardChecks.Run(clipboardReport); return 0; }
+			catch (Exception ex) { File.AppendAllText(clipboardReport, ex + Environment.NewLine); return 1; }
+		}
 		if (args is ["--recovery", var executable, var dataDirectory, var reportFile, var verificationDesktop])
 		{
 			try
@@ -61,6 +66,7 @@ internal static class Program
 		var floor = default(ProcessInfo);
 		var app = default(ProcessInfo);
 		var recovery = default(ProcessInfo);
+		var clipboard = default(ProcessInfo);
 		try
 		{
 			using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, desktopName);
@@ -76,10 +82,15 @@ internal static class Program
 				File.Delete(reportPath);
 			}
 			var data = CreateFixture(Path.GetDirectoryName(reportPath)!);
-			app = Launch(Path.GetFullPath(args[0]), $"--probe --data \"{data}\" --report \"{reportPath}\"", desktopName);
-			if (WaitForSingleObject(app.Process, 30000) != 0)
+			clipboard = Launch(Environment.ProcessPath!, $"--clipboard-probe \"{reportPath}\"", desktopName);
+			if (WaitForSingleObject(clipboard.Process, 10000) != 0 || !GetExitCodeProcess(clipboard.Process, out int clipboardCode) || clipboardCode != 0)
 			{
-				throw new TimeoutException("WinUI 验证进程运行超过 30 秒");
+				throw new InvalidOperationException("私有窗口站的文件剪贴板验证失败：" + File.ReadAllText(reportPath));
+			}
+			app = Launch(Path.GetFullPath(args[0]), $"--probe --data \"{data}\" --report \"{reportPath}\"", desktopName);
+			if (WaitForSingleObject(app.Process, 60000) != 0)
+			{
+				throw new TimeoutException("WinUI 验证进程运行超过 60 秒");
 			}
 			if (!GetExitCodeProcess(app.Process, out int code))
 			{
@@ -102,7 +113,7 @@ internal static class Program
 		}
 		finally
 		{
-			foreach (var process in new[] { app, recovery, floor })
+			foreach (var process in new[] { app, recovery, floor, clipboard })
 			{
 				if (process.Process != 0)
 				{

@@ -36,6 +36,8 @@ public sealed partial class FenceView : UserControl, IDisposable
 	int _contentVersion;
 	bool _dragging;
 	bool _refreshAfterEdit;
+	bool _settingSelection;
+	IReadOnlySet<string> _cut = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 	Point _pointerStart;
 	Vector3 _translationStart;
 
@@ -48,6 +50,10 @@ public sealed partial class FenceView : UserControl, IDisposable
 		_rename = rename;
 		_owner = owner;
 		_readOnly = readOnly;
+		AddHandler(PointerPressedEvent, new PointerEventHandler((_, _) =>
+		{
+			if (!IsEditing) { TargetRequested?.Invoke(); }
+		}), true);
 		Editor.Opened += () => UpdateEditing(false);
 		Editor.Closed += () =>
 		{
@@ -67,6 +73,18 @@ public sealed partial class FenceView : UserControl, IDisposable
 		_geometry.CornerRadius = new Vector2((float)settings.CornerRadius);
 		_visual.Clip = _visual.Compositor.CreateGeometricClip(_geometry);
 		Items.ItemsSource = _items;
+		Items.ContainerContentChanging += (_, args) =>
+		{
+			if (args.Item is FenceItem item) { args.ItemContainer.Opacity = _cut.Contains(item.Path) ? 0.4 : 1; }
+		};
+		Items.SelectionChanged += (_, _) =>
+		{
+			if (!_settingSelection)
+			{
+				SelectionRequested?.Invoke(Items.SelectedItems.Cast<FenceItem>().Select(item => item.Path).ToArray(),
+					NativeMethods.GetAsyncKeyState(NativeMethods.VK_CONTROL) < 0 || NativeMethods.GetAsyncKeyState(NativeMethods.VK_SHIFT) < 0);
+			}
+		};
 		Header.PointerPressed += Header_PointerPressed;
 		Header.PointerMoved += Header_PointerMoved;
 		Header.PointerReleased += (_, _) => FinishDrag();
@@ -107,6 +125,11 @@ public sealed partial class FenceView : UserControl, IDisposable
 	internal event Action? BoundsChanged;
 	internal event Action? SaveRequested;
 	internal event Action? ExitRequested;
+	internal event Action<IReadOnlyList<string>, bool>? SelectionRequested;
+	internal event Action? TargetRequested;
+	internal event Action<Guid>? ScopeHidden;
+	internal event Action? ContentChanged;
+	internal event Action<FrameworkElement, Point>? ItemContextRequested;
 
 	internal void ArrangeAt(double x, double y, double width, double height)
 	{
@@ -120,6 +143,7 @@ public sealed partial class FenceView : UserControl, IDisposable
 	internal void ActivateTab(Guid id)
 	{
 		CancelEdit();
+		ScopeHidden?.Invoke(_frame.Active.Id);
 		_frame.Activate(id);
 		RefreshTabs();
 		RefreshAppearance();
@@ -162,6 +186,7 @@ public sealed partial class FenceView : UserControl, IDisposable
 	internal void SetRolledUp(bool rolledUp)
 	{
 		CancelEdit();
+		if (rolledUp) { ScopeHidden?.Invoke(_frame.Active.Id); }
 		_frame.SetRolledUp(rolledUp);
 		_geometry.Size = new Vector2((float)Width, (float)VisibleHeight);
 		BoundsChanged?.Invoke();
@@ -254,11 +279,14 @@ public sealed partial class FenceView : UserControl, IDisposable
 			}
 			if (version == _contentVersion)
 			{
+				_settingSelection = true;
 				_items.Clear();
 				foreach (var item in loaded)
 				{
 					_items.Add(item);
 				}
+				_settingSelection = false;
+				ContentChanged?.Invoke();
 				Status.Text = _items.Count == 0 ? "此分区为空" : "";
 			}
 		}
@@ -268,6 +296,33 @@ public sealed partial class FenceView : UserControl, IDisposable
 			{
 				Status.Text = $"读取分区失败：{ex.Message}";
 				Log.Error($"读取分区失败：{model.Title}", ex);
+			}
+		}
+	}
+
+	internal void SelectPaths(IEnumerable<string> paths)
+	{
+		var keys = paths.ToHashSet(StringComparer.OrdinalIgnoreCase);
+		_settingSelection = true;
+		try
+		{
+			Items.SelectedItems.Clear();
+			foreach (var item in _items.Where(item => keys.Contains(item.Path)))
+			{
+				Items.SelectedItems.Add(item);
+			}
+		}
+		finally { _settingSelection = false; }
+	}
+
+	internal void ApplyCutState(IReadOnlySet<string> cut)
+	{
+		_cut = cut;
+		foreach (var item in _items)
+		{
+			if (Items.ContainerFromItem(item) is GridViewItem container)
+			{
+				container.Opacity = cut.Contains(item.Path) ? 0.4 : 1;
 			}
 		}
 	}
@@ -348,16 +403,16 @@ public sealed partial class FenceView : UserControl, IDisposable
 
 	void Items_RightTapped(object sender, RightTappedRoutedEventArgs args)
 	{
-		if (IsEditing || _readOnly || ItemAt(args.OriginalSource as DependencyObject) is not { } item || !ItemRename.CanRename(_frame.Active, item.Path))
+		if (IsEditing || _readOnly)
 		{
 			return;
 		}
-		Items.SelectedItem = item;
-		var command = new MenuFlyoutItem { Text = "重命名" };
-		command.Click += (_, _) => BeginItemRename(item.Path);
-		var menu = new MenuFlyout();
-		menu.Items.Add(command);
-		menu.ShowAt(Items, args.GetPosition(Items));
+		var item = ItemAt(args.OriginalSource as DependencyObject);
+		if (item == null || !Items.SelectedItems.Contains(item))
+		{
+			SelectionRequested?.Invoke(item == null ? [] : new[] { item.Path }, false);
+		}
+		ItemContextRequested?.Invoke(Items, args.GetPosition(Items));
 		args.Handled = true;
 	}
 

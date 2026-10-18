@@ -6,6 +6,7 @@ using MyDesktop.Core;
 using MyDesktop.Native;
 using MyDesktop.Services;
 using MyDesktop.WinUI.Services;
+using Windows.Foundation;
 using static MyDesktop.Native.NativeMethods;
 
 namespace MyDesktop.WinUI.Views;
@@ -44,7 +45,7 @@ public sealed partial class DesktopIconsView : UserControl
 	internal event Action? BoundsChanged;
 	internal event Action<string, bool>? SelectionRequested;
 	internal event Action<string>? OpenRequested;
-	internal event Action<string>? Failed;
+	internal event Action<string, FrameworkElement, Point>? ItemContextRequested;
 
 	internal async Task SetItemsAsync(IReadOnlyList<DesktopIconPlacement> items)
 	{
@@ -121,25 +122,11 @@ public sealed partial class DesktopIconsView : UserControl
 		};
 		button.RightTapped += (_, args) =>
 		{
-			SelectionRequested?.Invoke(key, false);
-			if (_cells.TryGetValue(key, out var cell) && _rename.CanRenameDesktop(cell.Placement.Entry))
+			if (!_selected.Contains(key))
 			{
-				var command = new MenuFlyoutItem { Text = "重命名" };
-				command.Click += (_, _) =>
-				{
-					try
-					{
-						BeginRename(key);
-					}
-					catch (Exception ex)
-					{
-						Failed?.Invoke(ex.Message);
-					}
-				};
-				var menu = new MenuFlyout();
-				menu.Items.Add(command);
-				menu.ShowAt(button, args.GetPosition(button));
+				SelectionRequested?.Invoke(key, false);
 			}
+			ItemContextRequested?.Invoke(key, button, args.GetPosition(button));
 			args.Handled = true;
 		};
 		return button;
@@ -181,6 +168,14 @@ public sealed partial class DesktopIconsView : UserControl
 		_selected.Clear();
 		_selected.UnionWith(keys.Where(_cells.ContainsKey));
 		UpdateSelection();
+	}
+
+	internal void ApplyCutState(IReadOnlySet<string> cut)
+	{
+		foreach (var (key, cell) in _cells)
+		{
+			cell.Button.Opacity = cut.Contains(key) ? 0.4 : 1;
+		}
 	}
 
 	void UpdateSelection()

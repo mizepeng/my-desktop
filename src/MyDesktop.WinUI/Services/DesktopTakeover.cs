@@ -14,7 +14,6 @@ internal sealed class DesktopTakeover : IDisposable
 	readonly DesktopInputHooks _hooks;
 	readonly DispatcherQueueTimer _watchdog;
 	readonly bool _fixture;
-	readonly HashSet<string> _selected = new(StringComparer.OrdinalIgnoreCase);
 	readonly TaskCompletionSource _firstActive = new(TaskCreationOptions.RunContinuationsAsynchronously);
 	Task _hooksReady = Task.CompletedTask;
 	DesktopSnapshot? _snapshot;
@@ -23,8 +22,9 @@ internal sealed class DesktopTakeover : IDisposable
 	DateTime _observedAt;
 	DateTime? _staleFilesSince;
 	string? _signature;
+	string? _notice;
 	bool _busy, _pending, _dirty = true, _restoring, _disposed, _nativeEditing;
-	int _generation;
+	int _generation, _refreshVersion;
 
 	public DesktopTakeover(DesktopSession session, bool fixture)
 	{
@@ -47,7 +47,6 @@ internal sealed class DesktopTakeover : IDisposable
 		_watchdog.Tick += (_, _) => CheckConnection();
 		foreach (var surface in session.Surfaces)
 		{
-			surface.DesktopIcons.SelectionRequested += Select;
 			surface.DesktopIcons.OpenRequested += Open;
 		}
 	}
@@ -57,7 +56,7 @@ internal sealed class DesktopTakeover : IDisposable
 	internal int? GuardProcessId => _recovery?.ProcessId;
 	internal DesktopSnapshot? Snapshot => _snapshot;
 	internal DesktopIconTarget? Target => _target;
-	internal IReadOnlyList<string> SelectedKeys => _selected.ToArray();
+	internal IReadOnlyList<string> SelectedKeys => _session.Selection.InScope(Guid.Empty);
 
 	public void Start()
 	{
@@ -69,6 +68,7 @@ internal sealed class DesktopTakeover : IDisposable
 	public void Refresh()
 	{
 		_dirty = true;
+		_refreshVersion++;
 		_source.Refresh();
 	}
 
@@ -82,9 +82,7 @@ internal sealed class DesktopTakeover : IDisposable
 		{
 			_generation++;
 		}
-		var selected = _selected.Select(key => ItemRename.RewritePath(key, oldPath, newPath, directory)).ToArray();
-		_selected.Clear();
-		_selected.UnionWith(selected);
+		_session.Selection.Rename(oldPath, newPath, directory);
 		Refresh();
 	}
 
@@ -115,6 +113,7 @@ internal sealed class DesktopTakeover : IDisposable
 		}
 		_busy = true;
 		int generation = _generation;
+		int refreshVersion = _refreshVersion;
 		try
 		{
 			if (_session.FileWatchError is { } watchError)
@@ -237,9 +236,10 @@ internal sealed class DesktopTakeover : IDisposable
 				_firstActive.TrySetResult();
 			}
 			_signature = snapshot.Signature;
-			_dirty = false;
-			_selected.IntersectWith(placements.Select(item => item.Entry.Key));
-			UpdateSelection();
+			// 等待分区内容期间可能又有成员变化，不能把那次刷新请求一并清掉。
+			_dirty = refreshVersion != _refreshVersion;
+			_session.Selection.Retain(Guid.Empty, placements.Select(item => item.Entry.Key));
+			_session.ProjectSelection();
 			Notice(null);
 		}
 		catch (Exception ex)
@@ -321,7 +321,7 @@ internal sealed class DesktopTakeover : IDisposable
 		_restoring = false;
 		_hooks.Enabled = false;
 		_target = null;
-		_selected.Clear();
+		_session.Selection.Remove(Guid.Empty);
 		foreach (var surface in _session.Surfaces.Where(surface => !surface.IsClosed))
 		{
 			surface.DesktopIcons.ShowIcons(false);
@@ -330,27 +330,7 @@ internal sealed class DesktopTakeover : IDisposable
 
 	internal void Select(string? key, bool extend)
 	{
-		if (!extend)
-		{
-			_selected.Clear();
-		}
-		if (key != null && (!_selected.Contains(key) || !extend))
-		{
-			_selected.Add(key);
-		}
-		else if (key != null)
-		{
-			_selected.Remove(key);
-		}
-		UpdateSelection();
-	}
-
-	void UpdateSelection()
-	{
-		foreach (var surface in _session.Surfaces)
-		{
-			surface.DesktopIcons.Select(_selected);
-		}
+		_session.SelectLoose(key, extend);
 	}
 
 	void Open(string key)
@@ -368,76 +348,17 @@ internal sealed class DesktopTakeover : IDisposable
 
 	internal void HandleKey(DesktopInputCommand command, uint key, bool extend)
 	{
-		var keys = _session.Surfaces.SelectMany(surface => surface.DesktopIcons.Keys).ToArray();
-		if (!IsActive)
-		{
-			return;
-		}
-		switch (command)
-		{
-			case DesktopInputCommand.Open:
-				foreach (string selected in _selected.ToArray())
-				{
-					Open(selected);
-				}
-				break;
-			case DesktopInputCommand.Rename:
-				if (_selected.Count == 1)
-				{
-					string selected = _selected.Single();
-					try
-					{
-						_session.Surfaces.Single(surface => surface.DesktopIcons.Keys.Contains(selected, StringComparer.OrdinalIgnoreCase)).DesktopIcons.BeginRename(selected);
-					}
-					catch (Exception ex)
-					{
-						Notice(ex.Message);
-					}
-				}
-				break;
-			case DesktopInputCommand.SelectAll:
-				_selected.UnionWith(keys);
-				UpdateSelection();
-				break;
-			case DesktopInputCommand.Previous:
-			case DesktopInputCommand.Next:
-			case DesktopInputCommand.First:
-			case DesktopInputCommand.Last:
-				if (keys.Length > 0)
-				{
-					int index = Array.FindIndex(keys, _selected.Contains);
-					int destination = command switch
-					{
-						DesktopInputCommand.Previous => Math.Max(0, index - 1),
-						DesktopInputCommand.Next => Math.Min(keys.Length - 1, index + 1),
-						DesktopInputCommand.First => 0,
-						DesktopInputCommand.Last => keys.Length - 1,
-						DesktopInputCommand.Open or DesktopInputCommand.Rename or DesktopInputCommand.SelectAll or DesktopInputCommand.TypeAhead or DesktopInputCommand.Unsupported
-							=> throw new InvalidOperationException("此命令不属于位置导航。"),
-					};
-					Select(keys[destination], extend);
-				}
-				break;
-			case DesktopInputCommand.TypeAhead:
-				var match = _snapshot?.Items.FirstOrDefault(item => keys.Contains(item.Key, StringComparer.OrdinalIgnoreCase)
-					&& PinyinMatcher.Rank(item.DisplayName, char.ToLowerInvariant((char)key).ToString()) > 0);
-				if (match != null)
-				{
-					Select(match.Key, false);
-				}
-				break;
-			case DesktopInputCommand.Unsupported:
-				Notice("当前版本暂不支持这项桌面操作。");
-				break;
-		}
+		if (IsActive) { _session.HandleKey(command, key, extend); }
 	}
 
 	void Notice(string? message)
 	{
 		foreach (var surface in _session.Surfaces.Where(surface => !surface.IsClosed))
 		{
-			surface.SetNotice(message);
+			// 接管恢复时只清除自己的旧提示，不能抹掉文件命令刚报告的部分失败。
+			if (message != null || surface.Notice == (_notice ?? "")) { surface.SetNotice(message); }
 		}
+		_notice = message;
 	}
 
 	public void Dispose()
