@@ -938,6 +938,7 @@ internal sealed class FenceManager
 			if (WindowOf(group.Active) is FenceWindow next && !_fencesHidden)
 			{
 				CopyFrame(window.Model, next.Model);
+				next.CopyExpandStateFrom(window);
 				next.ApplyBounds();
 				next.Show();
 				BringToFront(next);
@@ -2267,6 +2268,8 @@ internal sealed class FenceManager
 			// 亚克力会整体调整，分区也必须整批同步，不能只移动落到桌面下面的那个分区
 			DesktopHost.PlaceAboveFloor(DesktopHost.TopToBottom(visible));
 		}
+		// 展开中的分区若被别的校正拉出置顶层，重新盖回普通应用之上
+		DesktopHost.EnsureExpandedAboveApps();
 		// 飞行图标必须在全部可见分区之上并跟随其置顶状态，只检查是否在桌面上方会漏掉被亚克力盖住的图标
 		var flights = FlyingIcon.OpenWindows;
 		if (flights.Count > 0)

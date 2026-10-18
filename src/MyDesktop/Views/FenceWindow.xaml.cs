@@ -314,7 +314,20 @@ internal partial class FenceWindow : Window
 		SetWindowLongPtr(_hwnd, GWL_EXSTYLE, new IntPtr((exStyle | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW));
 		long style = GetWindowLongPtr(_hwnd, GWL_STYLE).ToInt64();
 		SetWindowLongPtr(_hwnd, GWL_STYLE, new IntPtr(style & ~(WS_MINIMIZEBOX | WS_MAXIMIZEBOX)));
-		IsVisibleChanged += (_, _) => UpdateBackdrop();
+		IsVisibleChanged += (_, _) =>
+		{
+			// 先记下展开置顶再摆亚克力，免得亚克力按平时的规则落到桌面层、再被提上来闪一下
+			if (IsVisible && _tempExpanded)
+			{
+				SyncExpandedZOrder();
+				UpdateBackdrop();
+			}
+			else
+			{
+				UpdateBackdrop();
+				SyncExpandedZOrder();
+			}
+		};
 		UpdateAcrylic();
 	}
 
@@ -323,6 +336,9 @@ internal partial class FenceWindow : Window
 		_allowClose = true;
 		StopWatcher();
 		_clickRename.Cancel();
+		_tempExpanded = false;
+		// 关掉之前先退出悬停展开的置顶，别把已销毁的窗口留在置顶名单里
+		SyncExpandedZOrder(deferCollapse: false);
 		_standIn?.Dispose();
 		_backdrop?.Dispose();
 		_refreshTimer.Stop();
@@ -1045,6 +1061,8 @@ internal partial class FenceWindow : Window
 		// 别处直接摆放（缩放变化、同组同步、切换标签等）时，正在播的卷起、展开动画直接跳到结束
 		StopRollAnimation();
 		PlaceWindow();
+		// 收起动画被跳过时，这里把展开置顶放回桌面层；仍该展开时不会重复摆
+		SyncExpandedZOrder();
 	}
 
 	/// <summary>
@@ -1102,6 +1120,8 @@ internal partial class FenceWindow : Window
 			{
 				ClearRollClip();
 				PlaceWindow();
+				// 收起动画播完再回到桌面层，收起过程仍盖在原来挡住它的应用上面
+				SyncExpandedZOrder();
 			}, null));
 		}
 		else
@@ -1391,12 +1411,14 @@ internal partial class FenceWindow : Window
 		Model.RolledUp = !Model.RolledUp;
 		_tempExpanded = false;
 		_collapseTimer.Stop();
-		// 固定展开后可能盖到旁边的分区，放在它们上面
+		// 固定展开后可能盖到旁边的分区，放在它们上面。固定展开不置顶，和一直展开的分区一样留在普通应用之下
 		if (!Model.RolledUp)
 		{
 			_manager.BringToFront(this);
 		}
 		ApplyRollBounds();
+		// 悬停展开时改成固定展开或卷起：立刻撤掉悬停置顶，不等收起动画（固定展开没有收起动画）
+		SyncExpandedZOrder(deferCollapse: false);
 		_manager.SyncGroup(this);
 		_manager.SaveSoon();
 		_manager.OnFenceLayoutChanged();
@@ -1593,7 +1615,7 @@ internal partial class FenceWindow : Window
 	/// </summary>
 	public async Task ShowInPlaceOf(FenceWindow current)
 	{
-		_tempExpanded = current._tempExpanded;
+		CopyExpandStateFrom(current);
 		// 标题栏按钮也接着显示：鼠标停在标题栏上切换时，新标签要等鼠标再动才收到 MouseEnter，否则按钮先消失再出现，看上去闪一下
 		if (current.TitleButtons.Opacity > 0)
 		{
@@ -1780,10 +1802,13 @@ internal partial class FenceWindow : Window
 		{
 			_backdrop?.Dispose();
 			_backdrop = null;
+			SyncExpandedZOrder();
 			return;
 		}
 		_backdrop ??= new AcrylicBackdrop();
 		_backdrop.SetCorner(Radius <= 0 ? DWMWCP_DONOTROUND : Radius <= 4 ? DWMWCP_ROUNDSMALL : DWMWCP_ROUND);
+		// 展开置顶时亚克力要跟着上去，先登记再摆位置，摆的时候才不会被按平时的规则拉回桌面层
+		SyncExpandedZOrder();
 		UpdateBackdrop();
 	}
 
@@ -2136,7 +2161,8 @@ internal partial class FenceWindow : Window
 		if (Model.RolledUp && !_tempExpanded && Settings.ExpandOnHover)
 		{
 			_tempExpanded = true;
-			// 展开的部分盖在旁边的分区上面
+			// 展开的部分盖住普通应用和旁边的分区，鼠标才点得到被挡住的图标
+			SyncExpandedZOrder();
 			_manager.BringToFront(this);
 			ApplyRollBounds();
 		}
@@ -2184,6 +2210,45 @@ internal partial class FenceWindow : Window
 		}
 		_tempExpanded = false;
 		ApplyRollBounds();
+		// 没有收起动画时这里就放回桌面层；有动画时等播完（见 ApplyRollBounds）
+		SyncExpandedZOrder();
+	}
+
+	/// <summary>
+	/// 悬停展开或拖放展开期间临时盖住普通应用；收起动画播完、隐藏或关闭后再回到桌面层。固定展开不置顶。
+	/// </summary>
+	/// <param name="deferCollapse">收起动画还在播时先不放回去，让收起过程仍显示在应用上面。</param>
+	void SyncExpandedZOrder(bool deferCollapse = true)
+	{
+		if (_hwnd == IntPtr.Zero)
+		{
+			return;
+		}
+		bool raise = IsVisible && _tempExpanded;
+		if (deferCollapse && !raise && IsVisible && _rollClip != null)
+		{
+			return;
+		}
+		if (raise)
+		{
+			DesktopHost.RaiseExpanded(_hwnd, BackdropHandle);
+		}
+		else
+		{
+			DesktopHost.LowerExpanded(_hwnd);
+		}
+	}
+
+	/// <summary>
+	/// 切换标签或拆出标签时，新显示的分区接过悬停展开的置顶。窗口还没显示时先记下，显示时再摆。固定展开不置顶，不用接。
+	/// </summary>
+	public void CopyExpandStateFrom(FenceWindow current)
+	{
+		_tempExpanded = current._tempExpanded;
+		if (_tempExpanded)
+		{
+			RestartTimer(_collapseTimer);
+		}
 	}
 
 	/// <summary>
@@ -3751,6 +3816,7 @@ internal partial class FenceWindow : Window
 			if (Model.RolledUp && !_tempExpanded)
 			{
 				_tempExpanded = true;
+				SyncExpandedZOrder();
 				_manager.BringToFront(this);
 				ApplyRollBounds();
 			}
