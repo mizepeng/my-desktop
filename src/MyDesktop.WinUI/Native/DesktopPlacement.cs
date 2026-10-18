@@ -42,6 +42,8 @@ internal sealed class DesktopPlacement : IDisposable
 		Refresh();
 	}
 
+	public nint DesktopHandle => FindDesktop();
+
 	public void Refresh()
 	{
 		_queued = false;
@@ -60,8 +62,10 @@ internal sealed class DesktopPlacement : IDisposable
 		{
 			return;
 		}
-		// 具体插入位置只在自己的 WM_WINDOWPOSCHANGING 中写入，避免跨权限和置顶层切换的已知问题。
-		if (!SetWindowPos(_hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW))
+		// 具体窗口只在自己的 WM_WINDOWPOSCHANGING 中写入，避免跨权限和置顶层切换的已知问题。
+		// 无上方参照时直接传 TOPMOST 临时提起；TOP 会被解析为宿主名下的隐藏 IME 窗口，导致整个窗口组掉到底层。
+		var insertAfter = anchor == 0 ? HWND_TOPMOST : HWND_TOP;
+		if (!SetWindowPos(_hwnd, insertAfter, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW))
 		{
 			throw new Win32Exception();
 		}
@@ -84,7 +88,7 @@ internal sealed class DesktopPlacement : IDisposable
 			var (anchor, adjacent) = AnchorAbove(desktop);
 			if (NeedsMove(anchor, adjacent))
 			{
-				position.hwndInsertAfter = anchor == 0 ? HWND_NOTOPMOST : anchor;
+				position.hwndInsertAfter = anchor == 0 ? HWND_TOPMOST : anchor;
 			}
 			else
 			{
@@ -100,7 +104,8 @@ internal sealed class DesktopPlacement : IDisposable
 	{
 		bool anchorTopmost = anchor != 0 && (GetWindowLongPtr(anchor, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0;
 		bool currentlyTopmost = (GetWindowLongPtr(_hwnd, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0;
-		return !adjacent || (currentlyTopmost && !anchorTopmost);
+		// 桌面最前且没有参照时保留临时置顶；普通应用回到桌面上方后，随其参照撤销置顶。
+		return !adjacent || (currentlyTopmost && anchor != 0 && !anchorTopmost);
 	}
 
 	nint FindDesktop()

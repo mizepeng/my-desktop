@@ -53,6 +53,19 @@ internal static class PathUtil
 		return ReservedNames.Contains(result) ? result + "_" : result;
 	}
 
+	public static void ValidateFileName(string name)
+	{
+		if (string.IsNullOrWhiteSpace(name) || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.EndsWith('.') || name.EndsWith(' '))
+		{
+			throw new ArgumentException("名称不能为空、包含非法字符，或以空格、句点结尾。");
+		}
+		string stem = name.Split('.')[0].TrimEnd(' ');
+		if (ReservedNames.Contains(stem) || stem.ToUpperInvariant() is "COM¹" or "COM²" or "COM³" or "LPT¹" or "LPT²" or "LPT³")
+		{
+			throw new ArgumentException("此名称由 Windows 保留，请换一个名称。");
+		}
+	}
+
 	/// <summary>
 	/// 在 folder 中生成不冲突的路径，冲突时依次追加 " (2)"、" (3)"。
 	/// </summary>

@@ -15,10 +15,10 @@
 					<ColumnDefinition Width="Auto" />
 				</Grid.ColumnDefinitions>
 				<StackPanel x:Name="Tabs" Orientation="Horizontal" Spacing="4" />
-				<Button Grid.Column="1" Content="⌃" Click="Fold_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="收起或展开" />
+				<Button x:Name="FoldButton" Grid.Column="1" Content="⌃" Click="Fold_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="收起或展开" />
 			</Grid>
 			<Grid Grid.Row="1">
-				<GridView x:Name="Items" SelectionMode="Extended" IsTabStop="False" Padding="6" DoubleTapped="Items_DoubleTapped">
+				<GridView x:Name="Items" SelectionMode="Extended" IsTabStop="False" Padding="6" DoubleTapped="Items_DoubleTapped" RightTapped="Items_RightTapped">
 					<GridView.ItemTemplate>
 						<DataTemplate>
 							<StackPanel Width="88" Padding="4" Spacing="4" ToolTipService.ToolTip="{Binding Path}">
@@ -31,5 +31,19 @@
 				<TextBlock x:Name="Status" Margin="12" TextWrapping="Wrap" IsHitTestVisible="False" Foreground="White" />
 			</Grid>
 		</Grid>
+		<Border x:Name="Editor" Visibility="Collapsed" Background="#F2232630" CornerRadius="8" Padding="12">
+			<ScrollViewer VerticalScrollBarVisibility="Auto">
+				<StackPanel Spacing="8">
+					<TextBlock x:Name="EditCaption" Foreground="White" />
+					<TextBox x:Name="EditName" KeyDown="EditName_KeyDown" KeyUp="EditName_KeyUp"
+						TextCompositionStarted="EditName_CompositionStarted" TextCompositionEnded="EditName_CompositionEnded" />
+					<TextBlock x:Name="EditError" Foreground="#FFFFB4AB" TextWrapping="Wrap" />
+					<StackPanel Orientation="Horizontal" Spacing="8">
+						<Button Content="确定" Click="EditConfirm_Click" />
+						<Button Content="取消" Click="EditCancel_Click" />
+					</StackPanel>
+				</StackPanel>
+			</ScrollViewer>
+		</Border>
 	</Grid>
 </UserControl>

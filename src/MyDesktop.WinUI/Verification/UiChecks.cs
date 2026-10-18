@@ -80,13 +80,21 @@ internal static class UiChecks
 				GetWindowThreadProcessId(window, out uint process);
 				if (process == Environment.ProcessId && IsWindowVisible(window))
 				{
-					visible++;
+					string name = GetClassName(window);
+					var rectangle = GetWindowRect(window);
+					Write($"可见顶层窗口：{name}，范围 {rectangle.Left},{rectangle.Top},{rectangle.Width},{rectangle.Height}，样式 0x{GetWindowLongPtr(window, GWL_EXSTYLE):X}。");
+					if (name is not ("UAC_InputIndicatorOverlayWnd" or "UAC Input Indicator"))
+					{
+						visible++;
+					}
 				}
 				return true;
 			}, 0);
-			Require(visible == 1, "只有一个可见顶层窗口");
+			Require(visible == 1, "除输入指示器外只有一个可见顶层窗口");
 			await DesktopPlacementChecks.RunAsync(hwnd);
-			Write("通过：真实配置、标签、Shell 图像、布局保存、穿透与桌面层级。未操作实际桌面或注入输入。");
+			await RenameChecks.RunAsync(session);
+			await DesktopPlacementChecks.RunAsync(hwnd);
+			Write("通过：真实配置、标签、Shell 图像、布局保存、标题编辑、文件改名、穿透及编辑前后层级。未操作实际桌面或注入输入。");
 		}
 		finally
 		{

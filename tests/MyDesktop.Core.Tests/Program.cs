@@ -18,6 +18,9 @@ var checks = new (string Name, Action Run)[]
 	("非法标签和 DPI 显式失败", InvalidFrameChanges),
 	("拼音资源随核心程序集迁移", PinyinResource),
 	("整理规则优先级及兜底语义不变", OrganizeRules),
+	("改名保留隐藏扩展名且拒绝非法文件名", RenameNames),
+	("改名严格区分普通子项和系统入口", RenameScope),
+	("目录改名同步成员、映射及自定义顺序", RenameReferences),
 	("核心程序集不依赖 WPF 或 WinUI", FrameworkIndependence),
 };
 int failures = 0;
@@ -171,4 +174,47 @@ static void FrameworkIndependence()
 {
 	var names = typeof(AppSettings).Assembly.GetReferencedAssemblies().Select(name => name.Name).ToArray();
 	Require(!names.Any(name => name is "PresentationFramework" or "PresentationCore" or "WindowsBase" || name!.StartsWith("Microsoft.WinUI")), "核心仍依赖界面框架。");
+}
+
+static void RenameNames()
+{
+	const string path = @"C:\资料\原名.txt";
+	Require(ItemRename.TargetPath(path, "原名", "新名", false) == @"C:\资料\新名.txt", "隐藏扩展名没有保留。");
+	Require(ItemRename.TargetPath(path, "原名.txt", "新名.md", false) == @"C:\资料\新名.md", "显示扩展名时无法显式修改扩展名。");
+	Require(ItemRename.TargetPath(path, "原名", "目录", true) == @"C:\资料\目录", "目录被错误追加扩展名。");
+	Require(ItemRename.TargetPath(path, "原名", ".资料", false) == @"C:\资料\.资料.txt", "合法的点开头名称被拒绝。");
+	foreach (string name in new[] { "", " ", ".", "..", "a.", "a ", "a/b", "a\\b", "a:b", "a?b", "a\nb", "NUL.txt", "CON", "COM1.pdf", "LPT²", "CON .txt" })
+	{
+		Throws<ArgumentException>(() => ItemRename.TargetPath(path, "原名", name, false));
+	}
+}
+
+static void RenameScope()
+{
+	var portal = new FenceSettings { IsPortal = true, FolderPath = @"C:\资料" };
+	Require(ItemRename.CanRename(portal, @"C:\资料\文件.txt"), "映射目录的直接子项不能改名。");
+	foreach (string path in new[] { @"C:\资料", @"C:\资料\下级\文件.txt", @"C:\资料相邻\文件.txt", @"C:\Users\Max", "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", "文件.txt" })
+	{
+		Require(!ItemRename.CanRename(portal, path), "误将目录本身、跨目录项目或系统入口当作普通子项。");
+	}
+	string desktopFile = Path.Combine(AppPaths.Desktop, "文件.txt");
+	var desktop = new FenceSettings { Members = [desktopFile, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)] };
+	Require(ItemRename.CanRename(desktop, desktopFile), "已归入分区的桌面文件不能改名。");
+	Require(!ItemRename.CanRename(desktop, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)), "用户文件夹入口会被当作普通目录改名。");
+	Require(!ItemRename.CanRename(desktop, Path.Combine(AppPaths.Desktop, "未归入.txt")), "不在此分区的文件可以从此分区改名。");
+}
+
+static void RenameReferences()
+{
+	var settings = Fixture();
+	settings.Fences[0].Members = [@"C:\资料", @"C:\资料\子目录\文件.txt", @"C:\资料相邻\文件.txt", "::{CLSID}"];
+	settings.Fences[0].CustomOrder = [@"C:\资料\子目录\文件.txt"];
+	settings.Fences[2].IsPortal = true;
+	settings.Fences[2].FolderPath = @"C:\资料\子目录";
+	ItemRename.UpdateReferences(settings, @"C:\资料", @"C:\新资料", true);
+	Require(settings.Fences[0].Members.SequenceEqual(new[] { @"C:\新资料", @"C:\新资料\子目录\文件.txt", @"C:\资料相邻\文件.txt", "::{CLSID}" }), "目录前缀替换误伤其他目录或漏掉子项。");
+	Require(settings.Fences[0].CustomOrder.Single() == @"C:\新资料\子目录\文件.txt", "排序路径没有更新。");
+	Require(settings.Fences[1].FolderPath == @"C:\新资料" && settings.Fences[2].FolderPath == @"C:\新资料\子目录", "直接映射或子目录映射没有更新。");
+	ItemRename.UpdateReferences(settings, @"C:\新资料\子目录\文件.txt", @"C:\新资料\子目录\文件.TXT", false);
+	Require(settings.Fences[0].Members[1].EndsWith("文件.TXT", StringComparison.Ordinal), "仅修改大小写时引用未更新。");
 }

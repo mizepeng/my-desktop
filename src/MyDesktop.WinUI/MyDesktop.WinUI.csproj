@@ -22,6 +22,7 @@
 		<PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
 		<Compile Include="../MyDesktop/Native/NativeMethods.cs" Link="Native/NativeMethods.cs" />
 		<Compile Include="../MyDesktop/Native/ShellInterop.cs" Link="Native/ShellInterop.cs" />
+		<Compile Include="../MyDesktop/Native/ShellFileOps.cs" Link="Native/ShellFileOps.cs" />
 		<Compile Include="../MyDesktop/Native/DesktopViewInterop.cs" Link="Native/DesktopViewInterop.cs" />
 		<Compile Include="../MyDesktop/Core/ExplorerShell.cs" Link="Services/ExplorerShell.cs" />
 		<Compile Include="../../tests/MyDesktop.WinUI.Smoke/DesktopFixtureProtocol.cs" Link="Verification/DesktopFixtureProtocol.cs" />

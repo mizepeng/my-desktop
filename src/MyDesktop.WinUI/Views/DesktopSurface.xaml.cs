@@ -2,6 +2,8 @@ using System.ComponentModel;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using MyDesktop.Models;
 using MyDesktop.Native;
 using MyDesktop.Services;
@@ -22,8 +24,9 @@ public sealed partial class DesktopSurface : Window
 	readonly double _scale;
 	readonly List<FenceView> _fences = [];
 	readonly double _cornerRadius;
+	FenceView? _editingFence;
 
-	internal DesktopSurface(RECT workArea, double scale, IEnumerable<FenceFrame> frames, AppSettings settings, ShellItemLoader images)
+	internal DesktopSurface(RECT workArea, double scale, IEnumerable<FenceFrame> frames, AppSettings settings, ShellItemLoader images, FileRename rename, bool readOnly)
 	{
 		InitializeComponent();
 		Title = "MyDesktop";
@@ -44,6 +47,7 @@ public sealed partial class DesktopSurface : Window
 		WindowApi.Configure(Handle);
 		AppWindow.MoveAndResize(new RectInt32(workArea.Left, workArea.Top, workArea.Width, workArea.Height));
 		SystemBackdrop = new TransparentBackdrop(Handle);
+		_placement = new DesktopPlacement(Handle);
 		foreach (var frame in frames)
 		{
 			var model = frame.Active;
@@ -51,7 +55,7 @@ public sealed partial class DesktopSurface : Window
 			{
 				throw new InvalidDataException($"分区「{model.Title}」的尺寸无效：{model.Width}×{model.Height}。");
 			}
-			var fence = new FenceView(frame, settings, images);
+			var fence = new FenceView(frame, settings, images, rename, Handle, readOnly);
 			fence.ArrangeAt((model.X - workArea.Left) / scale, (model.Y - workArea.Top) / scale, model.Width / scale, model.Height / scale);
 			fence.BoundsChanged += UpdateRegion;
 			fence.SaveRequested += () =>
@@ -61,11 +65,40 @@ public sealed partial class DesktopSurface : Window
 				SaveRequested?.Invoke();
 			};
 			fence.ExitRequested += () => ExitRequested?.Invoke();
+			fence.EditingStarted += () =>
+			{
+				var previous = _editingFence;
+				_editingFence = fence;
+				if (previous != fence)
+				{
+					previous?.CancelEdit();
+				}
+				return DesktopInput.Begin(Handle);
+			};
+			fence.EditingEnded += () =>
+			{
+				if (_editingFence == fence)
+				{
+					_editingFence = null;
+					if (!IsClosed)
+					{
+						DesktopInput.End(Handle, _placement.DesktopHandle);
+					}
+				}
+			};
+			fence.CompositionFinished += () => DispatcherQueue.TryEnqueue(CancelDeactivatedEdit);
 			Surface.Children.Add(fence);
 			_fences.Add(fence);
 		}
 		UpdateRegion();
-		_placement = new DesktopPlacement(Handle);
+		Surface.PointerPressed += Surface_PointerPressed;
+		Activated += (_, args) =>
+		{
+			if (args.WindowActivationState == WindowActivationState.Deactivated)
+			{
+				DispatcherQueue.TryEnqueue(CancelDeactivatedEdit);
+			}
+		};
 		Closed += (_, _) =>
 		{
 			IsClosed = true;
@@ -85,6 +118,31 @@ public sealed partial class DesktopSurface : Window
 	internal event Action? ExitRequested;
 	internal event Action? Ready;
 	internal void ShowOnDesktop() => _placement.Show();
+	internal bool IsEditing => _editingFence != null;
+
+	void CancelDeactivatedEdit()
+	{
+		if (_editingFence is { IsComposing: false } && DesktopInput.IsInputDesktop() && !DesktopInput.OwnsForeground(Handle))
+		{
+			_editingFence.CancelEdit();
+		}
+	}
+
+	void Surface_PointerPressed(object sender, PointerRoutedEventArgs args)
+	{
+		if (_editingFence == null)
+		{
+			return;
+		}
+		for (var source = args.OriginalSource as DependencyObject; source != null; source = VisualTreeHelper.GetParent(source))
+		{
+			if (source == _editingFence)
+			{
+				return;
+			}
+		}
+		_editingFence.CancelEdit();
+	}
 
 	void Surface_Loaded(object sender, RoutedEventArgs args) => Ready?.Invoke();
 
@@ -124,7 +182,7 @@ public sealed partial class DesktopSurface : Window
 		}
 		if (message == 0x0021)
 		{
-			return 3;
+			return IsEditing ? 1 : 3;
 		}
 		return WindowApi.DefSubclassProc(hwnd, message, wParam, lParam);
 	}

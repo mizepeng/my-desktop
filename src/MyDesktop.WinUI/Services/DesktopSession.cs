@@ -17,6 +17,7 @@ internal sealed class DesktopSession : IDisposable
 	readonly StartupOptions _options;
 	readonly Action _exit;
 	readonly ShellItemLoader _images = new();
+	readonly FileRename _rename;
 	readonly List<DesktopSurface> _surfaces = [];
 	readonly DispatcherQueueTimer _saveTimer;
 	Window? _welcome;
@@ -27,6 +28,14 @@ internal sealed class DesktopSession : IDisposable
 		_settings = settings;
 		_options = options;
 		_exit = exit;
+		_rename = new FileRename(settings, SaveSoon);
+		_rename.Changed += () =>
+		{
+			foreach (var fence in _surfaces.SelectMany(surface => surface.Fences))
+			{
+				fence.RefreshContent();
+			}
+		};
 		_saveTimer = DispatcherQueue.GetForCurrentThread().CreateTimer();
 		_saveTimer.Interval = TimeSpan.FromMilliseconds(300);
 		_saveTimer.IsRepeating = false;
@@ -62,7 +71,7 @@ internal sealed class DesktopSession : IDisposable
 				continue;
 			}
 			var (workArea, scale) = GetMonitorWorkArea(monitor);
-			var surface = new DesktopSurface(workArea, scale, frames, _settings, _images);
+			var surface = new DesktopSurface(workArea, scale, frames, _settings, _images, _rename, _options.PreviewFile != null);
 			surface.SaveRequested += SaveSoon;
 			surface.ExitRequested += _exit;
 			surface.Closed += (_, _) => { if (!_disposed) { _exit(); } };
