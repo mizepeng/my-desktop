@@ -27,7 +27,8 @@ public sealed partial class DesktopSurface : Window
 	readonly DesktopIconsView _desktopIcons;
 	readonly Border _notice;
 	readonly TextBlock _noticeText;
-	FenceView? _editingFence;
+	NameEditor? _editingEditor;
+	FrameworkElement? _editingOwner;
 
 	internal DesktopSurface(RECT workArea, double scale, IEnumerable<FenceFrame> frames, AppSettings settings, ShellItemLoader images, FileRename rename, bool readOnly)
 	{
@@ -51,11 +52,13 @@ public sealed partial class DesktopSurface : Window
 		AppWindow.MoveAndResize(new RectInt32(workArea.Left, workArea.Top, workArea.Width, workArea.Height));
 		SystemBackdrop = new TransparentBackdrop(Handle);
 		_placement = new DesktopPlacement(Handle);
-		_desktopIcons = new DesktopIconsView(images, workArea, scale);
+		_desktopIcons = new DesktopIconsView(images, workArea, scale, rename, Handle);
 		_desktopIcons.BoundsChanged += UpdateRegion;
+		_desktopIcons.Failed += SetNotice;
+		RegisterEditor(_desktopIcons.EditorControl, _desktopIcons);
 		_desktopIcons.SelectionRequested += (_, _) =>
 		{
-			_editingFence?.CancelEdit();
+			_editingEditor?.Cancel();
 			if (DesktopInput.IsInputDesktop() && !_placement.ActivateDesktop())
 			{
 				SetNotice("未能将键盘焦点交给桌面，请再次点击图标。");
@@ -79,28 +82,7 @@ public sealed partial class DesktopSurface : Window
 				SaveRequested?.Invoke();
 			};
 			fence.ExitRequested += () => ExitRequested?.Invoke();
-			fence.EditingStarted += () =>
-			{
-				var previous = _editingFence;
-				_editingFence = fence;
-				if (previous != fence)
-				{
-					previous?.CancelEdit();
-				}
-				return DesktopInput.Begin(Handle);
-			};
-			fence.EditingEnded += () =>
-			{
-				if (_editingFence == fence)
-				{
-					_editingFence = null;
-					if (!IsClosed)
-					{
-						DesktopInput.End(Handle, _placement.DesktopHandle);
-					}
-				}
-			};
-			fence.CompositionFinished += () => DispatcherQueue.TryEnqueue(CancelDeactivatedEdit);
+			RegisterEditor(fence.EditorControl, fence);
 			Surface.Children.Add(fence);
 			_fences.Add(fence);
 		}
@@ -151,7 +133,7 @@ public sealed partial class DesktopSurface : Window
 	internal event Action? ExitRequested;
 	internal event Action? Ready;
 	internal void ShowOnDesktop() => _placement.Show();
-	internal bool IsEditing => _editingFence != null;
+	internal bool IsEditing => _editingEditor != null;
 	internal RECT WorkArea => _workArea;
 	internal double Scale => _scale;
 	internal DesktopIconsView DesktopIcons => _desktopIcons;
@@ -166,26 +148,54 @@ public sealed partial class DesktopSurface : Window
 
 	void CancelDeactivatedEdit()
 	{
-		if (_editingFence is { IsComposing: false } && DesktopInput.IsInputDesktop() && !DesktopInput.OwnsForeground(Handle))
+		if (_editingEditor is { IsComposing: false } && DesktopInput.IsInputDesktop() && !DesktopInput.OwnsForeground(Handle))
 		{
-			_editingFence.CancelEdit();
+			_editingEditor.Cancel();
 		}
+	}
+
+	void RegisterEditor(NameEditor editor, FrameworkElement owner)
+	{
+		editor.ActivationRequested += () =>
+		{
+			var previous = _editingEditor;
+			_editingEditor = editor;
+			_editingOwner = owner;
+			if (previous != editor)
+			{
+				previous?.Cancel();
+			}
+			return DesktopInput.Begin(Handle);
+		};
+		editor.Closed += () =>
+		{
+			if (_editingEditor == editor)
+			{
+				_editingEditor = null;
+				_editingOwner = null;
+				if (!IsClosed)
+				{
+					DesktopInput.End(Handle, _placement.DesktopHandle);
+				}
+			}
+		};
+		editor.CompositionFinished += () => DispatcherQueue.TryEnqueue(CancelDeactivatedEdit);
 	}
 
 	void Surface_PointerPressed(object sender, PointerRoutedEventArgs args)
 	{
-		if (_editingFence == null)
+		if (_editingEditor == null)
 		{
 			return;
 		}
 		for (var source = args.OriginalSource as DependencyObject; source != null; source = VisualTreeHelper.GetParent(source))
 		{
-			if (source == _editingFence)
+			if (source == _editingOwner)
 			{
 				return;
 			}
 		}
-		_editingFence.CancelEdit();
+		_editingEditor.Cancel();
 	}
 
 	void Surface_Loaded(object sender, RoutedEventArgs args) => Ready?.Invoke();

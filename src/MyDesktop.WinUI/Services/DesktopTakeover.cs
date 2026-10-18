@@ -21,6 +21,7 @@ internal sealed class DesktopTakeover : IDisposable
 	DesktopIconTarget? _target;
 	IconRecovery? _recovery;
 	DateTime _observedAt;
+	DateTime? _staleFilesSince;
 	string? _signature;
 	bool _busy, _pending, _dirty = true, _restoring, _disposed, _nativeEditing;
 	int _generation;
@@ -71,6 +72,22 @@ internal sealed class DesktopTakeover : IDisposable
 		_source.Refresh();
 	}
 
+	internal void ItemRenamed(string oldPath, string newPath, bool directory)
+	{
+		if (!IsActive && _target != null)
+		{
+			Release(null);
+		}
+		else
+		{
+			_generation++;
+		}
+		var selected = _selected.Select(key => ItemRename.RewritePath(key, oldPath, newPath, directory)).ToArray();
+		_selected.Clear();
+		_selected.UnionWith(selected);
+		Refresh();
+	}
+
 	void Observed(DesktopSnapshot? snapshot, string? error)
 	{
 		_snapshot = snapshot;
@@ -100,6 +117,14 @@ internal sealed class DesktopTakeover : IDisposable
 		int generation = _generation;
 		try
 		{
+			if (_session.FileWatchError is { } watchError)
+			{
+				throw new InvalidOperationException(watchError + "，请重启后重试。");
+			}
+			if (!_session.DesktopWatchReady)
+			{
+				throw new InvalidOperationException("桌面文件夹的监视尚未就绪，已保留系统图标。");
+			}
 			var target = DesktopIconTarget.Find(_fixture);
 			if (target == null || target.HiddenBySystem)
 			{
@@ -121,6 +146,17 @@ internal sealed class DesktopTakeover : IDisposable
 				throw new InvalidOperationException("桌面图标已被其他程序隐藏，请先退出另一个桌面接管实例。");
 			}
 			var snapshot = _snapshot;
+			// 文件变化通知可能先于 Explorer 快照，不能按旧路径把已改名成员重新画成散放图标。
+			if (snapshot.Items.Any(entry => entry.IsFileSystem && !File.Exists(entry.Key) && !Directory.Exists(entry.Key)))
+			{
+				_staleFilesSince ??= DateTime.UtcNow;
+				if (!IsActive || DateTime.UtcNow - _staleFilesSince >= TimeSpan.FromSeconds(3))
+				{
+					throw new InvalidOperationException("Explorer 尚未完成文件变化同步，已暂时恢复系统图标。");
+				}
+				return;
+			}
+			_staleFilesSince = null;
 			var monitors = _session.Surfaces.Select(surface => new DesktopMonitor(surface.WorkArea, surface.Scale)).ToArray();
 			var blocked = _session.Surfaces.SelectMany(surface => surface.Fences.Select(fence =>
 			{
@@ -330,7 +366,7 @@ internal sealed class DesktopTakeover : IDisposable
 		}
 	}
 
-	void HandleKey(DesktopInputCommand command, uint key, bool extend)
+	internal void HandleKey(DesktopInputCommand command, uint key, bool extend)
 	{
 		var keys = _session.Surfaces.SelectMany(surface => surface.DesktopIcons.Keys).ToArray();
 		if (!IsActive)
@@ -343,6 +379,20 @@ internal sealed class DesktopTakeover : IDisposable
 				foreach (string selected in _selected.ToArray())
 				{
 					Open(selected);
+				}
+				break;
+			case DesktopInputCommand.Rename:
+				if (_selected.Count == 1)
+				{
+					string selected = _selected.Single();
+					try
+					{
+						_session.Surfaces.Single(surface => surface.DesktopIcons.Keys.Contains(selected, StringComparer.OrdinalIgnoreCase)).DesktopIcons.BeginRename(selected);
+					}
+					catch (Exception ex)
+					{
+						Notice(ex.Message);
+					}
 				}
 				break;
 			case DesktopInputCommand.SelectAll:
@@ -362,7 +412,7 @@ internal sealed class DesktopTakeover : IDisposable
 						DesktopInputCommand.Next => Math.Min(keys.Length - 1, index + 1),
 						DesktopInputCommand.First => 0,
 						DesktopInputCommand.Last => keys.Length - 1,
-						DesktopInputCommand.Open or DesktopInputCommand.SelectAll or DesktopInputCommand.TypeAhead or DesktopInputCommand.Unsupported
+						DesktopInputCommand.Open or DesktopInputCommand.Rename or DesktopInputCommand.SelectAll or DesktopInputCommand.TypeAhead or DesktopInputCommand.Unsupported
 							=> throw new InvalidOperationException("此命令不属于位置导航。"),
 					};
 					Select(keys[destination], extend);

@@ -66,11 +66,19 @@ internal static class UsageStats
 	/// <summary>
 	/// 文件改名后记录跟着换成新路径；同一次改名可能从几处各通知一次，旧路径没有记录时什么也不做。
 	/// </summary>
-	public static void Rename(string oldKey, string newKey)
+	public static void Rename(string oldKey, string newKey, bool directory = false)
 	{
-		if (Records.Remove(oldKey, out var record))
+		var changes = Records.Keys.Select(key => (Old: key, New: string.Equals(key, oldKey, StringComparison.OrdinalIgnoreCase)
+			? newKey : directory ? ItemRename.RewritePath(key, oldKey, newKey, true) : key))
+			.Where(change => !string.Equals(change.Old, change.New, StringComparison.Ordinal)).ToArray();
+		foreach (var change in changes)
 		{
-			Records[newKey] = record;
+			var record = Records[change.Old];
+			Records.Remove(change.Old);
+			Records[change.New] = record;
+		}
+		if (changes.Length > 0)
+		{
 			Save();
 		}
 	}

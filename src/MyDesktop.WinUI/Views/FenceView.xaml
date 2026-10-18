@@ -1,7 +1,8 @@
 <UserControl
 	x:Class="MyDesktop.WinUI.Views.FenceView"
 	xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	xmlns:views="using:MyDesktop.WinUI.Views">
 	<Grid x:Name="PanelRoot" RequestedTheme="Dark">
 		<Border x:Name="Tint" />
 		<Grid>
@@ -31,19 +32,6 @@
 				<TextBlock x:Name="Status" Margin="12" TextWrapping="Wrap" IsHitTestVisible="False" Foreground="White" />
 			</Grid>
 		</Grid>
-		<Border x:Name="Editor" Visibility="Collapsed" Background="#F2232630" CornerRadius="8" Padding="12">
-			<ScrollViewer VerticalScrollBarVisibility="Auto">
-				<StackPanel Spacing="8">
-					<TextBlock x:Name="EditCaption" Foreground="White" />
-					<TextBox x:Name="EditName" KeyDown="EditName_KeyDown" KeyUp="EditName_KeyUp"
-						TextCompositionStarted="EditName_CompositionStarted" TextCompositionEnded="EditName_CompositionEnded" />
-					<TextBlock x:Name="EditError" Foreground="#FFFFB4AB" TextWrapping="Wrap" />
-					<StackPanel Orientation="Horizontal" Spacing="8">
-						<Button Content="确定" Click="EditConfirm_Click" />
-						<Button Content="取消" Click="EditCancel_Click" />
-					</StackPanel>
-				</StackPanel>
-			</ScrollViewer>
-		</Border>
+		<views:NameEditor x:Name="Editor" />
 	</Grid>
 </UserControl>

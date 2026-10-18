@@ -22,6 +22,7 @@ internal sealed class DesktopSession : IDisposable
 	readonly DispatcherQueueTimer _saveTimer;
 	Window? _welcome;
 	DesktopTakeover? _takeover;
+	FileChangeMonitor? _files;
 	bool _dirty, _disposed;
 
 	public DesktopSession(AppSettings settings, StartupOptions options, Action exit)
@@ -29,13 +30,12 @@ internal sealed class DesktopSession : IDisposable
 		_settings = settings;
 		_options = options;
 		_exit = exit;
-		_rename = new FileRename(settings, SaveSoon);
-		_rename.Changed += () =>
+		_rename = new FileRename(settings, SaveSoon, DesktopFolders);
+		_rename.Changed += (oldPath, newPath, directory) =>
 		{
-			foreach (var fence in _surfaces.SelectMany(surface => surface.Fences))
-			{
-				fence.RefreshContent();
-			}
+			_takeover?.ItemRenamed(oldPath, newPath, directory);
+			_files?.CheckFolders();
+			RefreshFiles();
 		};
 		_saveTimer = DispatcherQueue.GetForCurrentThread().CreateTimer();
 		_saveTimer.Interval = TimeSpan.FromMilliseconds(300);
@@ -46,6 +46,11 @@ internal sealed class DesktopSession : IDisposable
 	internal IReadOnlyList<DesktopSurface> Surfaces => _surfaces;
 	internal AppSettings Settings => _settings;
 	internal DesktopTakeover? Takeover => _takeover;
+	internal FileChangeMonitor? Files => _files;
+	internal string? FileWatchError { get; private set; }
+	internal bool DesktopWatchReady => DesktopFolders().All(folder => _files?.IsWatching(folder) == true);
+
+	IReadOnlyList<string> DesktopFolders() => _options.IsProbe ? [Path.Combine(AppPaths.DataDir, "桌面")] : [AppPaths.Desktop, AppPaths.CommonDesktop];
 
 	public void Start()
 	{
@@ -78,6 +83,24 @@ internal sealed class DesktopSession : IDisposable
 		if (_options.PreviewFile == null)
 		{
 			_takeover = new DesktopTakeover(this, _options.IsProbe);
+			_files = new FileChangeMonitor(DispatcherQueue.GetForCurrentThread(), WatchFolders);
+			_files.Relevant += IsRelevant;
+			_files.Renamed += (oldPath, newPath) =>
+			{
+				if (ItemRename.ShouldFollowExternalRename(oldPath, newPath))
+				{
+					// 改名通知可能到达时新目录已再次改名，不依赖此刻的文件属性判断是否要同步后代引用。
+					_rename.Observe(oldPath, newPath, true);
+				}
+			};
+			_files.Settled += RefreshFiles;
+			_files.Failed += message =>
+			{
+				FileWatchError = message;
+				Log.Error(message);
+				_takeover.Release(message + "，已恢复系统图标，请重启后重试。");
+			};
+			_files.Start();
 		}
 		if (_options.IsProbe)
 		{
@@ -149,6 +172,20 @@ internal sealed class DesktopSession : IDisposable
 		_welcome.Activate();
 	}
 
+	IReadOnlyList<FolderWatch> WatchFolders() => FolderWatch.Build(DesktopFolders(), _settings.Fences.Where(fence => fence.IsPortal).Select(fence => fence.FolderPath));
+
+	bool IsRelevant(string path) => DesktopFolders().Any(folder => PathUtil.AreEqual(Path.GetDirectoryName(path), folder))
+		|| _settings.Fences.Any(fence => fence.IsPortal && (PathUtil.AreEqual(fence.FolderPath, path) || PathUtil.AreEqual(Path.GetDirectoryName(path), fence.FolderPath)));
+
+	void RefreshFiles()
+	{
+		foreach (var fence in _surfaces.SelectMany(surface => surface.Fences))
+		{
+			fence.RefreshContent(true);
+		}
+		_takeover?.Refresh();
+	}
+
 	void SaveSoon()
 	{
 		if (_options.PreviewFile != null)
@@ -178,6 +215,7 @@ internal sealed class DesktopSession : IDisposable
 		}
 		_disposed = true;
 		_saveTimer.Stop();
+		_files?.Dispose();
 		_takeover?.Dispose();
 		Save();
 		foreach (var surface in _surfaces.Where(surface => !surface.IsClosed))

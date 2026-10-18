@@ -15,27 +15,36 @@ public sealed partial class DesktopIconsView : UserControl
 	readonly ShellItemLoader _images;
 	readonly RECT _work;
 	readonly double _scale;
+	readonly FileRename _rename;
+	readonly nint _owner;
 	readonly Dictionary<string, (DesktopIconPlacement Placement, Button Button, string? IconKey)> _cells = new(StringComparer.OrdinalIgnoreCase);
 	readonly HashSet<string> _selected = new(StringComparer.OrdinalIgnoreCase);
 	int _version;
+	string? _editingKey;
 
-	internal DesktopIconsView(ShellItemLoader images, RECT work, double scale)
+	internal DesktopIconsView(ShellItemLoader images, RECT work, double scale, FileRename rename, nint owner)
 	{
 		InitializeComponent();
 		_images = images;
 		_work = work;
 		_scale = scale;
+		_rename = rename;
+		_owner = owner;
 		Width = work.Width / scale;
 		Height = work.Height / scale;
 		Visibility = Visibility.Collapsed;
+		Editor.Opened += () => { Icons.IsHitTestVisible = false; BoundsChanged?.Invoke(); };
+		Editor.Closed += () => { Icons.IsHitTestVisible = true; _editingKey = null; BoundsChanged?.Invoke(); };
 	}
 
 	internal IReadOnlyList<string> Keys => _cells.Keys.ToArray();
 	internal IReadOnlyList<string> SelectedKeys => _selected.ToArray();
-	internal IEnumerable<RECT> HitRectangles => Visibility == Visibility.Visible ? _cells.Values.Select(cell => (RECT)cell.Placement.Bounds) : [];
+	internal IEnumerable<RECT> HitRectangles => Visibility == Visibility.Visible ? IconRectangles() : [];
+	internal NameEditor EditorControl => Editor;
 	internal event Action? BoundsChanged;
 	internal event Action<string, bool>? SelectionRequested;
 	internal event Action<string>? OpenRequested;
+	internal event Action<string>? Failed;
 
 	internal async Task SetItemsAsync(IReadOnlyList<DesktopIconPlacement> items)
 	{
@@ -70,6 +79,10 @@ public sealed partial class DesktopIconsView : UserControl
 		if (version != _version)
 		{
 			return;
+		}
+		if (_editingKey != null && !cells.ContainsKey(_editingKey))
+		{
+			Editor.Cancel();
 		}
 		Icons.Children.Clear();
 		_cells.Clear();
@@ -106,7 +119,61 @@ public sealed partial class DesktopIconsView : UserControl
 			OpenRequested?.Invoke(key);
 			args.Handled = true;
 		};
+		button.RightTapped += (_, args) =>
+		{
+			SelectionRequested?.Invoke(key, false);
+			if (_cells.TryGetValue(key, out var cell) && _rename.CanRenameDesktop(cell.Placement.Entry))
+			{
+				var command = new MenuFlyoutItem { Text = "重命名" };
+				command.Click += (_, _) =>
+				{
+					try
+					{
+						BeginRename(key);
+					}
+					catch (Exception ex)
+					{
+						Failed?.Invoke(ex.Message);
+					}
+				};
+				var menu = new MenuFlyout();
+				menu.Items.Add(command);
+				menu.ShowAt(button, args.GetPosition(button));
+			}
+			args.Handled = true;
+		};
 		return button;
+	}
+
+	internal void BeginRename(string key)
+	{
+		if (!_cells.TryGetValue(key, out var item))
+		{
+			throw new InvalidOperationException("此图标已发生变化，请刷新后重试。");
+		}
+		if (!_rename.CanRenameDesktop(item.Placement.Entry))
+		{
+			throw new InvalidOperationException("此桌面项目暂不支持改名。");
+		}
+		Editor.Cancel();
+		_editingKey = key;
+		Canvas.SetLeft(Editor, Math.Clamp((item.Placement.Bounds.Left - _work.Left) / _scale, 0, Math.Max(0, Width - Editor.Width)));
+		Canvas.SetTop(Editor, Math.Clamp((item.Placement.Bounds.Top - _work.Top) / _scale, 0, Math.Max(0, Height - Editor.Height)));
+		Editor.Begin("重命名文件或文件夹", item.Placement.Entry.DisplayName, input => _rename.RenameDesktop(item.Placement.Entry, input, _owner));
+	}
+
+	IEnumerable<RECT> IconRectangles()
+	{
+		foreach (var cell in _cells.Values)
+		{
+			yield return cell.Placement.Bounds;
+		}
+		if (Editor.IsEditing)
+		{
+			int left = _work.Left + (int)Math.Floor(Canvas.GetLeft(Editor) * _scale);
+			int top = _work.Top + (int)Math.Floor(Canvas.GetTop(Editor) * _scale);
+			yield return new RECT(left, top, left + (int)Math.Ceiling(Editor.Width * _scale), top + (int)Math.Ceiling(Editor.Height * _scale));
+		}
 	}
 
 	internal void Select(IEnumerable<string> keys)
@@ -127,9 +194,17 @@ public sealed partial class DesktopIconsView : UserControl
 
 	internal void ShowIcons(bool visible)
 	{
+		if (!visible)
+		{
+			Editor.Cancel();
+		}
 		Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
 		BoundsChanged?.Invoke();
 	}
 
-	internal void Invalidate() => _version++;
+	internal void Invalidate()
+	{
+		_version++;
+		Editor.Cancel();
+	}
 }

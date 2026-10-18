@@ -3,6 +3,7 @@ namespace MyDesktop.Services;
 internal enum DesktopInputCommand
 {
 	Open,
+	Rename,
 	SelectAll,
 	Previous,
 	Next,
@@ -34,6 +35,7 @@ internal sealed class DesktopKeyRouting
 			0x27 or 0x28 when !ctrl && !alt => DesktopInputCommand.Next,
 			0x24 when !ctrl && !alt => DesktopInputCommand.First,
 			0x23 when !ctrl && !alt => DesktopInputCommand.Last,
+			0x71 when !ctrl && !alt && !shift => DesktopInputCommand.Rename,
 			0x2E or 0x71 or 0x5D => DesktopInputCommand.Unsupported,
 			0x79 when shift => DesktopInputCommand.Unsupported,
 			0x0D when alt => DesktopInputCommand.Unsupported,

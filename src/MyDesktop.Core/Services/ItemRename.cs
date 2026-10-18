@@ -5,6 +5,12 @@ namespace MyDesktop.Services;
 
 internal static class ItemRename
 {
+	public static bool CanRenameDesktop(DesktopEntry entry, IEnumerable<string> desktopFolders) => entry.IsFileSystem && entry.CanRename
+		&& Path.IsPathFullyQualified(entry.Key) && desktopFolders.Any(folder => PathUtil.AreEqual(Path.GetDirectoryName(entry.Key.TrimEnd('\\', '/')), folder));
+
+	public static bool ShouldFollowExternalRename(string oldPath, string newPath) => !string.Equals(Path.GetExtension(oldPath), ".lnk", StringComparison.OrdinalIgnoreCase)
+		|| string.Equals(Path.GetExtension(newPath), ".lnk", StringComparison.OrdinalIgnoreCase);
+
 	public static bool CanRename(FenceSettings fence, string path)
 	{
 		if (!Path.IsPathFullyQualified(path))
@@ -29,19 +35,27 @@ internal static class ItemRename
 		return Path.Combine(Path.GetDirectoryName(path) ?? throw new ArgumentException("项目缺少父目录。"), name);
 	}
 
-	public static void UpdateReferences(AppSettings settings, string oldPath, string newPath, bool directory)
+	public static string RewritePath(string path, string oldPath, string newPath, bool directory)
 	{
+		if (!Path.IsPathFullyQualified(path))
+		{
+			return path;
+		}
+		if (PathUtil.AreEqual(path, oldPath))
+		{
+			return newPath;
+		}
+		return directory && PathUtil.IsUnder(path, oldPath) ? Path.Combine(newPath, Path.GetRelativePath(oldPath, path)) : path;
+	}
+
+	public static bool UpdateReferences(AppSettings settings, string oldPath, string newPath, bool directory)
+	{
+		bool changed = false;
 		string Rewrite(string path)
 		{
-			if (!Path.IsPathFullyQualified(path))
-			{
-				return path;
-			}
-			if (PathUtil.AreEqual(path, oldPath))
-			{
-				return newPath;
-			}
-			return directory && PathUtil.IsUnder(path, oldPath) ? Path.Combine(newPath, Path.GetRelativePath(oldPath, path)) : path;
+			string result = RewritePath(path, oldPath, newPath, directory);
+			changed |= !string.Equals(path, result, StringComparison.Ordinal);
+			return result;
 		}
 		foreach (var fence in settings.Fences)
 		{
@@ -49,5 +63,6 @@ internal static class ItemRename
 			fence.Members = fence.Members.Select(Rewrite).ToList();
 			fence.CustomOrder = fence.CustomOrder.Select(Rewrite).ToList();
 		}
+		return changed;
 	}
 }

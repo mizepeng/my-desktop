@@ -93,7 +93,7 @@ internal static class UiChecks
 					string name = GetClassName(window);
 					var rectangle = GetWindowRect(window);
 					Write($"可见顶层窗口：{name}，范围 {rectangle.Left},{rectangle.Top},{rectangle.Width},{rectangle.Height}，样式 0x{GetWindowLongPtr(window, GWL_EXSTYLE):X}。");
-					if (name is not ("UAC_InputIndicatorOverlayWnd" or "UAC Input Indicator"))
+					if (name is not ("UAC_InputIndicatorOverlayWnd" or "UAC Input Indicator" or "Shell_InputSwitchTopLevelWindow"))
 					{
 						visible++;
 					}
@@ -105,7 +105,8 @@ internal static class UiChecks
 			await RenameChecks.RunAsync(session);
 			await DesktopPlacementChecks.RunAsync(hwnd);
 			await TakeoverChecks.RunAsync(session);
-			Write("通过：分区、标签、改名、散放图标、接管恢复与层级回归。未操作实际桌面或注入输入。");
+			await FileChangeChecks.RunAsync(session);
+			Write("通过：分区、标签、改名、文件监视、散放图标、接管恢复与层级回归。未操作实际桌面或注入输入。");
 		}
 		finally
 		{

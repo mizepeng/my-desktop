@@ -20,7 +20,11 @@ var checks = new (string Name, Action Run)[]
 	("整理规则优先级及兜底语义不变", OrganizeRules),
 	("改名保留隐藏扩展名且拒绝非法文件名", RenameNames),
 	("改名严格区分普通子项和系统入口", RenameScope),
+	("散放改名要求桌面直接子项及 Shell 权限", LooseRenameScope),
 	("目录改名同步成员、映射及自定义顺序", RenameReferences),
+	("目录改名同步子项使用记录且重复通知不丢失", RenameUsage),
+	("外部快捷方式替换不改写分区成员", ShortcutReplacement),
+	("嵌套映射合并监视且保留根目录改名通知", NestedFolderWatches),
 	("散放图标排除全部标签成员并避开分区", LooseIconArrangement),
 	("自由排列沿用 Explorer 坐标和显示器缩放", LooseIconCoordinates),
 	("无法完整绘制散放图标时拒绝接管", InvalidDesktopLayout),
@@ -277,4 +281,54 @@ static void DesktopKeyboardProtection()
 	Require(!routing.Route(0x41, true, true, false, true, false, false, true).Intercept, "系统菜单或编辑框中的按键被拦截。");
 	Require(!routing.Route(0x2E, true, false, false, false, false, false, false).Intercept, "影响了其他程序中的 Delete。");
 	Require(routing.Route(0x41, true, true, false, true, false, false, false).Command == DesktopInputCommand.SelectAll, "全选没有交给 WinUI 图标视图。");
+	Require(routing.Route(0x71, true, true, false, false, false, false, false).Command == DesktopInputCommand.Rename, "F2 没有交给 WinUI 改名流程。");
+	Require(routing.Route(0x71, false, false, false, false, false, false, false).Intercept, "F2 的松开没有与按下配对。");
+}
+
+static void LooseRenameScope()
+{
+	string folder = Path.Combine(AppPaths.DataDir, "模拟桌面");
+	var entry = new DesktopEntry(Path.Combine(folder, "文件.txt"), "文件", true, false, default);
+	Require(ItemRename.CanRenameDesktop(entry, [folder]), "普通桌面文件被拒绝改名。");
+	Require(!ItemRename.CanRenameDesktop(entry with { IsFileSystem = false }, [folder]), "系统入口被当作普通文件改名。");
+	Require(!ItemRename.CanRenameDesktop(entry with { CanRename = false }, [folder]), "忽略了 Shell 不允许改名的标记。");
+	Require(!ItemRename.CanRenameDesktop(entry with { Key = folder }, [folder]), "允许把桌面目录本身改名。");
+	Require(!ItemRename.CanRenameDesktop(entry with { Key = Path.Combine(folder, "子目录", "文件.txt") }, [folder]), "允许改名非桌面直接子项。");
+	Require(!ItemRename.CanRenameDesktop(entry with { Key = "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}" }, [folder]), "允许按文件路径改名 CLSID 入口。");
+}
+
+static void RenameUsage()
+{
+	string oldFolder = Path.Combine(AppPaths.DataDir, "旧目录");
+	string newFolder = Path.Combine(AppPaths.DataDir, "新目录");
+	string child = Path.Combine(oldFolder, "子项.txt");
+	UsageStats.Add(oldFolder);
+	UsageStats.Add(child);
+	UsageStats.Rename(oldFolder, newFolder, true);
+	Require(UsageStats.Score(oldFolder) == 0 && UsageStats.Score(child) == 0, "旧路径仍保留使用记录。");
+	string newChild = Path.Combine(newFolder, "子项.txt");
+	Require(UsageStats.Score(newFolder) > 0 && UsageStats.Score(newChild) > 0, "目录或子项的使用记录没有同步。");
+	UsageStats.Rename(oldFolder, newFolder, true);
+	Require(UsageStats.Score(newFolder) > 0 && UsageStats.Score(newChild) > 0, "重复通知清空了新路径的使用记录。");
+}
+
+static void ShortcutReplacement()
+{
+	Require(!ItemRename.ShouldFollowExternalRename(@"C:\桌面\应用.lnk", @"C:\桌面\应用.lnk.bak"), "快捷方式更新时误把成员改成备份路径。");
+	Require(ItemRename.ShouldFollowExternalRename(@"C:\桌面\应用.lnk", @"C:\桌面\新应用.lnk"), "正常的快捷方式改名被忽略。");
+	Require(ItemRename.ShouldFollowExternalRename(@"C:\桌面\资料.txt", @"C:\桌面\资料.bak"), "普通文件改扩展名被当成快捷方式替换。");
+}
+
+static void NestedFolderWatches()
+{
+	string desktop = Path.Combine(AppPaths.DataDir, "桌面");
+	string portal = Path.Combine(AppPaths.DataDir, "映射");
+	string child = Path.Combine(portal, "子目录");
+	var watches = FolderWatch.Build([desktop, desktop.ToUpperInvariant()], [portal, child]);
+	Require(watches.Single(watch => PathUtil.AreEqual(watch.Folder, portal)).Recursive, "嵌套映射没有通过父目录递归监视。");
+	Require(!watches.Any(watch => PathUtil.AreEqual(watch.Folder, child)), "仍然为子目录持有阻止父目录改名的独立句柄。");
+	Require(watches.Count(watch => PathUtil.AreEqual(watch.Folder, desktop)) == 1 && !watches.Single(watch => PathUtil.AreEqual(watch.Folder, desktop)).Recursive,
+		"没有嵌套需求的桌面目录被重复或递归监视。");
+	Require(watches.Any(watch => PathUtil.AreEqual(watch.Folder, AppPaths.DataDir) && !watch.Recursive), "缺少对映射根目录改名的父目录监视。");
+	Require(FolderWatch.Build([], [@"C:\"]).Single().Folder == @"C:\", "盘符根目录被改成相对当前目录的路径。");
 }

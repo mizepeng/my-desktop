@@ -261,19 +261,21 @@ internal static class Program
 	{
 		var directory = Path.Combine(reportDirectory, "data-" + Guid.NewGuid().ToString("N"));
 		Directory.CreateDirectory(directory);
-		File.WriteAllText(Path.Combine(directory, "工作.txt"), "真实文件图标验证");
+		var desktopFolder = Path.Combine(directory, "桌面");
+		Directory.CreateDirectory(desktopFolder);
+		File.WriteAllText(Path.Combine(desktopFolder, "工作.txt"), "真实文件图标验证");
 		var portal = Path.Combine(directory, "映射");
 		Directory.CreateDirectory(portal);
 		File.WriteAllText(Path.Combine(portal, "资料一.txt"), "资料一");
 		File.WriteAllText(Path.Combine(portal, "资料二.txt"), "资料二");
-		File.WriteAllText(Path.Combine(directory, "散放一.txt"), "散放图标一");
-		File.WriteAllText(Path.Combine(directory, "散放二.txt"), "散放图标二");
+		File.WriteAllText(Path.Combine(desktopFolder, "散放一.txt"), "散放图标一");
+		File.WriteAllText(Path.Combine(desktopFolder, "散放二.txt"), "散放图标二");
 		var (area, scale) = DesktopFixtureProtocol.PrimaryArea();
 		var first = new FenceSettings
 		{
 			Title = "工作", X = area.Left + (int)(100 * scale), Y = area.Top + (int)(100 * scale),
 			Width = (int)(400 * scale), Height = (int)(300 * scale), LayoutDpi = (int)(96 * scale),
-			Members = [Path.Combine(directory, "工作.txt")],
+			Members = [Path.Combine(desktopFolder, "工作.txt")],
 		};
 		var second = new FenceSettings { Title = "资料", IsPortal = true, FolderPath = portal };
 		var third = new FenceSettings
@@ -290,9 +292,9 @@ internal static class Program
 		int originY = Math.Max((int)(470 * scale), area.Height / 2);
 		var snapshot = new DesktopSnapshot(true, new POINT((int)(96 * scale), (int)(104 * scale)), 48, area,
 		[
-			new DesktopEntry(Path.Combine(directory, "工作.txt"), "工作", true, false, new POINT((int)(32 * scale), originY)),
-			new DesktopEntry(Path.Combine(directory, "散放一.txt"), "散放一", true, false, new POINT((int)(32 * scale), originY + (int)(104 * scale))),
-			new DesktopEntry(Path.Combine(directory, "散放二.txt"), "散放二", true, false, new POINT((int)(32 * scale), originY + (int)(208 * scale))),
+			new DesktopEntry(Path.Combine(desktopFolder, "工作.txt"), "工作", true, false, new POINT((int)(32 * scale), originY)),
+			new DesktopEntry(Path.Combine(desktopFolder, "散放一.txt"), "散放一", true, false, new POINT((int)(32 * scale), originY + (int)(104 * scale))),
+			new DesktopEntry(Path.Combine(desktopFolder, "散放二.txt"), "散放二", true, false, new POINT((int)(32 * scale), originY + (int)(208 * scale))),
 		]);
 		File.WriteAllText(Path.Combine(directory, "desktop-snapshot.json"), JsonSerializer.Serialize(snapshot));
 		return directory;

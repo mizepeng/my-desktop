@@ -16,7 +16,6 @@ using MyDesktop.Services;
 using MyDesktop.WinUI.Effects;
 using MyDesktop.WinUI.Services;
 using Windows.Foundation;
-using Windows.System;
 using Windows.UI;
 
 namespace MyDesktop.WinUI.Views;
@@ -33,13 +32,12 @@ public sealed partial class FenceView : UserControl, IDisposable
 	readonly CompositionRoundedRectangleGeometry _geometry;
 	readonly ObservableCollection<FenceItem> _items = [];
 	readonly SystemBackdropElement _backdrop;
+	Task _contentTask = Task.CompletedTask;
 	int _contentVersion;
 	bool _dragging;
+	bool _refreshAfterEdit;
 	Point _pointerStart;
 	Vector3 _translationStart;
-	FenceItem? _editingItem;
-	bool _committing, _compositionEnded;
-	int _editVersion;
 
 	internal FenceView(FenceFrame frame, AppSettings settings, ShellItemLoader images, FileRename rename, nint owner, bool readOnly)
 	{
@@ -50,6 +48,16 @@ public sealed partial class FenceView : UserControl, IDisposable
 		_rename = rename;
 		_owner = owner;
 		_readOnly = readOnly;
+		Editor.Opened += () => UpdateEditing(false);
+		Editor.Closed += () =>
+		{
+			UpdateEditing(true);
+			if (_refreshAfterEdit)
+			{
+				_refreshAfterEdit = false;
+				_contentTask = LoadItemsAsync();
+			}
+		};
 		Width = frame.Active.Width;
 		Height = frame.Active.Height;
 		_backdrop = new SystemBackdropElement();
@@ -77,7 +85,7 @@ public sealed partial class FenceView : UserControl, IDisposable
 		Header.ContextFlyout = menu;
 		Loaded += async (_, _) =>
 		{
-			ContentReady = LoadItemsAsync();
+			_contentTask = LoadItemsAsync();
 			await ContentReady;
 		};
 		RefreshAppearance();
@@ -87,20 +95,18 @@ public sealed partial class FenceView : UserControl, IDisposable
 	internal FenceFrame Frame => _frame;
 	internal Visual PanelVisual => _visual;
 	internal double VisibleHeight => _frame.Active.RolledUp && !IsEditing ? 36 : Height;
-	internal Task ContentReady { get; private set; } = Task.CompletedTask;
+	internal Task ContentReady => WaitForContentAsync();
 	internal IReadOnlyList<string> DisplayedPaths => _items.Select(item => item.Path).ToArray();
 	internal string ContentStatus => Status.Text;
 	internal GridView ItemList => Items;
-	internal bool IsEditing => Editor.Visibility == Visibility.Visible;
-	internal bool IsComposing { get; private set; }
-	internal TextBox NameInput => EditName;
-	internal string EditErrorText => EditError.Text;
+	internal bool IsEditing => Editor.IsEditing;
+	internal bool IsComposing => Editor.IsComposing;
+	internal NameEditor EditorControl => Editor;
+	internal TextBox NameInput => Editor.NameInput;
+	internal string EditErrorText => Editor.ErrorText;
 	internal event Action? BoundsChanged;
 	internal event Action? SaveRequested;
 	internal event Action? ExitRequested;
-	internal event Func<bool>? EditingStarted;
-	internal event Action? EditingEnded;
-	internal event Action? CompositionFinished;
 
 	internal void ArrangeAt(double x, double y, double width, double height)
 	{
@@ -117,7 +123,7 @@ public sealed partial class FenceView : UserControl, IDisposable
 		_frame.Activate(id);
 		RefreshTabs();
 		RefreshAppearance();
-		ContentReady = LoadItemsAsync();
+		_contentTask = LoadItemsAsync();
 		SaveRequested?.Invoke();
 	}
 
@@ -220,7 +226,7 @@ public sealed partial class FenceView : UserControl, IDisposable
 	{
 		int version = ++_contentVersion;
 		var model = _frame.Active;
-		_items.Clear();
+		var loaded = new List<FenceItem>();
 		Status.Text = "";
 		try
 		{
@@ -244,11 +250,16 @@ public sealed partial class FenceView : UserControl, IDisposable
 				{
 					return;
 				}
-				_items.Add(new FenceItem(path, data.Name, data.ToBitmap()));
+				loaded.Add(new FenceItem(path, data.Name, data.ToBitmap()));
 			}
-			if (version == _contentVersion && _items.Count == 0)
+			if (version == _contentVersion)
 			{
-				Status.Text = "此分区为空";
+				_items.Clear();
+				foreach (var item in loaded)
+				{
+					_items.Add(item);
+				}
+				Status.Text = _items.Count == 0 ? "此分区为空" : "";
 			}
 		}
 		catch (Exception ex)
@@ -261,13 +272,45 @@ public sealed partial class FenceView : UserControl, IDisposable
 		}
 	}
 
-	internal void RefreshContent()
+	async Task WaitForContentAsync()
 	{
-		CancelEdit();
-		ContentReady = LoadItemsAsync();
+		while (true)
+		{
+			var current = _contentTask;
+			await current;
+			if (ReferenceEquals(current, _contentTask))
+			{
+				return;
+			}
+		}
 	}
 
-	internal void BeginTitleEdit() => BeginEdit(null);
+	internal void RefreshContent(bool preserveEdit = false)
+	{
+		if (preserveEdit && IsEditing)
+		{
+			_refreshAfterEdit = true;
+			return;
+		}
+		CancelEdit();
+		_contentTask = LoadItemsAsync();
+	}
+
+	internal void BeginTitleEdit()
+	{
+		PrepareEdit();
+		Editor.Begin("重命名分区", _frame.Active.Title, input =>
+		{
+			string name = input.Trim();
+			if (name.Length == 0)
+			{
+				throw new ArgumentException("分区名称不能为空。");
+			}
+			_frame.Active.Title = name;
+			RefreshTabs();
+			SaveRequested?.Invoke();
+		});
+	}
 
 	internal void BeginItemRename(string path)
 	{
@@ -276,144 +319,32 @@ public sealed partial class FenceView : UserControl, IDisposable
 		{
 			throw new InvalidOperationException("此项目暂不支持改名。");
 		}
-		BeginEdit(item);
+		PrepareEdit();
+		Editor.Begin("重命名文件或文件夹", item.Name, input => _rename.Rename(_frame.Active, item.Path, item.Name, input, _owner));
 	}
 
-	void BeginEdit(FenceItem? item)
+	void PrepareEdit()
 	{
 		if (_readOnly)
 		{
 			throw new InvalidOperationException("预览模式不能修改分区或文件名称。");
 		}
-		CancelEdit();
 		FinishDrag();
-		int version = ++_editVersion;
-		_editingItem = item;
-		EditCaption.Text = item == null ? "重命名分区" : "重命名文件或文件夹";
-		EditName.Text = item?.Name ?? _frame.Active.Title;
-		EditError.Text = "";
-		IsComposing = _compositionEnded = false;
-		Editor.Visibility = Visibility.Visible;
-		SetContentEnabled(false);
-		_geometry.Size = new Vector2((float)Width, (float)VisibleHeight);
-		BoundsChanged?.Invoke();
-		// 等右键菜单关闭后再把焦点交给输入框，避免菜单收尾时把焦点取走。
-		DispatcherQueue.TryEnqueue(() =>
-		{
-			if (!IsEditing || version != _editVersion)
-			{
-				return;
-			}
-			var activate = EditingStarted ?? throw new InvalidOperationException("分区尚未连接到桌面输入宿主。");
-			bool activated = activate();
-			Editor.UpdateLayout();
-			if (!activated || !EditName.Focus(FocusState.Programmatic))
-			{
-				EditError.Text = "请点击输入框开始输入。";
-			}
-			EditName.SelectAll();
-		});
 	}
 
-	internal bool CommitEdit()
-	{
-		if (!IsEditing || IsComposing || _committing)
-		{
-			return false;
-		}
-		bool title = _editingItem == null;
-		_committing = true;
-		try
-		{
-			if (_editingItem is { } item)
-			{
-				_rename.Rename(_frame.Active, item.Path, item.Name, EditName.Text, _owner);
-			}
-			else
-			{
-				string name = EditName.Text.Trim();
-				if (name.Length == 0)
-				{
-					throw new ArgumentException("分区名称不能为空。");
-				}
-				_frame.Active.Title = name;
-			}
-		}
-		catch (Exception ex)
-		{
-			EditError.Text = ex.Message;
-			Log.Error("重命名失败", ex);
-			return false;
-		}
-		finally
-		{
-			_committing = false;
-		}
-		CancelEdit();
-		if (title)
-		{
-			RefreshTabs();
-			SaveRequested?.Invoke();
-		}
-		return true;
-	}
+	internal bool CommitEdit() => Editor.Commit();
+	internal void CancelEdit() => Editor.Cancel();
 
-	internal void CancelEdit()
-	{
-		if (!IsEditing || _committing)
-		{
-			return;
-		}
-		Editor.Visibility = Visibility.Collapsed;
-		_editVersion++;
-		_editingItem = null;
-		IsComposing = _compositionEnded = false;
-		SetContentEnabled(true);
-		_geometry.Size = new Vector2((float)Width, (float)VisibleHeight);
-		BoundsChanged?.Invoke();
-		EditingEnded?.Invoke();
-	}
-
-	void SetContentEnabled(bool enabled)
+	void UpdateEditing(bool enabled)
 	{
 		Items.IsEnabled = FoldButton.IsEnabled = enabled;
 		foreach (var tab in Tabs.Children.OfType<Control>())
 		{
 			tab.IsEnabled = enabled;
 		}
+		_geometry.Size = new Vector2((float)Width, (float)VisibleHeight);
+		BoundsChanged?.Invoke();
 	}
-
-	void EditConfirm_Click(object sender, RoutedEventArgs args) => CommitEdit();
-	void EditCancel_Click(object sender, RoutedEventArgs args) => CancelEdit();
-	void EditName_CompositionStarted(TextBox sender, TextCompositionStartedEventArgs args) => IsComposing = true;
-
-	void EditName_CompositionEnded(TextBox sender, TextCompositionEndedEventArgs args)
-	{
-		IsComposing = false;
-		_compositionEnded = NativeMethods.GetAsyncKeyState(0x0D) < 0 || NativeMethods.GetAsyncKeyState(0x1B) < 0;
-		CompositionFinished?.Invoke();
-	}
-
-	void EditName_KeyDown(object sender, KeyRoutedEventArgs args)
-	{
-		// 确认候选词的 Enter、取消组词的 Escape 由输入法处理，不能同时结束改名。
-		if (IsComposing || _compositionEnded)
-		{
-			return;
-		}
-		if (args.Key == VirtualKey.Enter)
-		{
-			CommitEdit();
-			args.Handled = true;
-		}
-		else if (args.Key == VirtualKey.Escape)
-		{
-			CancelEdit();
-			args.Handled = true;
-		}
-	}
-
-	void EditName_KeyUp(object sender, KeyRoutedEventArgs args) => _compositionEnded = false;
 
 	void Items_RightTapped(object sender, RightTappedRoutedEventArgs args)
 	{
