@@ -171,14 +171,17 @@ public sealed partial class FenceView : UserControl, IDisposable
 	internal event Action? ContentChanged;
 	internal event Action<FrameworkElement, Point>? ItemContextRequested;
 
-	System.Drawing.Point ScreenPoint(PointerRoutedEventArgs args)
+	System.Drawing.Point ScreenPoint(PointerRoutedEventArgs args) => ScreenPoint(args.GetCurrentPoint(null).Position);
+
+	/// <summary>
+	/// 按宿主窗口坐标换算屏幕物理像素。
+	/// XAML 要到下一次合成提交才看到新的 Composition 平移，相对分区自身取点再叠加当前平移，同一帧内连续拖动会让坐标发散。
+	/// </summary>
+	internal System.Drawing.Point ScreenPoint(Point windowPoint)
 	{
-		var point = args.GetCurrentPoint(this).Position;
 		var window = NativeMethods.GetWindowRect(_owner);
 		double scale = NativeMethods.GetDpiForWindow(_owner) / 96.0;
-		var translation = _visual.TransformMatrix.Translation;
-		return new System.Drawing.Point(window.Left + (int)Math.Round((Canvas.GetLeft(this) + translation.X + point.X) * scale),
-			window.Top + (int)Math.Round((Canvas.GetTop(this) + translation.Y + point.Y) * scale));
+		return new System.Drawing.Point(window.Left + (int)Math.Round(windowPoint.X * scale), window.Top + (int)Math.Round(windowPoint.Y * scale));
 	}
 
 	internal IEnumerable<(string Key, Rect Bounds)> ItemRectangles()

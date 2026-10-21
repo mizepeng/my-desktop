@@ -65,6 +65,19 @@ internal static class FencePlacementChecks
 			await surface.Placement.EndAsync(false);
 			Require(!Bounds(surface, frame).IntersectsWith(Bounds(surface, neighbor)), "松手后滑到最近可用位置");
 
+			// 同一帧内连续移动时 XAML 还没看到新的 Composition 平移，指针换算不能叠加平移导致坐标发散。
+			start = Bounds(surface, frame);
+			var grab = new Windows.Foundation.Point((start.Left - surface.WorkArea.Left) / scale + 60, (start.Top - surface.WorkArea.Top) / scale + 12);
+			surface.Placement.Begin(frame, frame.ScreenPoint(grab), FenceEdges.None);
+			for (int step = 1; step <= 60; step++)
+			{
+				surface.Placement.Update(frame.ScreenPoint(new Windows.Foundation.Point(grab.X + step * 4, grab.Y + step * 2)));
+			}
+			var dragged = Bounds(surface, frame);
+			surface.Placement.Cancel();
+			Require(Math.Abs(dragged.Left - start.Left - Px(240)) <= 2 && Math.Abs(dragged.Top - start.Top - Px(120)) <= 2,
+				$"同一帧内连续拖动跟随指针位移，实际 {dragged.Left - start.Left},{dragged.Top - start.Top}");
+
 			neighbor.ArrangeAt(0, 0, surface.WorkArea.Width / scale, surface.WorkArea.Height / scale);
 			start = Bounds(surface, frame);
 			point = new(start.Left + Px(60), start.Top + Px(12));
