@@ -17,6 +17,7 @@ README 面向最终用户；构建与迁移说明维护在本文件、`docs/dev`
 | [docs/dev/architecture.md](docs/dev/architecture.md) | 改 WPF 入口的接管、窗口层级、分区、标签页、背景效果、整理动画、搜索、右键菜单、安装与自动更新等模块前；迁移对应功能时作为行为参照 |
 | [docs/dev/constraints.md](docs/dev/constraints.md) | 改窗口层级、透明窗口、钩子、Shell 图标、亚克力与毛玻璃、动画、内存相关代码前（必读，都是实测结论） |
 | [docs/dev/setup-and-release.md](docs/dev/setup-and-release.md) | 换电脑配环境、签名证书、打测试包（含 WinUI 测试包）或发行版安装包时 |
+| [docs/TODO.md](docs/TODO.md) | 开始或结束一项工作时。由 AI 助手维护：新增待办、完成打勾、做不了或撤回时取消勾选，完成很久的可以删除 |
 ## 常用命令
 ```bash
 dotnet build src/MyDesktop/MyDesktop.csproj
@@ -35,6 +36,7 @@ powershell -ExecutionPolicy Bypass -File installer/Build-Installer.ps1
 - 导入 PFX、信任证书由开发者本人在自己的终端里执行，PFX 密码不要交给 agent；不要另建新证书，自动更新只认 `installer/MyDesktop.cer` 这一张。
 - 安装包一律用 `Build-Installer.ps1` 生成并签名，漏签会让所有用户自动更新失败；版本号只改 csproj 的 `<Version>`。
 - 分区窗口绝不能把 owner 或 parent 设成资源管理器的窗口：跨进程窗口关系会共享输入队列，两个进程互相等待而死锁。
+- 开发者在用这台电脑，不要操控真实桌面：不在真实桌面启动第二个接管实例、注入鼠标键盘、切换桌面或结束资源管理器；界面验证用隔离 UI 验证，实际效果交给开发者实机确认。
 ## 代码约定
 - 遵循 `.editorconfig`：tab 缩进；含中文的 `.ps1` 必须是 UTF-8 带 BOM（Windows PowerShell 5.1 按系统代码页读取无 BOM 的脚本）。
 - 文本文件一律 LF 换行，由 `.gitattributes`（`* text=auto eol=lf`）统一，不依赖各电脑的 `core.autocrlf`：扩展包清单原样打进 msix，换行符不一致会让不同电脑打出内容不同的同版本扩展包。
