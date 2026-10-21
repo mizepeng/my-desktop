@@ -28,7 +28,8 @@ internal static class WindowApi
 				var part = CreateRoundRectRgn(rectangle.Left, rectangle.Top, rectangle.Right + 1, rectangle.Bottom + 1, radius * 2, radius * 2);
 				if (part == 0)
 				{
-					throw new Win32Exception();
+					throw new Win32Exception(Marshal.GetLastPInvokeError(),
+						$"CreateRoundRectRgn 失败：LTRB=({rectangle.Left},{rectangle.Top},{rectangle.Right},{rectangle.Bottom})，半径={radius}。");
 				}
 				try
 				{
