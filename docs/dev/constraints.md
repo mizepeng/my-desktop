@@ -1,0 +1,36 @@
+# 实测得出的约束
+
+本文从 AGENTS.md 拆出，汇集实测得到、从代码里看不出来的约束。改窗口层级、透明窗口、Shell 图标、钩子、亚克力与毛玻璃、动画等相关代码前先看。
+
+- 分区窗口绝不能把 owner 或 parent 设成资源管理器的窗口：跨进程窗口关系会共享输入队列，右键菜单等场景下两个进程互相等待而死锁。
+- 拖动吸附要按鼠标相对拖动起点的绝对位移计算；系统按「上次结果 + 鼠标增量」推算位置，直接改写会把窗口粘住。
+- 「用户文件夹」、OneDrive 等系统图标的解析名是真实路径（如 `C:\Users\xxx`）。只有父目录是用户桌面或公共桌面的项目才能按文件删除、改名、移动，否则会作用到整个目录。
+- 资源管理器隐藏着的图标列表不随缩放比例变化更新自己的 DPI，IFolderView 报告的间距会按新旧 DPI 之比失真，图标位置却已按新比例排好，读取时要校正（`ExplorerDesktopView.CorrectSpacing`）；分区窗口在缩放变化后也可能停在旧 DPI（`FenceManager.RefreshWindowsDpi`）。
+- 关闭自动排列时，IFolderView 报告的位置是图标图像左边缘、比图标顶端高约 2 DIP 处；自动排列时报告的是格子左上角，两种模式要分别换算（`DesktopTakeover.ToCell`、`ToPosition`）。
+- 系统图像列表对象在本进程里不应答 IImageList 的 QueryInterface，角标按虚表直接调用（`Native/ShellIconLoader`）。
+- 壁纸契合度为「填充」「跨区」、图片比屏幕高时，系统上面裁掉多出部分的三分之一、下面裁三分之二，不是上下居中；比屏幕宽时左右居中（实测：几种测试图设成壁纸后 `PrintWindow` 抓 Progman 量位置）。毛玻璃按这个规则画（`WallpaperBlur.Place`），按居中算会整体往上偏。`TranscodedWallpaperCache` 的 .meta 里那个 80.0 不是裁剪位置，各种宽高比都一样。
+- DWM 的系统背景材质（`DWMWA_SYSTEMBACKDROP_TYPE`：云母、亚克力、标签页）在窗口未激活时退回纯色，对分区这类几乎总是未激活的窗口没用，所以默认的毛玻璃是自己画的（`Services/WallpaperBlur`），前提是分区下面只有壁纸。未公开的 `SetWindowCompositionAttribute`（`WCA_ACCENT_POLICY`、`ACCENT_ENABLE_ACRYLICBLURBEHIND`）在未激活时照样实时模糊、跟着动态壁纸动（实测），「系统亚克力」用的就是它：AccentFlags 必须为 0，指定叠色（AccentFlags 2）的话不论叠色透明度多少都几乎只剩叠色；AccentState 3（模糊）拖动时一直闪；模糊半径固定、调不了。
+- 系统亚克力铺满整个窗口：窗口区域（`SetWindowRgn`）裁不掉它，WPF 窗口的 `Opacity` 也管不了它，分层窗口的整体透明度（`SetLayeredWindowAttributes`）才能让它跟着淡（实测）。所以它不加在分区上，放在单独的原生窗口上（`Views/AcrylicBackdrop`）：卷起展开时逐帧改大小（约 1 毫秒），淡入淡出时改整体透明度。圆角只能靠 DWM 的窗口圆角（`DWMWA_WINDOW_CORNER_PREFERENCE`），只有直角、小圆角 4、圆角 8 三档；圆角窗口一定带 DWM 阴影，关掉非客户区渲染、试遍 AccentFlags 都去不掉，所以全部亚克力窗口排在全部分区下面，阴影不会盖住旁边分区的内容；DWM 给圆角窗口画的边框用 `DWMWA_BORDER_COLOR` 设成 none 去掉。
+- 毛玻璃是缩小后模糊再放大显示的，缩小后的模糊半径太小时放大看得出一格一格的（实测半径 1 时）：模糊程度改变的是缩小比例，缩小后的半径固定为 6（`WallpaperBlur.ScaledRadius`，最多画成一半大小）。
+- Shell 返回的位图多数图标自下而上，图片缩略图（实测）等自上而下（用户反馈倒置的 Adobe 2026 程序图标应属此类），而 GetObject 读到的 DIBSECTION 高度一律为正、分不出来；取像素要用 GetDIBits 让系统按实际行序转换（`ShellIconLoader.ToBitmapSource`），直接读内存会把后一种上下颠倒。
+- WPF 的透明窗口（`AllowsTransparency`，分区和图标层都是）每次重画都要等显卡把画面拷回内存，显卡被游戏占满时就会一卡一卡。跟着鼠标连续变化的东西（框选框、拆标签预览）不要画在分区或整屏的图标层里，用 `Views/DrawFrameWindow`：CPU 画好像素交给 `UpdateLayeredWindow`，只有选框那么大。它是借系统 Static 窗口类建的原生窗口：WPF 的 `HwndSource` 不用逐像素透明时会强行去掉 `WS_EX_LAYERED`（事后用 `SetWindowLongPtr` 补上也会被改回去），`UpdateLayeredWindow` 就失败、什么都不显示。
+- 透明窗口按整窗大小占内存：CPU 绘制时一份宽×高×4 的私有缓冲加一份同样大的共享位图；硬件加速（`AppSettings.HardwareAcceleration`，`FenceManager.ApplyRenderMode`）时私有缓冲在显卡驱动里，窗口大到整屏还要多一块（150% 的 4K 屏上整屏的图标层：显卡 62 MB 私有加 31 MB 共享，CPU 31 加 31）。所以图标层只盖住图标所在的范围（`DesktopLayerWindow.ExtentSize`），只在本程序发起拖动、整个桌面都要能接住放置时扩成整屏；驱动为整屏窗口多留的那块约 32 MB 窗口缩回后也不还，第一次拖动以后一直占着（实测）。
+- 硬件加速时显卡驱动还在本进程里按块（每块保留 32 MB，大部分是零页）分配命令缓冲，随多个透明窗口的重画增长，空闲几分钟也不回落（实测 15～119 MB），CPU 绘制时没有。运行中切到 CPU 绘制立即生效，但已经加载的显卡驱动和这些内存不会还，要重启程序才降下来。
+- .NET 的 gen0 预算按 CPU 三级缓存的大小定，大缓存的 CPU 上很大（9800X3D 的 96 MB 对应 48 MB），GC 一直占着这么多已提交内存，比存活的对象多出几十 MB。csproj 用 `System.GC.Gen0MaxBudget` 限到 6 MB（小缓存 CPU 上的默认值）：实测 20 秒重度动画里 GC 从 36 次变成 270 次，累计暂停 12 → 43 毫秒，已提交 69 → 27 MB。
+- 前台切换、层级变化的 WinEvent 钩子要在打开分区窗口之前装好：启动那一阵子桌面被提到最前（比如刚装完点「完成」，安装程序关闭）的话，分区会被压在桌面下面没人纠正，要等看门狗或点一下桌面才露出来。
+- 透明窗口挪动左上角（同时改位置和大小）时，DWM 可能正好在窗口已挪、新画面还没给上时合成一帧，旧画面摆在新位置上闪一下（只改右边、下边不闪）。避不开时先截图顶替，再用 DWM 的 cloak 在同一次屏幕刷新（`DwmFlush` 之后）里换手；WPF 在 `SetWindowPos` 里就同步画好新的一帧（实测），挪完马上能换回。截图要用 WPF 自己画（`RenderTargetBitmap`，带透明度），不能截屏幕：动态壁纸（Wallpaper Engine）用 GDI 截屏是黑的，分区背后会跟着变黑闪一下（实测）。
+- `CompositionTarget.Rendering` 不按屏幕刷新节奏触发：在回调里接着订阅会连着触发（实测连等 10 次只用 0.2 毫秒），不能拿它「等几帧」。等帧用 `FlyingIcon.NextFrame`：后台线程循环 `DwmFlush`（240 Hz 下实测每次约 4.17 毫秒），每次合成后用 `Dispatcher.Invoke` 以输入优先级（低于重绘）在界面线程上完成共用的任务，两帧至少隔 5 毫秒（240 Hz 下约 120 次/秒）。不要在后台线程上直接完成任务：续体按 Normal 优先级排队，图标一多界面线程忙不过来时重绘和输入被饿住（实测 50 个图标错开起飞，排在重绘优先级的操作要等近 2 秒，改成在界面线程上完成后最多约 20 毫秒）。
+- WPF 透明窗口每次 `SetWindowPos` 都要同步重画：小窗口只挪位置约 0.4 毫秒、同时改大小 1.2～1.5 毫秒（CPU 绘制也一样）。所以逐帧改大小的飞行图标不用 WPF 窗口，和选框一样是原生分层窗口（`FlyingIcon`）：每帧用 WPF 的软件渲染（`RenderTargetBitmap`）把预画的阴影和图标合成进共用的 GDI 位图交给 `UpdateLayeredWindow`，大小没变的帧只挪位置。实测每帧约 0.15（只挪）～0.4 毫秒（重新合成）；50 个图标错开起飞：进程 CPU 2.7 → 约 1.6 秒，每个图标从只轮得到一半的帧变成全部跑满，创建 50 个飞行图标 0.5 → 0.17 秒，显卡驱动内存 25～39 → 0 MB。`UpdateLayeredWindow` 每次约 0.12 毫秒，只挪位置也差不多。不受硬件加速开关影响，开不开硬件加速这样都更省。
+- 飞行图标的阴影预先画成位图（`FlyingIcon.DrawShadow`：图标剪影加 `BlurEffect`，参数同原来的 `DropShadowEffect`），合成每帧时跟着图标按比例缩放：每帧现算模糊太贵（画一次约 0.7 毫秒）。以前飞行图标是 WPF 窗口、用 `DropShadowEffect` 时，硬件加速下显卡驱动内存还跟着涨（实测 50 个图标飞一次多占约 22 MB）。阴影按起点和图标里较大的尺寸画。
+- 文字阴影不要把 `DropShadowEffect` 直接加在 TextBlock 上：文字要先画进中间位图再合成，笔画明显发虚（实测，用户反馈「字体发虚」）。改用 `Views/TextShadow`：正文不带效果，后面叠一份加了 `BlurEffect` 的黑色副本。副本每绑定一个属性约多占 1.2 KB（实测 300 个名称绑 19 个属性多 7.4 MB），所以只绑运行中会变的属性，其余第一次排版时照抄，现在每个名称约多 9 KB。透明窗口本身只有灰度抗锯齿、用不了 ClearType，这一点改不了。
+- 往 `RenderTargetBitmap` 里画位图，高质量缩放（`RenderOptions.SetBitmapScalingMode`）要设在 `DrawingGroup` 或元素上：设在作为根的 `DrawingVisual` 上不起作用，缩小时和双线性一模一样（实测）。
+- 后台线程调 `Dispatcher.Invoke` 用非泛型的重载：程序退出、调度器关闭后泛型的 `Invoke<T>` 抛 `TaskCanceledException`，后台线程上没人接住，进程就崩了（实测）；非泛型的返回 null。
+- 收起后那一条的厚度要按 WPF 布局取整的方式算：标题栏和两侧边框各自取整再相加（`FenceWindow.CollapsedHeight`）。150% 时 1 DIP 的边框取整成 2 像素，共 49 像素，按 (30 + 2) × 1.5 整体取整只有 48，收起时标题栏被挤偏 1 像素，标题栏在下边、右边的分区展开收起时会动一下。
+- 低级钩子吞掉的事件不更新系统记录的按键状态：只吞右键松开时 `GetAsyncKeyState` 一直报告右键按着，随后分区里的右键框选、点桌面图标都会乱（实测）。要么按下、松开成对吞，要么都不吞；要让桌面收不到某次松开，就在鼠标下放一个本程序的窗口接住它（资源管理器的桌面线程在右键拖动时不抓鼠标，只在弹出菜单时抓，实测）。
+- 低级鼠标钩子：每个鼠标事件都要等钩子返回才交给前台程序（包括游戏），回调里没在拖动时的移动、滚轮等直接放行、不读事件内容，钩子线程用最高优先级（`Core/DesktopMouseWatcher`）。
+- 装着文件的文件夹，`IShellItemImageFactory` 取缩略图得到的是系统自带的黄色文件夹（露出里面的内容），不随用户换的图标主题变；空文件夹和 `SHGetFileInfo` 取到的是主题里的图标。所以文件夹只取图标（`SIIGBF_ICONONLY`，`ShellIconLoader.Load`）。
+- 用 `dynamic` 调任务计划程序的 COM 接口时，任务不存在抛的是 `FileNotFoundException`（HResult 0x80070002），不是 `COMException`，要按 HResult 判断。
+- 窗口层级不要把具体窗口直接传给 `SetWindowPos` 的 hWndInsertAfter（原生窗口探针实测）：普通窗口插在置顶窗口之后，调用成功却原地不动（显示桌面后切换标签，新标签留在最底下、只剩它的亚克力）；置顶窗口插在普通窗口之后也落不到它正下方；插在以管理员身份运行的程序的窗口之后被拒绝访问（错误码 5，`DeferWindowPos` 也一样；用户的 PixPin、VS Code 就是以管理员身份运行的）。先传 `HWND_TOP`、在窗口自己的 `WM_WINDOWPOSCHANGING` 里改写成那个窗口则都对：普通窗口跟着进入置顶层、置顶窗口跟着回到普通层，都紧挨在它下面，也不受权限限制（`DesktopHost.SetZOrder`）。不能先传 `HWND_BOTTOM`：目标和参照都已置顶时，消息里改写后仍会成功却原地不动，Win+D 后切换曾经置顶的隐藏标签就会留下亚克力盖住内容（隔离探针复现）；分区、图标层、亚克力自身触发排序时也统一先传 `HWND_TOP`。校正层级时同时检查亚克力是否紧贴图标层，只检查分区在桌面上方会漏掉分区夹在图标层和亚克力之间的情况。`DeferWindowPos` 批量调整和逐个调整结果一样，但一次生效，DWM 不会合成出中间状态（比如亚克力窗口已经挪了、分区还没挪）。
+- 不能把窗口插在它自己名下（`GW_OWNER`）的窗口之后：系统会把它连同名下的窗口扔到整个层级的最底下（实测）。本程序界面线程的输入法隐藏窗口（`IME`、`CiceroUIWndFrame`）归属于当前激活的窗口，曾被选作参照，刚点的分区就掉到桌面下面、只剩它的亚克力。选参照窗口时越过所有隐藏的窗口（本程序的也算）、其他程序鼠标穿透的分层窗口（如 PixPin 铺在桌面上方的透明窗口），以及正在挪动的窗口名下的窗口（`DesktopHost.IsIgnorable`、`NotOwnedBy`）。
+- 进程里第一次打开弹出窗口（下拉框、提示、菜单）时，WPF 要初始化 UI Automation、同步辅助功能树，界面线程多忙一两百毫秒，之后约 20 毫秒（用户电脑上的性能采样：首次展开设置窗口的下拉框约 230 毫秒，大部分在 `AutomationPeer.UpdateSubtree`）。所以启动动画播完后在屏幕外开合一次透明的弹出窗口，把这笔开销提前付掉（`FenceManager.WarmUpPopup`，测试程序实测首次展开 175 → 23 毫秒）。
+- 显示器开着自动颜色管理（advanced color）时，半透明窗口里的半透明内容显得比设定的更不透明：用户截图里半透明分区上 0.5 的图标量得约 0.62，0.7、0.75 的文字约 0.75、0.78；同一张截图对比的资源管理器（不透明窗口）里，隐藏项目的图标正好是 0.5。自己建的半透明测试窗口用 GDI 截屏（`CopyFromScreen`）量得的是标准值，量不出这个差别，要看用户截图或肉眼。所以剪切、隐藏的项目图标取 0.4，不是资源管理器的 0.5。
