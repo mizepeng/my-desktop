@@ -4,7 +4,7 @@ obj/
 .idea/
 *.user
 *.suo
-publish/
+dist/
 artifacts/
 *_wpftmp.csproj
 更新视频/

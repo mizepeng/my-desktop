@@ -1,9 +1,9 @@
 ﻿<#
 .SYNOPSIS
-	打发行版安装包：发布程序、编译安装包、用 MyDesktop 证书给安装包签名，publish 目录只留下安装包。
+	打发行版安装包：发布程序、编译安装包、用 MyDesktop 证书给安装包签名，dist\发布 目录只留下安装包。
 .DESCRIPTION
 	在仓库根目录运行：powershell -ExecutionPolicy Bypass -File installer\Build-Installer.ps1
-	打测试包加 -Test：输出 publish\测试\MyDesktop-Setup-<版本>-测试.exe，不动 publish 根目录里的正式包，publish\测试 里只留这一个；
+	打测试包加 -Test：输出 dist\测试\MyDesktop-Setup-<版本>-测试.exe，不动 dist\发布 里的正式包，dist\测试 里只留这一个；
 	个别情况要同时留几个测试包测不同场景时再加 -Label <场景>，输出 MyDesktop-Setup-<版本>-测试-<场景>.exe，不删别的测试包。
 	WinUI 重构测试包使用 -Test -WinUI，可加 -TestVersion 1.3.0 覆盖本次包的版本，不修改工程中的正式版本号。
 	签名证书取当前用户证书存储中主题为 CN=MyDesktop、带私钥且未过期的代码签名证书（换电脑时的导入方法见 src\MyDesktop\ShellExtension\Pack-DesktopMenu.ps1）。
@@ -19,10 +19,10 @@ $ErrorActionPreference = 'Stop'
 if ($WinUI -and -not $Test) { throw 'WinUI 入口尚未完成迁移，只能生成测试包，请同时指定 -Test' }
 if ($TestVersion -and (-not $Test -or $TestVersion -notmatch '^\d+\.\d+\.\d+$')) { throw '-TestVersion 只用于测试包，版本号必须为三段数字' }
 $root = Split-Path $PSScriptRoot -Parent
-$publish = Join-Path $root 'publish'
-# 测试包放 publish\测试，程序先发布到它下面的临时目录，打完删掉；正式包照旧发布到 publish 本身
-$output = if ($Test) { Join-Path $publish '测试' } else { $publish }
-$staging = if ($Test) { Join-Path $output '发布' } else { $publish }
+$dist = Join-Path $root 'dist'
+# 正式包放 dist\发布，程序直接发布到该目录，打完只留安装包；测试包放 dist\测试，程序先发布到它下面的暂存目录，打完删掉
+$output = if ($Test) { Join-Path $dist '测试' } else { Join-Path $dist '发布' }
+$staging = if ($Test) { Join-Path $output '暂存' } else { $output }
 
 $versionArguments = @()
 if ($TestVersion) { $versionArguments += "-p:Version=$TestVersion" }

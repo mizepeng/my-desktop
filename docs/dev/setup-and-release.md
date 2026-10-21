@@ -15,8 +15,8 @@
 - 不需要 Windows SDK：扩展包的打包和签名调用的是系统自带接口。
 
 ## 安装包与发版
-- 测试包用 `Build-Installer.ps1 -Test`：输出 `publish\测试\MyDesktop-Setup-<版本>-测试.exe`，不动 `publish` 根目录里的正式包，`publish\测试` 里只留这一个；个别情况要同时留几个测试包测不同场景时加 `-Label <场景>`。
-- 发行版安装包一律用 `Build-Installer.ps1` 生成：发布程序、用 ISCC 编译安装包、用 `CN=MyDesktop` 证书给安装包签名，`publish` 里只留下 `MyDesktop-Setup-<版本>.exe`。自动更新只接受这张证书签名的安装包，漏签会让所有用户更新失败。版本号只改 csproj 的 `<Version>`，exe、扩展包、安装包文件名都跟着它。发版时在 `docs/CHANGELOG.md` 顶部补上本版改动。
+- 测试包用 `Build-Installer.ps1 -Test`：输出 `dist\测试\MyDesktop-Setup-<版本>-测试.exe`，不动 `dist\发布` 里的正式包，`dist\测试` 里只留这一个；个别情况要同时留几个测试包测不同场景时加 `-Label <场景>`。
+- 发行版安装包一律用 `Build-Installer.ps1` 生成：发布程序、用 ISCC 编译安装包、用 `CN=MyDesktop` 证书给安装包签名，`dist\发布` 里只留下 `MyDesktop-Setup-<版本>.exe`。自动更新只接受这张证书签名的安装包，漏签会让所有用户更新失败。版本号只改 csproj 的 `<Version>`，exe、扩展包、安装包文件名都跟着它。发版时在 `docs/CHANGELOG.md` 顶部补上本版改动。
 - 桌面右键菜单扩展包（msix）在编译时生成并签名，需要签名证书（见「开发环境」），没有时跳过并给出提示。公钥 `installer/MyDesktop.cer` 随仓库提交，安装程序把它导入「受信任人」。
 - 推送到 main 和提交 PR 时 GitHub Actions 会编译一遍（`.github/workflows/build.yml`，不签名）；Issue 模板在 `.github/ISSUE_TEMPLATE`。
 - WinUI 重构测试包用 `Build-Installer.ps1 -Test -WinUI -TestVersion 1.3.0 -Label WinUI3`；版本覆盖仅用于本次产物，完整依赖安装在 `WinUI-Test` 子目录，沿用同一安装标识与用户配置。
