@@ -22,7 +22,11 @@ public sealed partial class FenceView
 	int _rollVersion;
 	Task _rollTask = Task.CompletedTask;
 	internal Func<bool>? RollInteractionHeld { get; set; }
-	internal event Action<bool>? TemporaryHostRequested;
+	/// <summary>
+	/// 临时展开开始时请求提升所在的收起分区浮层，收回动画结束后请求放回桌面层。
+	/// </summary>
+	internal event Action<bool>? RaiseRequested;
+	internal event Action? RolledChanged;
 	internal bool IsTemporarilyExpanded => _temporaryExpanded;
 	internal bool IsDropInside => _dropInside;
 	internal bool IsCollapsed => _frame.Active.RolledUp && !_temporaryExpanded && !IsEditing;
@@ -116,7 +120,7 @@ public sealed partial class FenceView
 		if (expanded && (!_frame.Active.RolledUp || IsEditing || _disposed) || expanded == _temporaryExpanded) { return; }
 		_temporaryExpanded = expanded;
 		_collapseTimer.Stop();
-		if (expanded) { TemporaryHostRequested?.Invoke(true); }
+		if (expanded) { RaiseRequested?.Invoke(true); }
 		else { ScopeHidden?.Invoke(_frame.Active.Id); }
 		UpdateRollLayout();
 		_rollTask = AnimateRollAsync();
@@ -126,7 +130,8 @@ public sealed partial class FenceView
 	{
 		_pointerInside = _dropInside = false;
 		_collapseTimer.Stop();
-		if (!_temporaryExpanded && _owner == _desktopOwner) { return; }
+		// 收起的分区常驻浮层，不能再按所在窗口判断；没有临时展开且没有动画时无需回收。
+		if (!_temporaryExpanded && !IsRolling) { return; }
 		CancelEdit();
 		foreach (var menu in _openMenus.ToArray()) { menu.Hide(); }
 		SetTemporaryExpanded(false);
@@ -190,7 +195,7 @@ public sealed partial class FenceView
 		{
 			IsRolling = false;
 			ApplyReveal();
-			if (!_temporaryExpanded) { TemporaryHostRequested?.Invoke(false); }
+			if (!_temporaryExpanded) { RaiseRequested?.Invoke(false); }
 			return;
 		}
 		var first = RevealAt(from);
@@ -212,7 +217,7 @@ public sealed partial class FenceView
 		_geometry.StopAnimation("Offset");
 		IsRolling = false;
 		ApplyReveal();
-		if (!_temporaryExpanded) { TemporaryHostRequested?.Invoke(false); }
+		if (!_temporaryExpanded) { RaiseRequested?.Invoke(false); }
 	}
 
 	void StartAnimation(string property, Vector2 from, Vector2 to)
@@ -233,6 +238,6 @@ public sealed partial class FenceView
 		IsRolling = false;
 		_reveal = IsCollapsed ? 0 : 1;
 		ApplyReveal();
-		if (!_temporaryExpanded) { TemporaryHostRequested?.Invoke(false); }
+		if (!_temporaryExpanded) { RaiseRequested?.Invoke(false); }
 	}
 }

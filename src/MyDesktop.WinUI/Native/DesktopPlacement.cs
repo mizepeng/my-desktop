@@ -10,17 +10,15 @@ internal sealed class DesktopPlacement : IDisposable
 {
 	public const uint RefreshMessage = 0x8051;
 	readonly nint _hwnd;
-	readonly bool _temporaryExpansion;
 	readonly nint _root = GetDesktopWindow();
 	readonly WinEventProc _callback;
 	readonly nint _foregroundHook, _windowHook;
 	nint _desktop;
-	bool _started, _queued, _disposed, _activating;
+	bool _started, _queued, _disposed, _activating, _raised;
 
-	public DesktopPlacement(nint hwnd, bool temporaryExpansion = false)
+	public DesktopPlacement(nint hwnd)
 	{
 		_hwnd = hwnd;
-		_temporaryExpansion = temporaryExpansion;
 		_callback = OnWindowEvent;
 		_foregroundHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, 0, _callback, 0, 0,
 			WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
@@ -48,6 +46,21 @@ internal sealed class DesktopPlacement : IDisposable
 	{
 		_started = false;
 		WindowApi.ShowWindow(_hwnd, SW_HIDE);
+	}
+
+	/// <summary>
+	/// 是否临时提升到置顶层底部（普通应用之上、任务栏之下）。
+	/// 未提升时与主宿主一样紧贴桌面，只用于收起分区浮层的悬停展开。
+	/// </summary>
+	public bool Raised
+	{
+		get => _raised;
+		set
+		{
+			if (_raised == value) { return; }
+			_raised = value;
+			Refresh();
+		}
 	}
 
 	public nint DesktopHandle => FindDesktop();
@@ -147,7 +160,7 @@ internal sealed class DesktopPlacement : IDisposable
 		bool anchorTopmost = anchor != 0 && (GetWindowLongPtr(anchor, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0;
 		bool currentlyTopmost = (GetWindowLongPtr(_hwnd, GWL_EXSTYLE).ToInt64() & WS_EX_TOPMOST) != 0;
 		// 桌面最前且没有参照时保留临时置顶；普通应用回到桌面上方后，随其参照撤销置顶。
-		return !adjacent || (_temporaryExpansion ? !currentlyTopmost : currentlyTopmost && anchor != 0 && !anchorTopmost);
+		return !adjacent || (_raised ? !currentlyTopmost : currentlyTopmost && anchor != 0 && !anchorTopmost);
 	}
 
 	nint FindDesktop()
@@ -180,13 +193,22 @@ internal sealed class DesktopPlacement : IDisposable
 
 	(nint Anchor, bool Adjacent) AnchorAbove(nint desktop)
 	{
-		if (_temporaryExpansion) { return BelowTopmostWindows(); }
+		if (_raised) { return BelowTopmostWindows(); }
 		bool adjacent = false;
+		// 收起分区浮层归属于主宿主，平时紧贴在主宿主上方，查找参照时越过主宿主。
+		// 主宿主与浮层都插在同一参照之下，后移动的会排在上面；浮层在主宿主下方时也要重新插入。
+		var owner = GetWindow(_hwnd, GW_OWNER);
+		bool ownerBelow = owner == 0;
 		for (var above = GetWindow(desktop, GW_HWNDPREV); above != 0; above = GetWindow(above, GW_HWNDPREV))
 		{
 			if (above == _hwnd)
 			{
-				adjacent = true;
+				adjacent = ownerBelow;
+				continue;
+			}
+			if (above == owner)
+			{
+				ownerBelow = true;
 				continue;
 			}
 			if (!IsWindowVisible(above) || IsIconic(above) || OwnedByHost(above))

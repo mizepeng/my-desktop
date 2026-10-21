@@ -68,6 +68,6 @@ internal sealed class DesktopGestures(DesktopSession session)
 			surface.DrawBand(null);
 			surface.SetInputCapture(false);
 		}
-		session.FilesCompleted(false);
+		session.InteractionFinished();
 	}
 }

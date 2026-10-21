@@ -30,7 +30,7 @@ internal sealed class DesktopSession : IDisposable
 	FenceTabs? _tabs;
 	FenceView? _activeFence;
 	DesktopSurface? _activeSurface;
-	bool _dirty, _disposed;
+	bool _dirty, _disposed, _filesDeferred;
 
 	public DesktopSession(AppSettings settings, StartupOptions options, Action exit)
 	{
@@ -108,7 +108,7 @@ internal sealed class DesktopSession : IDisposable
 			surface.PlacementAllowed = () => !Gestures.IsActive && !DragDrop.IsActive && !Tabs.IsDragging
 				&& !_surfaces.Any(other => other != surface && other.Placement.IsActive);
 			surface.Placement.MergeRequested += (source, target) => Tabs.Merge(surface, source, target);
-			surface.Placement.Changed += () => { UpdateInteraction(); if (!IsInteracting) { FilesCompleted(false); } };
+			surface.Placement.Changed += () => { UpdateInteraction(); InteractionFinished(); };
 			surface.DesktopIcons.SelectionRequested += (key, extend) => SelectLoose(key, extend, surface);
 			surface.DesktopIcons.ItemContextRequested += (_, anchor, point) =>
 			{
@@ -262,7 +262,13 @@ internal sealed class DesktopSession : IDisposable
 
 	void RefreshFiles()
 	{
-		if (_disposed || IsInteracting) { return; }
+		if (_disposed) { return; }
+		if (IsInteracting)
+		{
+			_filesDeferred = true;
+			return;
+		}
+		_filesDeferred = false;
 		foreach (var fence in _surfaces.SelectMany(surface => surface.Fences))
 		{
 			fence.RefreshContent(true);
@@ -403,6 +409,18 @@ internal sealed class DesktopSession : IDisposable
 		if (save) { SaveSoon(); }
 		_files?.CheckFolders();
 		RefreshFiles();
+	}
+
+	/// <summary>
+	/// 拖动、框选、标签拖动等纯交互结束后，只补上交互期间被暂缓的刷新。
+	/// 不能整体重读分区：重读会清空并重建每个分区的图标列表，每次拖动或点击标题栏后分区都会闪一下。
+	/// </summary>
+	internal void InteractionFinished()
+	{
+		if (_disposed || IsInteracting) { return; }
+		_files?.CheckFolders();
+		if (_filesDeferred) { RefreshFiles(); }
+		else { _takeover?.Refresh(); }
 	}
 
 	internal void UpdateInteraction()

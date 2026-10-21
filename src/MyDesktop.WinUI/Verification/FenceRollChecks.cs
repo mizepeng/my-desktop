@@ -54,10 +54,14 @@ internal static class FenceRollChecks
 				Require(strip.Equals(surface.LayoutBoundsOf(frame)) && surface.ExpandedBoundsOf(frame).Equals(expanded)
 					&& frame.Frame.Members.All(model => model.RollEdge == edge && model.RolledUp), $"{edge} 收起保持展开位置并同步标签，输入仅覆盖标题条");
 				Require((edge is RollEdge.Left or RollEdge.Right ? strip.Width : strip.Height) == (int)Math.Round(36 * surface.Scale), "标题条厚度按当前宿主 DPI 计算");
+				var overlay = surface.ExpandedHandle;
+				var layer = frame.Parent;
+				await WaitAsync(() => overlay != 0 && IsWindowVisible(overlay) && frame.InputOwner == overlay && !Topmost(overlay)
+					&& Above(app, overlay) && Above(overlay, surface.Handle), "收起的分区常驻浮层，浮层平时与桌面宿主同在普通应用之下");
 				frame.SetPointerInside(true);
 				await frame.RollReady;
 				await frame.ContentReady;
-				var overlay = surface.ExpandedHandle;
+				Require(frame.Parent == layer, "悬停展开只提升浮层层级，不迁移分区视图");
 				Require(overlay != 0 && IsWindowVisible(overlay) && Topmost(overlay) && !Topmost(surface.Handle)
 					&& Above(taskbar, overlay) && Above(overlay, app) && Above(app, surface.Handle), "仅临时展开浮层处于应用之上和任务栏之下");
 				Require(frame.InputOwner == overlay && frame.PanelVisual.Clip != null && surface.LayoutBoundsOf(frame).Equals(strip),
@@ -97,11 +101,13 @@ internal static class FenceRollChecks
 				frame.SetPointerInside(false);
 				await WaitAsync(() => !frame.IsTemporarilyExpanded, "鼠标离开后按配置延迟收回");
 				await frame.RollReady;
-				Require(!IsWindowVisible(overlay) && frame.InputOwner == surface.Handle && surface.BoundsOf(frame).Equals(strip), "收回结束后隐藏浮层并还原桌面层输入");
+				await WaitAsync(() => !Topmost(overlay) && Above(app, overlay) && Above(overlay, surface.Handle), "收回结束后浮层回到桌面层");
+				Require(IsWindowVisible(overlay) && frame.Parent == layer && frame.InputOwner == overlay && surface.BoundsOf(frame).Equals(strip),
+					"收回不迁移分区视图，收起条仍由浮层接收输入");
 				frame.SetPointerInside(true);
 				await frame.RollReady;
 				frame.SetRolledUp(false);
-				Require(!frame.IsTemporarilyExpanded && !IsWindowVisible(overlay) && frame.InputOwner == surface.Handle, "悬停状态改为固定展开时立即撤销临时置顶");
+				Require(!frame.IsTemporarilyExpanded && !IsWindowVisible(overlay) && frame.InputOwner == surface.Handle, "悬停状态改为固定展开时回到桌面宿主并收起空浮层");
 				await frame.RollReady;
 				Require(surface.ExpandedBoundsOf(frame).Equals(expanded) && surface.BoundsOf(frame).Equals(expanded) && !Topmost(surface.Handle), "固定展开恢复全部内容并保持桌面层");
 			}
@@ -138,7 +144,7 @@ internal static class FenceRollChecks
 			frame.SetTemporaryExpanded(true);
 			frame.SetTemporaryExpanded(false);
 			await frame.RollReady;
-			Require(!IsWindowVisible(surface.ExpandedHandle) && frame.InputOwner == surface.Handle, "展开尚未出第一帧就取消时也会回收浮层");
+			Require(!Topmost(surface.ExpandedHandle) && frame.InputOwner == surface.ExpandedHandle, "展开尚未出第一帧就取消时浮层也回到桌面层");
 			frame.SetRolledUp(false);
 			await Task.Delay(40);
 			frame.SetRolledUp(true);
@@ -152,7 +158,7 @@ internal static class FenceRollChecks
 			await frame.RollReady;
 			frame.SetPointerInside(false);
 			await Task.Delay(100);
-			Require(frame.IsTemporarilyExpanded && IsWindowVisible(surface.ExpandedHandle), "拖入文件仍可临时展开，拖放未结束时不收起");
+			Require(frame.IsTemporarilyExpanded && Topmost(surface.ExpandedHandle), "拖入文件仍可临时展开，拖放未结束时不收起");
 			session.DragDrop.End();
 			await WaitAsync(() => !frame.IsTemporarilyExpanded, "拖放结束后恢复延迟收回");
 			await frame.RollReady;
@@ -169,7 +175,7 @@ internal static class FenceRollChecks
 				await WaitAsync(() => opened, "临时浮层可以打开标题菜单");
 				frame.SetPointerInside(false);
 				await Task.Delay(100);
-				Require(frame.IsTemporarilyExpanded && IsWindowVisible(surface.ExpandedHandle), "菜单打开时保持临时展开");
+				Require(frame.IsTemporarilyExpanded && Topmost(surface.ExpandedHandle), "菜单打开时保持临时展开");
 			}
 			finally { menu.Hide(); }
 			await WaitAsync(() => !frame.IsTemporarilyExpanded, "菜单关闭后恢复收回计时");
@@ -196,7 +202,7 @@ internal static class FenceRollChecks
 			await frame.ContentReady;
 			Require(frame.Frame.Active.Id == activeId && frame.IsTemporarilyExpanded && surface.Fences.Count == 2, "合并保留活动标签及临时展开状态");
 			session.Takeover!.Release("隔离检查撤销临时展开。");
-			Require(!frame.IsTemporarilyExpanded && !IsWindowVisible(surface.ExpandedHandle) && frame.InputOwner == surface.Handle, "接管撤销时立即回收临时浮层");
+			Require(!frame.IsTemporarilyExpanded && !Topmost(surface.ExpandedHandle) && frame.InputOwner == surface.ExpandedHandle, "接管撤销时浮层立即回到桌面层");
 			session.Takeover.Refresh();
 			await WaitAsync(() => session.Takeover.IsActive, "回收浮层后可以重新接管测试桌面");
 			Require(GetForegroundWindow() == foreground, "四向动画、临时层级与输入检查没有改变用户前台窗口");

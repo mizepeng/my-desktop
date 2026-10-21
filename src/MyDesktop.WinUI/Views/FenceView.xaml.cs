@@ -40,6 +40,7 @@ public sealed partial class FenceView : UserControl, IDisposable
 	bool _refreshAfterEdit;
 	bool _settingSelection;
 	bool _disposed;
+	bool _suspendContent, _contentDeferred;
 	IReadOnlySet<string> _cut = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
 	internal FenceView(FenceFrame frame, AppSettings settings, ShellItemLoader images, FileRename rename, nint owner, bool readOnly)
@@ -154,7 +155,20 @@ public sealed partial class FenceView : UserControl, IDisposable
 	internal string ContentStatus => Status.Text;
 	internal GridView ItemList => Items;
 	internal bool IsEditing => Editor.IsEditing;
-	internal bool SuspendContentUpdates { get; set; }
+	internal bool SuspendContentUpdates
+	{
+		get => _suspendContent;
+		set
+		{
+			_suspendContent = value;
+			// 暂缓期间读完的内容已丢弃，恢复后只补读这个分区。
+			if (!value && _contentDeferred)
+			{
+				_contentDeferred = false;
+				RefreshContent(true);
+			}
+		}
+	}
 	internal bool IsComposing => Editor.IsComposing;
 	internal NameEditor EditorControl => Editor;
 	internal TextBox NameInput => Editor.NameInput;
@@ -277,7 +291,8 @@ public sealed partial class FenceView : UserControl, IDisposable
 		_temporaryExpanded = false;
 		_collapseTimer.Stop();
 		_frame.SetRolledUp(rolledUp);
-		TemporaryHostRequested?.Invoke(false);
+		RaiseRequested?.Invoke(false);
+		RolledChanged?.Invoke();
 		_rollTask = AnimateRollAsync();
 		FoldButton.Content = rolledUp ? "⌄" : "⌃";
 		SaveRequested?.Invoke();
@@ -350,7 +365,11 @@ public sealed partial class FenceView : UserControl, IDisposable
 				}
 				loaded.Add(new FenceItem(path, data.Name, data.ToBitmap()));
 			}
-			if (version == _contentVersion && !SuspendContentUpdates)
+			if (version == _contentVersion && SuspendContentUpdates)
+			{
+				_contentDeferred = true;
+			}
+			else if (version == _contentVersion)
 			{
 				_settingSelection = true;
 				_items.Clear();

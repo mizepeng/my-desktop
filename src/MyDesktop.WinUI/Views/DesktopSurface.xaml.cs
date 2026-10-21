@@ -36,7 +36,9 @@ public sealed partial class DesktopSurface : Window
 	FrameworkElement? _editingOwner;
 	bool _clipboardListener;
 	bool _captureInput;
+	bool _shown;
 	ExpandedSurface? _expanded;
+	readonly HashSet<FenceView> _raised = [];
 
 	internal DesktopSurface(RECT workArea, double scale, IEnumerable<FenceFrame> frames, AppSettings settings, ShellItemLoader images, FileRename rename, bool readOnly)
 	{
@@ -139,7 +141,12 @@ public sealed partial class DesktopSurface : Window
 	internal event Action? Ready;
 	internal event Action? ClipboardChanged;
 	internal event Action<FenceView>? FenceAdded;
-	internal void ShowOnDesktop() => _placement.Show();
+	internal void ShowOnDesktop()
+	{
+		_shown = true;
+		_placement.Show();
+		if (_expanded?.Fences.Any() == true) { _expanded.Show(); }
+	}
 	internal bool IsEditing => _editingEditor != null;
 	internal RECT WorkArea => _workArea;
 	internal double Scale => _scale;
@@ -164,7 +171,8 @@ public sealed partial class DesktopSurface : Window
 		var fence = new FenceView(frame, _settings, _images, _rename, Handle, _readOnly);
 		fence.ArrangeAt((model.X - _workArea.Left) / _scale, (model.Y - _workArea.Top) / _scale, model.Width / _scale, model.Height / _scale);
 		fence.BoundsChanged += UpdateRegion;
-		fence.TemporaryHostRequested += expanded => HostTemporaryExpansion(fence, expanded);
+		fence.RaiseRequested += raised => SetFenceRaised(fence, raised);
+		fence.RolledChanged += () => HostFence(fence);
 		fence.PlacementStarted += (point, edges) => Placement.Begin(fence, point, edges);
 		fence.PlacementMoved += Placement.Update;
 		fence.PlacementFinished += async canceled => await Placement.EndAsync(canceled);
@@ -180,7 +188,8 @@ public sealed partial class DesktopSurface : Window
 		RegisterEditor(fence.EditorControl, fence);
 		_fences.Add(fence);
 		FenceAdded?.Invoke(fence);
-		Surface.Children.Add(fence);
+		if (model.RolledUp) { AddToLayer(fence); }
+		else { Surface.Children.Add(fence); }
 		RaiseFence(fence);
 		UpdateRegion();
 		return fence;
@@ -190,8 +199,13 @@ public sealed partial class DesktopSurface : Window
 	{
 		if (!_fences.Contains(fence)) { throw new ArgumentException("分区视图不属于当前宿主。", nameof(fence)); }
 		fence.Dispose();
+		if (_expanded?.Contains(fence) == true)
+		{
+			SetFenceRaised(fence, false);
+			_expanded.Remove(fence);
+		}
+		else { Surface.Children.Remove(fence); }
 		_fences.Remove(fence);
-		Surface.Children.Remove(fence);
 		int order = 1;
 		foreach (var other in _fences.OrderBy(Canvas.GetZIndex)) { Canvas.SetZIndex(other, order++); }
 		Canvas.SetZIndex(_notice, _fences.Count + 1);
@@ -199,23 +213,43 @@ public sealed partial class DesktopSurface : Window
 		UpdateRegion();
 	}
 
-	void HostTemporaryExpansion(FenceView fence, bool expanded)
+	/// <summary>
+	/// 收起的分区常驻收起分区浮层，固定展开的分区留在主宿主。
+	/// 只在收起状态改变时迁移视图；悬停展开与收回只提升或放回浮层，不迁移。
+	/// </summary>
+	void HostFence(FenceView fence)
 	{
 		if (IsClosed || !_fences.Contains(fence)) { return; }
-		if (expanded)
+		bool layered = _expanded?.Contains(fence) == true;
+		if (fence.Frame.Active.RolledUp == layered) { return; }
+		if (layered)
 		{
-			_expanded ??= new ExpandedSurface(this);
-			if (_expanded.Contains(fence)) { return; }
-			Surface.Children.Remove(fence);
-			_expanded.Add(fence);
-		}
-		else if (_expanded?.Contains(fence) == true)
-		{
-			_expanded.Remove(fence);
+			SetFenceRaised(fence, false);
+			_expanded!.Remove(fence);
 			fence.Rehost(Handle);
 			Surface.Children.Add(fence);
 		}
+		else
+		{
+			Surface.Children.Remove(fence);
+			AddToLayer(fence);
+		}
 		UpdateRegion();
+	}
+
+	void AddToLayer(FenceView fence)
+	{
+		_expanded ??= new ExpandedSurface(this);
+		_expanded.Add(fence);
+		if (_shown) { _expanded.Show(); }
+	}
+
+	void SetFenceRaised(FenceView fence, bool raised)
+	{
+		if (IsClosed) { return; }
+		if (raised && _expanded?.Contains(fence) == true) { _raised.Add(fence); }
+		else { _raised.Remove(fence); }
+		_expanded?.SetRaised(_raised.Count > 0);
 	}
 
 	void SaveRollEdge(FenceView fence)

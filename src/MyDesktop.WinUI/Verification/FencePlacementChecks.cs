@@ -59,11 +59,16 @@ internal static class FencePlacementChecks
 
 			start = Bounds(surface, frame);
 			point = new(start.Left + Px(60), start.Top + Px(12));
+			var shown = surface.Fences.ToDictionary(item => item, item => item.ItemList.Items.ToArray());
+			Require(shown[frame].Length > 0, "拖动前分区已显示图标");
 			surface.Placement.Begin(frame, point, FenceEdges.None);
 			surface.Placement.Update(new(point.X + Px(480), point.Y + Px(60)));
 			Require(Bounds(surface, frame).IntersectsWith(Bounds(surface, neighbor)), "移动期间允许经过相邻分区");
 			await surface.Placement.EndAsync(false);
 			Require(!Bounds(surface, frame).IntersectsWith(Bounds(surface, neighbor)), "松手后滑到最近可用位置");
+			await Task.Delay(400);
+			// 拖动结束只补暂缓的刷新，重建图标列表会让分区闪一下。
+			Require(shown.All(pair => pair.Key.ItemList.Items.SequenceEqual(pair.Value)), "拖动结束没有重建任何分区的图标列表");
 
 			// 同一帧内连续移动时 XAML 还没看到新的 Composition 平移，指针换算不能叠加平移导致坐标发散。
 			start = Bounds(surface, frame);

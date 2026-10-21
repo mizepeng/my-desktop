@@ -5,7 +5,7 @@
 ## 项目概况
 MyDesktop：Windows 11 桌面分区整理工具（对标 Fences），.NET 10，正在迁移到 WinUI 3 + Composition。
 - `src/MyDesktop.Core`：不依赖界面框架的模型、配置存储、备份、使用记录、拼音搜索、标签组、桌面快照和散放布局规则；保留现有配置命名空间及 JSON 格式。
-- `src/MyDesktop.WinUI`：新界面入口，使用 Windows App SDK 2.5.1；每屏一个桌面宿主，分区和标签均为内部视图，临时展开按需共用同屏浮层。
+- `src/MyDesktop.WinUI`：新界面入口，使用 Windows App SDK 2.5.1；每屏一个桌面宿主，分区和标签均为内部视图，收起的分区常驻同屏浮层。
 - `src/MyDesktop`：迁移期间保留的 WPF 入口，引用同一个核心工程；安装包仍使用此入口，尚未切换发行入口。
 - `tests/MyDesktop.Core.Tests`：无第三方依赖的控制台回归检查，直接运行返回通过或失败退出码。
 - `tests/MyDesktop.WinUI.Smoke`：不切换过去的独立桌面验证启动器，生成独立配置及测试文件，不在真实桌面注入鼠标键盘。

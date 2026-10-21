@@ -12,6 +12,10 @@ using static MyDesktop.Native.NativeMethods;
 
 namespace MyDesktop.WinUI.Views;
 
+/// <summary>
+/// 同屏收起分区常驻的浮层：平时与主宿主一样紧贴桌面，悬停或拖放临时展开时整体提升到置顶层底部。
+/// 展开与收回只改变本窗口层级，不在窗口之间迁移分区视图，迁移会有一到几帧两边都没画出分区。
+/// </summary>
 internal sealed class ExpandedSurface : Window, IDisposable
 {
 	readonly DesktopSurface _source;
@@ -31,7 +35,7 @@ internal sealed class ExpandedSurface : Window, IDisposable
 		_source = source;
 		Content = _canvas;
 		_canvas.Children.Add(_band);
-		Title = "MyDesktop 临时展开";
+		Title = "MyDesktop 收起分区";
 		Handle = WindowNative.GetWindowHandle(this);
 		_procedure = WindowMessage;
 		if (!WindowApi.SetWindowSubclass(Handle, _procedure, 1, 0)) { throw new Win32Exception(); }
@@ -44,7 +48,7 @@ internal sealed class ExpandedSurface : Window, IDisposable
 		var work = source.WorkArea;
 		AppWindow.MoveAndResize(new RectInt32(work.Left, work.Top, work.Width, work.Height));
 		SystemBackdrop = new TransparentBackdrop(Handle);
-		_placement = new DesktopPlacement(Handle, true);
+		_placement = new DesktopPlacement(Handle);
 		_canvas.PointerPressed += source.Surface_PointerPressed;
 		Activated += (_, args) =>
 		{
@@ -55,14 +59,16 @@ internal sealed class ExpandedSurface : Window, IDisposable
 	internal nint Handle { get; }
 	internal bool IsBandVisible => _band.Visibility == Visibility.Visible;
 	internal bool Contains(FenceView fence) => _canvas.Children.Contains(fence);
+	internal IEnumerable<FenceView> Fences => _canvas.Children.OfType<FenceView>();
 	internal void Refresh() => _placement.Refresh();
+	internal void Show() => _placement.Show();
+	internal void SetRaised(bool raised) => _placement.Raised = raised;
 
 	internal void Add(FenceView fence)
 	{
 		fence.Rehost(Handle);
 		_canvas.Children.Add(fence);
 		UpdateRegion();
-		_placement.Show();
 	}
 
 	internal void Remove(FenceView fence)

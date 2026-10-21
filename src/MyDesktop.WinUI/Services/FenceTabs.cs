@@ -110,7 +110,7 @@ internal sealed class FenceTabs(DesktopSession session)
 		surface.SetInputCapture(false);
 		session.UpdateInteraction();
 		if (detach) { Detach(surface, fence, _tab, _point); }
-		session.FilesCompleted(false);
+		session.InteractionFinished();
 	}
 
 	Rectangle DetachedBounds(DesktopSurface surface, FenceView source, Point? point)
