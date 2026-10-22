@@ -1120,8 +1120,8 @@ internal sealed class DesktopTakeover : IDisposable
 		Action action = key switch
 		{
 			DesktopKey.Open => () => Open(all, owner.Handle),
-			DesktopKey.Delete => () => ItemOps.Delete(owner.Handle, all, false),
-			DesktopKey.DeletePermanently => () => ItemOps.Delete(owner.Handle, all, true),
+			DesktopKey.Delete => () => DeleteFromKeyboard(owner, all, false),
+			DesktopKey.DeletePermanently => () => DeleteFromKeyboard(owner, all, true),
 			DesktopKey.Rename => () => BeginRename(selected.FirstOrDefault(i => i.CanRename)),
 			DesktopKey.SelectAll => SelectAllOnDesktop,
 			DesktopKey.Copy => () => ItemOps.CopyToClipboard(all, false),
@@ -1320,6 +1320,19 @@ internal sealed class DesktopTakeover : IDisposable
 		var spacing = Items.Snapshot?.Spacing ?? new POINT(0, 0);
 		var (items, desktop) = SelectionForShell();
 		layer.ShowItemMenu(items, desktop, new POINT(cell.X + spacing.X / 2, cell.Y + spacing.Y / 2), selected[0]);
+	}
+
+	/// <summary>
+	/// 框选后桌面还在前台，这时按删除键由键盘钩子转过来，本程序不在前台，系统不让弹出的确认框（Shift+Delete 永久删除）到前面，
+	/// 用户反馈多选后按 Shift+Delete 没反应；和桌面在前台时按 F2 改名一样，先把图标层切到前台。
+	/// </summary>
+	void DeleteFromKeyboard(DesktopLayerWindow owner, List<FenceItem> items, bool permanent)
+	{
+		if (!owner.IsActive && !NativeMethods.ForceForegroundWindow(owner.Handle))
+		{
+			Log.Warn("删除前没能切到前台，确认框可能被挡住");
+		}
+		ItemOps.Delete(owner.Handle, items, permanent);
 	}
 
 	void ShowPropertiesForSelection(DesktopLayerWindow owner)
