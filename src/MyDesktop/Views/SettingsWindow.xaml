@@ -71,6 +71,7 @@
 				<ListBoxItem Content="外观" />
 				<ListBoxItem Content="整理规则" />
 				<ListBoxItem Content="备份" />
+				<ListBoxItem Content="使用说明" />
 				<ListBoxItem Content="关于" />
 			</ListBox>
 		</DockPanel>
@@ -544,6 +545,42 @@
 					</ItemsControl>
 				</StackPanel>
 
+				<!-- 使用说明 -->
+				<StackPanel x:Name="HelpPage" Visibility="Collapsed">
+					<TextBlock Style="{StaticResource PageTitle}" Text="使用说明" />
+					<!-- 每组一个小标题加一张卡片；列表项前是强调色圆点，折行后和上一行文字对齐 -->
+					<ItemsControl x:Name="HelpList">
+						<ItemsControl.ItemTemplate>
+							<DataTemplate>
+								<StackPanel>
+									<TextBlock Style="{StaticResource SectionTitle}" Text="{Binding Title}" />
+									<Border Style="{StaticResource Card}">
+										<ItemsControl ItemsSource="{Binding Items}">
+											<ItemsControl.ItemTemplate>
+												<DataTemplate>
+													<Grid Margin="0,4">
+														<Grid.ColumnDefinitions>
+															<ColumnDefinition Width="18" />
+															<ColumnDefinition Width="*" />
+														</Grid.ColumnDefinitions>
+														<Ellipse Width="5"
+																Height="5"
+																Margin="1,8,0,0"
+																HorizontalAlignment="Left"
+																VerticalAlignment="Top"
+																Fill="{DynamicResource AccentFillColorDefaultBrush}" />
+														<TextBlock Grid.Column="1" LineHeight="21" Text="{Binding}" TextWrapping="Wrap" />
+													</Grid>
+												</DataTemplate>
+											</ItemsControl.ItemTemplate>
+										</ItemsControl>
+									</Border>
+								</StackPanel>
+							</DataTemplate>
+						</ItemsControl.ItemTemplate>
+					</ItemsControl>
+				</StackPanel>
+
 				<!-- 关于 -->
 				<StackPanel x:Name="AboutPage" Visibility="Collapsed">
 					<TextBlock Style="{StaticResource PageTitle}" Text="关于" />
@@ -568,11 +605,6 @@
 								</StackPanel>
 							</CheckBox>
 						</DockPanel>
-					</Border>
-
-					<TextBlock Style="{StaticResource SectionTitle}" Text="使用提示" />
-					<Border Style="{StaticResource Card}">
-						<TextBlock x:Name="TipsText" LineHeight="24" TextWrapping="Wrap" />
 					</Border>
 
 					<TextBlock Style="{StaticResource SectionTitle}" Text="数据" />

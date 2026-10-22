@@ -64,6 +64,33 @@
 				</Trigger>
 			</Style.Triggers>
 		</Style>
+		<!-- 详细信息视图表头的列分隔线：拖动调整两侧的列宽，双击恢复自动宽度；鼠标移上去才显示，Tag 是它右边那一列 -->
+		<Style x:Key="DetailsSplitter" TargetType="Thumb">
+			<Setter Property="Width" Value="8" />
+			<Setter Property="Margin" Value="-4,0,0,0" />
+			<Setter Property="HorizontalAlignment" Value="Left" />
+			<Setter Property="Cursor" Value="SizeWE" />
+			<EventSetter Event="DragDelta" Handler="DetailsSplitter_DragDelta" />
+			<EventSetter Event="DragCompleted" Handler="DetailsSplitter_DragCompleted" />
+			<EventSetter Event="MouseDoubleClick" Handler="DetailsSplitter_MouseDoubleClick" />
+			<Setter Property="Template">
+				<Setter.Value>
+					<ControlTemplate TargetType="Thumb">
+						<Border Background="Transparent">
+							<Rectangle x:Name="Line" Width="1" Margin="0,3,0,4" Fill="{DynamicResource FenceForeground}" Opacity="0" />
+						</Border>
+						<ControlTemplate.Triggers>
+							<Trigger Property="IsMouseOver" Value="True">
+								<Setter TargetName="Line" Property="Opacity" Value="0.3" />
+							</Trigger>
+							<Trigger Property="IsDragging" Value="True">
+								<Setter TargetName="Line" Property="Opacity" Value="0.5" />
+							</Trigger>
+						</ControlTemplate.Triggers>
+					</ControlTemplate>
+				</Setter.Value>
+			</Setter>
+		</Style>
 		<Style x:Key="DetailsHeaderText" TargetType="TextBlock">
 			<Setter Property="Foreground" Value="{DynamicResource FenceForeground}" />
 			<Setter Property="Opacity" Value="0.7" />
@@ -500,6 +527,9 @@
 									<TextBlock Style="{StaticResource DetailsHeaderText}" Text="大小" />
 								</StackPanel>
 							</Border>
+							<Thumb x:Name="DateSplitter" Grid.Column="1" Style="{StaticResource DetailsSplitter}" Tag="{x:Static models:SortField.Modified}" />
+							<Thumb x:Name="TypeSplitter" Grid.Column="2" Style="{StaticResource DetailsSplitter}" Tag="{x:Static models:SortField.Type}" />
+							<Thumb x:Name="SizeSplitter" Grid.Column="3" Style="{StaticResource DetailsSplitter}" Tag="{x:Static models:SortField.Size}" />
 						</Grid>
 					</Border>
 					<!-- 输入首字母按显示名定位图标 -->

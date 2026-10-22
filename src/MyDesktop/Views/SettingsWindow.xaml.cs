@@ -21,19 +21,41 @@ internal partial class SettingsWindow : Window
 	/// </summary>
 	const string IssuesPage = "https://github.com/mizepeng/my-desktop/issues/new/choose";
 
-	static readonly string[] Tips =
+	/// <summary>
+	/// 「使用说明」页的一组说明，界面按 Title、Items 绑定。
+	/// </summary>
+	internal sealed record HelpSection(string Title, string[] Items);
+
+	static readonly HelpSection[] Help =
 	[
-		"· 把桌面上的图标拖进分区即可收纳，从分区拖回桌面即可还原；文件始终留在桌面文件夹里，退出后桌面保持原样",
-		"· 拖入时按住 Ctrl 为复制，按住 Alt 为创建快捷方式",
-		"· 在分区内拖动图标可以自由调整顺序",
-		"· 用左键在桌面空白处拖出选框，松开后在选框旁点「创建分区」或「创建映射分区」；框住图标时只是选中，按住 Alt 框选才新建分区并收进这些图标",
-		"· 拖动标题栏移动分区、拖动边缘调整大小（会按整行整列吸附），双击标题栏卷起/展开",
-		"· 把一个分区拖到另一个分区的标题栏上松手，就合并成标签页；按住 Shift 拖动标签可以调整顺序，拖出标题栏就拆成独立分区",
-		"· 右键分区空白处或点击标题栏的「⋯」打开分区菜单，可修改颜色、排序、视图等",
-		"· 右键文件弹出系统右键菜单；F2 重命名，Delete 删除到回收站",
-		"· 双击桌面空白处可以一键隐藏/显示图标和分区；隐藏哪些可以在这里、托盘菜单或桌面右键菜单里选",
-		"· 按搜索快捷键（默认 Alt+Space，可在「常规」里修改）弹出搜索框，输入名称、全拼或首字母找到桌面上的图标，回车打开",
-		"· 桌面空白处的右键菜单里有 MyDesktop 子菜单",
+		new("收纳图标",
+		[
+			"把桌面上的图标拖进分区即可收纳，从分区拖回桌面即可还原；文件始终留在桌面文件夹里，退出后桌面保持原样",
+			"拖入时按住 Ctrl 为复制，按住 Alt 为创建快捷方式",
+			"在分区内拖动图标可以自由调整顺序",
+		]),
+		new("新建分区",
+		[
+			"用左键在桌面空白处拖出选框，松开后在选框旁点「创建分区」或「创建映射分区」",
+			"框住图标时只是选中它们；按住 Alt 框选，新建的分区会把框住的图标一起收进去",
+		]),
+		new("调整分区",
+		[
+			"拖动标题栏移动分区、拖动边缘调整大小（会按整行整列吸附），双击标题栏卷起/展开",
+			"把一个分区拖到另一个分区的标题栏上松手，就合并成标签页；按住 Shift 拖动标签可以调整顺序，拖出标题栏就拆成独立分区",
+			"右键分区空白处或点击标题栏的「⋯」打开分区菜单，可修改颜色、排序、视图等",
+		]),
+		new("文件操作",
+		[
+			"右键文件弹出系统右键菜单",
+			"F2 重命名，Delete 删除到回收站",
+		]),
+		new("桌面与搜索",
+		[
+			"双击桌面空白处可以一键隐藏/显示图标和分区；隐藏哪些可以在「桌面」页、托盘菜单或桌面右键菜单里选",
+			"按搜索快捷键（默认 Alt+Space，可在「常规」里修改）弹出搜索框，输入名称、全拼或首字母找到桌面上的图标，回车打开",
+			"桌面空白处的右键菜单里有 MyDesktop 子菜单",
+		]),
 	];
 
 	readonly FenceManager _manager;
@@ -135,7 +157,7 @@ internal partial class SettingsWindow : Window
 		var version = typeof(App).Assembly.GetName().Version;
 		VersionText.Text = $"版本 {version?.ToString(3)}";
 		DataDirText.Text = AppPaths.DataDir;
-		TipsText.Text = string.Join("\n", Tips);
+		HelpList.ItemsSource = Help;
 		UpdateSliderTexts();
 		// 快捷键被其他程序占用时，打开设置就能看到提示
 		ApplyHotkey();
@@ -171,7 +193,7 @@ internal partial class SettingsWindow : Window
 		{
 			return;
 		}
-		var pages = new[] { GeneralPage, DesktopPage, FencesPage, AppearancePage, RulesPage, BackupPage, AboutPage };
+		var pages = new[] { GeneralPage, DesktopPage, FencesPage, AppearancePage, RulesPage, BackupPage, HelpPage, AboutPage };
 		for (int i = 0; i < pages.Length; i++)
 		{
 			pages[i].Visibility = i == NavList.SelectedIndex ? Visibility.Visible : Visibility.Collapsed;

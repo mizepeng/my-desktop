@@ -434,6 +434,15 @@ public sealed class FenceSettings
 	public bool SortDescending { get; set; }
 
 	/// <summary>
+	/// 详细信息视图里修改日期、类型、大小三列的宽度（DIP）：在表头拖动分隔线调过的列才有值，为空时按当前字体自动计算。
+	/// </summary>
+	public double? DetailsDateWidth { get; set; }
+
+	public double? DetailsTypeWidth { get; set; }
+
+	public double? DetailsSizeWidth { get; set; }
+
+	/// <summary>
 	/// 自定义排序时的顺序：桌面分区记完整解析名，映射分区记文件名；不在列表中的新项目排在最后。
 	/// </summary>
 	public List<string> CustomOrder { get; set; } = [];
