@@ -18,6 +18,9 @@ internal enum DesktopKey
 	SelectAll,
 	Copy,
 	Cut,
+	Paste,
+	Undo,
+	Redo,
 	ContextMenu,
 	Properties,
 	Left,
@@ -123,9 +126,9 @@ internal sealed class DesktopMouseWatcher : IDisposable
 	public event Action<RECT>? BandUpdated;
 
 	/// <summary>
-	/// 框选结束（参数为最后的选框，屏幕物理像素），在界面线程上触发；与选框更新同一优先级排队，不会跑到最后一次更新前面。
+	/// 框选结束（参数为最后的选框，屏幕物理像素，以及松开时是否按着 Alt），在界面线程上触发；与选框更新同一优先级排队，不会跑到最后一次更新前面。
 	/// </summary>
-	public event Action<RECT>? BandFinished;
+	public event Action<RECT, bool>? BandFinished;
 
 	/// <summary>
 	/// 右键框选时选框变化（屏幕物理像素），在界面线程上触发。
@@ -334,6 +337,10 @@ internal sealed class DesktopMouseWatcher : IDisposable
 			'A' when ctrl && !alt => DesktopKey.SelectAll,
 			'C' when ctrl && !alt => DesktopKey.Copy,
 			'X' when ctrl && !alt => DesktopKey.Cut,
+			// 隐藏的图标列表收不到这几个快捷键（用户反馈按了没反应），拦下后转成桌面视图自己的命令
+			'V' when ctrl && !alt => DesktopKey.Paste,
+			'Z' when ctrl && !alt => DesktopKey.Undo,
+			'Y' when ctrl && !alt => DesktopKey.Redo,
 			// 资源管理器中 Ctrl+D 也是删除
 			'D' when ctrl && !alt => DesktopKey.Delete,
 			VK_APPS => DesktopKey.ContextMenu,
@@ -454,7 +461,9 @@ internal sealed class DesktopMouseWatcher : IDisposable
 					{
 						_banding = false;
 						var band = Normalize(_leftStart, info.pt);
-						_uiDispatcher.BeginInvoke(DispatcherPriority.Input, () => BandFinished?.Invoke(band));
+						// 在钩子里取 Alt 的状态：排队到界面线程时用户可能已经松开了
+						bool alt = IsPressed(VK_MENU);
+						_uiDispatcher.BeginInvoke(DispatcherPriority.Input, () => BandFinished?.Invoke(band, alt));
 					}
 				}
 				if (_leftSwallowed)

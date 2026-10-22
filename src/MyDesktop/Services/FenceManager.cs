@@ -162,6 +162,7 @@ internal sealed class FenceManager
 		// 用毛玻璃的分区打开时才开始读壁纸（见 FenceWindow.UpdateBlur）
 		Wallpaper.BlurRadius = Settings.BlurRadius;
 		NotifyIfUpgraded(firstRun);
+		NotifyIfElevated();
 		// 旧版本的登录计划任务迁回 Run 项，不耽误接管桌面
 		_dispatcher.InvokeAsync(AutoStart.MigrateTask, DispatcherPriority.Background);
 
@@ -1411,10 +1412,10 @@ internal sealed class FenceManager
 				}
 			};
 			_mouse.BandUpdated += rect => _takeover?.OnBandUpdated(rect);
-			_mouse.BandFinished += band =>
+			_mouse.BandFinished += (band, alt) =>
 			{
 				_takeover?.OnBandFinished();
-				OnBandFinished(band);
+				OnBandFinished(band, alt);
 			};
 			// 右键框选：框住了图标时把接住松开的小窗口放在鼠标下，桌面就收不到这次松开、不弹桌面右键菜单，改由本程序弹出图标的菜单
 			_mouse.RightBandUpdated += rect =>
@@ -1472,11 +1473,16 @@ internal sealed class FenceManager
 
 	/// <summary>
 	/// 在桌面空白处框选完：开着「框选后新建分区」时在选框右下角旁弹出创建分区、创建映射分区的菜单（照 Fences），点了才创建；菜单开着时选框留在原处。
-	/// 框住了散放图标时，创建的桌面分区直接收进这些图标；映射分区显示的是别的文件夹，不收。
+	/// 框住了散放图标时，多半只是想选中它们，按着 Alt 松开才弹菜单，创建的桌面分区直接收进这些图标；映射分区显示的是别的文件夹，不收。
 	/// </summary>
-	void OnBandFinished(RECT band)
+	void OnBandFinished(RECT band, bool alt)
 	{
 		if (!Settings.DrawToCreate)
+		{
+			return;
+		}
+		var keys = _takeover?.SelectedItems.Select(i => i.FullPath).ToList() ?? [];
+		if (keys.Count > 0 && !alt)
 		{
 			return;
 		}
@@ -1489,7 +1495,6 @@ internal sealed class FenceManager
 		int minWidth = (int)(160 * scale);
 		int minHeight = (int)(100 * scale);
 		var bounds = SnapToScreenEdges(new RECT(band.Left, band.Top, band.Left + Math.Max(band.Width, minWidth), band.Top + Math.Max(band.Height, minHeight)), work, scale);
-		var keys = _takeover?.SelectedItems.Select(i => i.FullPath).ToList() ?? [];
 		void CreateDesktop()
 		{
 			var window = CreateFence(editTitle: true, bounds: bounds);
@@ -1500,31 +1505,59 @@ internal sealed class FenceManager
 		}
 		void CreatePortal() => CreatePortalFence(bounds: bounds);
 		_bandFrame ??= DrawFrameWindow.CreateMarquee();
-		_bandFrame.ShowAt(band);
-		// 菜单关掉、选框收起后才执行选中的项（映射分区还要弹出选文件夹的对话框）
-		Action? chosen = null;
-		using (var menu = new NativeMenu())
+		var frame = _bandFrame;
+		frame.ShowAt(band);
+		static bool IsDown(int key) => (GetAsyncKeyState(key) & 0x8000) != 0;
+		if (!IsDown(VK_MENU))
 		{
-			menu.Add("创建分区", () => chosen = CreateDesktop, isDefault: true);
-			menu.Add("创建映射分区…", () => chosen = CreatePortal);
-			if (_mouse != null)
+			ShowMenu();
+			return;
+		}
+		// 菜单弹出后再松开 Alt，系统会把菜单关掉（实测一闪就没），所以选框先留在原处，等 Alt 松开再弹；
+		// 等待期间按了鼠标或 Esc 视为放弃
+		var wait = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(30) };
+		wait.Tick += (_, _) =>
+		{
+			if (IsDown(VK_LBUTTON) || IsDown(VK_RBUTTON) || IsDown(VK_ESCAPE))
 			{
-				_mouse.MenuOpen = true;
+				wait.Stop();
+				frame.Hide();
 			}
-			try
+			else if (!IsDown(VK_MENU))
 			{
-				menu.Show(_tray!.Handle, new POINT(band.Right + 2, band.Bottom), bottomAlign: true);
+				wait.Stop();
+				ShowMenu();
 			}
-			finally
+		};
+		wait.Start();
+
+		void ShowMenu()
+		{
+			// 菜单关掉、选框收起后才执行选中的项（映射分区还要弹出选文件夹的对话框）
+			Action? chosen = null;
+			using (var menu = new NativeMenu())
 			{
-				_bandFrame.Hide();
+				menu.Add("创建分区", () => chosen = CreateDesktop, isDefault: true);
+				menu.Add("创建映射分区…", () => chosen = CreatePortal);
 				if (_mouse != null)
 				{
-					_mouse.MenuOpen = false;
+					_mouse.MenuOpen = true;
+				}
+				try
+				{
+					menu.Show(_tray!.Handle, new POINT(band.Right + 2, band.Bottom), bottomAlign: true);
+				}
+				finally
+				{
+					frame.Hide();
+					if (_mouse != null)
+					{
+						_mouse.MenuOpen = false;
+					}
 				}
 			}
+			chosen?.Invoke();
 		}
-		chosen?.Invoke();
 	}
 
 	/// <summary>
@@ -1915,6 +1948,22 @@ internal sealed class FenceManager
 		{
 			_dispatcher.InvokeAsync(() => _tray?.ShowBalloon($"MyDesktop 已更新到 {current.ToString(3)}", "新版本已安装完成，分区和设置保持不变。"), DispatcherPriority.Background);
 		}
+	}
+
+	/// <summary>
+	/// 以管理员身份运行时，Windows 不给本进程加载以打包方式注册的右键扩展（火绒、WinRAR 等新版都这样注册），图标右键菜单会少这些项（实测）。
+	/// 第一次以管理员身份运行时在通知区提示一次。
+	/// </summary>
+	void NotifyIfElevated()
+	{
+		if (!Environment.IsPrivilegedProcess || Settings.ElevatedNoticeShown)
+		{
+			return;
+		}
+		Settings.ElevatedNoticeShown = true;
+		SaveSoon();
+		_dispatcher.InvokeAsync(() => _tray?.ShowBalloon("MyDesktop 正以管理员身份运行", "图标右键菜单会缺少火绒、WinRAR 等部分软件的菜单项。以普通权限启动即可恢复。"),
+				DispatcherPriority.Background);
 	}
 
 	/// <summary>

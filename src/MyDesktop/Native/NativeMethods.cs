@@ -48,6 +48,7 @@ internal static class NativeMethods
 	public const int WM_WINDOWPOSCHANGED = 0x0047;
 	public const int WM_DISPLAYCHANGE = 0x007E;
 	public const int WM_NCHITTEST = 0x0084;
+	public const int WM_COMMAND = 0x0111;
 	public const int WM_SYSCOMMAND = 0x0112;
 	public const int WM_INITMENUPOPUP = 0x0117;
 	public const int WM_MENUCHAR = 0x0120;
@@ -102,6 +103,8 @@ internal static class NativeMethods
 	public const int VK_SHIFT = 0x10;
 	public const int VK_CONTROL = 0x11;
 	public const int VK_MENU = 0x12;
+	public const int VK_LBUTTON = 0x01;
+	public const int VK_RBUTTON = 0x02;
 	public const int VK_END = 0x23;
 	public const int VK_HOME = 0x24;
 	public const int VK_LEFT = 0x25;
@@ -573,6 +576,26 @@ internal static class NativeMethods
 
 	[DllImport("ole32.dll")]
 	public static extern int CoRevokeClassObject(uint cookie);
+
+	[DllImport("ole32.dll")]
+	public static extern int OleSetClipboard(IntPtr dataObject);
+
+	[DllImport("ole32.dll")]
+	public static extern int OleFlushClipboard();
+
+	public const uint GMEM_MOVEABLE = 0x0002;
+
+	[DllImport("kernel32.dll", SetLastError = true)]
+	public static extern IntPtr GlobalAlloc(uint flags, UIntPtr bytes);
+
+	[DllImport("kernel32.dll")]
+	public static extern IntPtr GlobalLock(IntPtr memory);
+
+	[DllImport("kernel32.dll")]
+	public static extern bool GlobalUnlock(IntPtr memory);
+
+	[DllImport("kernel32.dll")]
+	public static extern IntPtr GlobalFree(IntPtr memory);
 
 	#endregion
 

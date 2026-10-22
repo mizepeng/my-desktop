@@ -875,6 +875,9 @@ internal partial class DesktopLayerWindow : Window
 			Key.A when ctrl => DesktopKey.SelectAll,
 			Key.C when ctrl => DesktopKey.Copy,
 			Key.X when ctrl => DesktopKey.Cut,
+			Key.V when ctrl => DesktopKey.Paste,
+			Key.Z when ctrl => DesktopKey.Undo,
+			Key.Y when ctrl => DesktopKey.Redo,
 			Key.D when ctrl => DesktopKey.Delete,
 			Key.Apps => DesktopKey.ContextMenu,
 			Key.F10 when shift => DesktopKey.ContextMenu,
@@ -889,10 +892,6 @@ internal partial class DesktopLayerWindow : Window
 		if (command is DesktopKey value)
 		{
 			_takeover.HandleKey(value, shift);
-		}
-		else if (key == Key.V && ctrl)
-		{
-			_takeover.Paste(_hwnd);
 		}
 		else if (key == Key.F5)
 		{

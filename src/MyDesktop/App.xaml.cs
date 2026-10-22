@@ -47,7 +47,7 @@ public partial class App : Application
 		}
 		RegisterExceptionHandlers();
 		SystemTheme.ApplyToMenus();
-		Log.Info($"启动 {typeof(App).Assembly.GetName().Version}，数据目录：{AppPaths.DataDir}");
+		Log.Info($"启动 {typeof(App).Assembly.GetName().Version}，数据目录：{AppPaths.DataDir}，管理员权限：{(Environment.IsPrivilegedProcess ? "是" : "否")}");
 		var settings = SettingsStore.Load(out bool firstRun);
 		FenceManager.ApplyRenderMode(settings.HardwareAcceleration);
 		Manager = new FenceManager(settings);

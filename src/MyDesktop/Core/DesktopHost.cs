@@ -64,6 +64,33 @@ internal static class DesktopHost
 	}
 
 	/// <summary>
+	/// 桌面图标视图（SHELLDLL_DefView）自己的编辑命令，ID 取自 shell32 菜单资源，与资源管理器桌面右键菜单里的同名项相同。
+	/// </summary>
+	public enum ViewCommand
+	{
+		Paste = 0x701A,
+		Undo = 0x701B,
+		Redo = 0x7020,
+	}
+
+	/// <summary>
+	/// 让资源管理器的桌面视图执行粘贴、撤销等命令，效果与在系统桌面右键菜单里点击相同：
+	/// 重名时自动改成「- 副本」，撤销记录也和资源管理器共用。用 PostMessage 投递，不等待资源管理器处理。
+	/// </summary>
+	public static void PostViewCommand(ViewCommand command)
+	{
+		var defView = FindWindowEx(FindDesktopWindow(), IntPtr.Zero, "SHELLDLL_DefView", null);
+		if (defView == IntPtr.Zero)
+		{
+			Log.Warn($"找不到桌面视图，无法执行 {command} 命令");
+		}
+		else if (!PostMessage(defView, WM_COMMAND, (IntPtr)(int)command, IntPtr.Zero))
+		{
+			Log.Warn($"向桌面视图投递 {command} 命令失败");
+		}
+	}
+
+	/// <summary>
 	/// 散放图标层窗口，分区要摆在它们之上。只在界面线程上修改；钩子线程通过 <see cref="IsLayer"/> 读取不可变快照。
 	/// </summary>
 	static volatile LayerState _layers = new([], []);

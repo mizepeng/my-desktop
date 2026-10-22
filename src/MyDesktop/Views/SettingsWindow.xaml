@@ -171,7 +171,7 @@
 						<CheckBox x:Name="DrawToCreateBox" Click="Setting_Changed">
 							<StackPanel>
 								<TextBlock Text="在桌面上用左键框选后新建分区" />
-								<TextBlock Style="{StaticResource Hint}" Text="用左键在桌面空白处拖出选框，松开后在选框旁选择创建分区或映射分区；框住的图标会收进新分区" />
+								<TextBlock Style="{StaticResource Hint}" Text="用左键在桌面空白处拖出选框，松开后在选框旁选择创建分区或映射分区；框住图标时只是选中，按住 Alt 框选才新建分区并收进这些图标" />
 							</StackPanel>
 						</CheckBox>
 					</Border>
