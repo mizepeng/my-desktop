@@ -126,9 +126,9 @@ internal sealed class DesktopMouseWatcher : IDisposable
 	public event Action<RECT>? BandUpdated;
 
 	/// <summary>
-	/// 框选结束（参数为最后的选框，屏幕物理像素），在界面线程上触发；与选框更新同一优先级排队，不会跑到最后一次更新前面。
+	/// 框选结束（参数为最后的选框，屏幕物理像素，以及松开时是否按着 Alt），在界面线程上触发；与选框更新同一优先级排队，不会跑到最后一次更新前面。
 	/// </summary>
-	public event Action<RECT>? BandFinished;
+	public event Action<RECT, bool>? BandFinished;
 
 	/// <summary>
 	/// 右键框选时选框变化（屏幕物理像素），在界面线程上触发。
@@ -461,7 +461,9 @@ internal sealed class DesktopMouseWatcher : IDisposable
 					{
 						_banding = false;
 						var band = Normalize(_leftStart, info.pt);
-						_uiDispatcher.BeginInvoke(DispatcherPriority.Input, () => BandFinished?.Invoke(band));
+						// 在钩子里取 Alt 的状态：排队到界面线程时用户可能已经松开了
+						bool alt = IsPressed(VK_MENU);
+						_uiDispatcher.BeginInvoke(DispatcherPriority.Input, () => BandFinished?.Invoke(band, alt));
 					}
 				}
 				if (_leftSwallowed)

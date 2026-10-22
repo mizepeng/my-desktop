@@ -103,6 +103,8 @@ internal static class NativeMethods
 	public const int VK_SHIFT = 0x10;
 	public const int VK_CONTROL = 0x11;
 	public const int VK_MENU = 0x12;
+	public const int VK_LBUTTON = 0x01;
+	public const int VK_RBUTTON = 0x02;
 	public const int VK_END = 0x23;
 	public const int VK_HOME = 0x24;
 	public const int VK_LEFT = 0x25;
