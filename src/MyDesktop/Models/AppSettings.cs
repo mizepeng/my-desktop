@@ -289,6 +289,11 @@ public sealed class AppSettings
 	public string? LastRunVersion { get; set; }
 
 	/// <summary>
+	/// 已提示过「以管理员身份运行时右键菜单会缺项」；只提示一次，之后仍以管理员身份运行也不再提示。
+	/// </summary>
+	public bool ElevatedNoticeShown { get; set; }
+
+	/// <summary>
 	/// 各分区现在的位置与尺寸所属的显示器组合（见 FenceManager.CurrentDisplayKey）；为空时是旧版本配置，按当前组合看待。
 	/// </summary>
 	public string? DisplayKey { get; set; }

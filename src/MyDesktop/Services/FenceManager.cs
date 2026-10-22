@@ -162,6 +162,7 @@ internal sealed class FenceManager
 		// 用毛玻璃的分区打开时才开始读壁纸（见 FenceWindow.UpdateBlur）
 		Wallpaper.BlurRadius = Settings.BlurRadius;
 		NotifyIfUpgraded(firstRun);
+		NotifyIfElevated();
 		// 旧版本的登录计划任务迁回 Run 项，不耽误接管桌面
 		_dispatcher.InvokeAsync(AutoStart.MigrateTask, DispatcherPriority.Background);
 
@@ -1955,6 +1956,22 @@ internal sealed class FenceManager
 		{
 			_dispatcher.InvokeAsync(() => _tray?.ShowBalloon($"MyDesktop 已更新到 {current.ToString(3)}", "新版本已安装完成，分区和设置保持不变。"), DispatcherPriority.Background);
 		}
+	}
+
+	/// <summary>
+	/// 以管理员身份运行时，Windows 不给本进程加载以打包方式注册的右键扩展（火绒、WinRAR 等新版都这样注册），图标右键菜单会少这些项（实测）。
+	/// 第一次以管理员身份运行时在通知区提示一次。
+	/// </summary>
+	void NotifyIfElevated()
+	{
+		if (!Environment.IsPrivilegedProcess || Settings.ElevatedNoticeShown)
+		{
+			return;
+		}
+		Settings.ElevatedNoticeShown = true;
+		SaveSoon();
+		_dispatcher.InvokeAsync(() => _tray?.ShowBalloon("MyDesktop 正以管理员身份运行", "图标右键菜单会缺少火绒、WinRAR 等部分软件的菜单项。以普通权限启动即可恢复。"),
+				DispatcherPriority.Background);
 	}
 
 	/// <summary>
