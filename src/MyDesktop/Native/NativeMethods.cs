@@ -575,6 +575,26 @@ internal static class NativeMethods
 	[DllImport("ole32.dll")]
 	public static extern int CoRevokeClassObject(uint cookie);
 
+	[DllImport("ole32.dll")]
+	public static extern int OleSetClipboard(IntPtr dataObject);
+
+	[DllImport("ole32.dll")]
+	public static extern int OleFlushClipboard();
+
+	public const uint GMEM_MOVEABLE = 0x0002;
+
+	[DllImport("kernel32.dll", SetLastError = true)]
+	public static extern IntPtr GlobalAlloc(uint flags, UIntPtr bytes);
+
+	[DllImport("kernel32.dll")]
+	public static extern IntPtr GlobalLock(IntPtr memory);
+
+	[DllImport("kernel32.dll")]
+	public static extern bool GlobalUnlock(IntPtr memory);
+
+	[DllImport("kernel32.dll")]
+	public static extern IntPtr GlobalFree(IntPtr memory);
+
 	#endregion
 
 	#region comdlg32 / uxtheme

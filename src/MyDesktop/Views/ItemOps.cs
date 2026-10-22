@@ -430,17 +430,74 @@ internal static class ItemOps
 		}
 		try
 		{
+			// 资源管理器的约定：剪切为 DROPEFFECT_MOVE(2)，复制为 COPY|LINK(5)
+			int effect = cut ? 2 : 5;
+			// 同一文件夹里的项目放资源管理器同款的 Shell 数据对象：粘贴回原文件夹时，资源管理器据此自动命名为「- 副本」；
+			// 只放路径列表时它会报「源文件名和目标文件名相同」（实测）。跨文件夹的选择无法合成一个 Shell 数据对象，仍放路径列表
+			bool sameFolder = paths.Select(Path.GetDirectoryName).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1;
+			using var set = sameFolder ? ShellItemSet.Create(paths) : null;
+			if (set != null)
+			{
+				SetShellClipboard(set, effect);
+				return;
+			}
 			var files = new StringCollection();
 			files.AddRange(paths);
 			var data = new DataObject();
 			data.SetFileDropList(files);
-			// 资源管理器的约定：剪切为 DROPEFFECT_MOVE(2)，复制为 COPY|LINK(5)
-			data.SetData("Preferred DropEffect", new MemoryStream(BitConverter.GetBytes(cut ? 2 : 5)));
+			data.SetData("Preferred DropEffect", new MemoryStream(BitConverter.GetBytes(effect)));
 			Clipboard.SetDataObject(data, true);
 		}
 		catch (Exception ex)
 		{
 			Log.Warn("写入剪贴板失败", ex);
+		}
+	}
+
+	/// <summary>
+	/// 把 Shell 数据对象（与资源管理器 Ctrl+C 写入的相同）连同首选放置效果放上剪贴板，并立即渲染到剪贴板，本程序退出后仍可粘贴。
+	/// </summary>
+	static void SetShellClipboard(ShellItemSet set, int effect)
+	{
+		var dataPtr = set.GetUIObject(IntPtr.Zero, typeof(ComIDataObject).GUID);
+		try
+		{
+			var data = (ComIDataObject)Marshal.GetObjectForIUnknown(dataPtr);
+			var memory = GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)sizeof(int));
+			if (memory == IntPtr.Zero)
+			{
+				throw new Win32Exception(Marshal.GetLastWin32Error());
+			}
+			Marshal.WriteInt32(GlobalLock(memory), effect);
+			GlobalUnlock(memory);
+			var format = new System.Runtime.InteropServices.ComTypes.FORMATETC
+			{
+				cfFormat = unchecked((short)DataFormats.GetDataFormat("Preferred DropEffect").Id),
+				dwAspect = System.Runtime.InteropServices.ComTypes.DVASPECT.DVASPECT_CONTENT,
+				lindex = -1,
+				tymed = System.Runtime.InteropServices.ComTypes.TYMED.TYMED_HGLOBAL,
+			};
+			var medium = new System.Runtime.InteropServices.ComTypes.STGMEDIUM
+			{
+				tymed = System.Runtime.InteropServices.ComTypes.TYMED.TYMED_HGLOBAL,
+				unionmember = memory,
+			};
+			try
+			{
+				// fRelease 为 true：成功后内存归数据对象所有
+				data.SetData(ref format, ref medium, true);
+			}
+			catch
+			{
+				GlobalFree(memory);
+				throw;
+			}
+			Marshal.ThrowExceptionForHR(OleSetClipboard(dataPtr));
+			Marshal.ThrowExceptionForHR(OleFlushClipboard());
+		}
+		finally
+		{
+			Marshal.Release(dataPtr);
 		}
 	}
 
