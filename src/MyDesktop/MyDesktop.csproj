@@ -35,6 +35,8 @@
 	<ItemGroup>
 		<Resource Include="Assets\app.ico" />
 		<Resource Include="Assets\app.png" />
+		<!-- 文字描边的像素着色器（源码 TextOutline.fx，改了以后用同目录的 Compile-Shaders.ps1 重新生成） -->
+		<Resource Include="Assets\Shaders\TextOutline.ps" />
 		<!-- 发行版安装包签名证书的公钥，自动更新时用它核对下载的安装包 -->
 		<EmbeddedResource Include="..\..\installer\MyDesktop.cer" LogicalName="MyDesktop.cer" />
 		<!-- 搜索桌面图标时按拼音匹配用的汉字拼音表 -->

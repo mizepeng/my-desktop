@@ -7,12 +7,16 @@ using System.Windows.Media.Effects;
 namespace MyDesktop.Views;
 
 /// <summary>
-/// 文字阴影：在里面的 TextBlock 后面叠一份黑色副本，副本加上模糊当作阴影，正文本身不带任何效果。
+/// 文字阴影：在里面的 TextBlock 后面叠两份黑色副本，一份加模糊当作阴影，一份用着色器画淡描边（TextOutlineEffect），正文本身不带任何效果。
 /// DropShadowEffect 直接加在文字上时，文字要先画进中间位图再合成，笔画明显发虚（实测，用户反馈「字体发虚」）；
-/// 正文不带效果才和不加阴影时一样清楚。副本的文字、字体、换行、截断、边距、可见性等都跟着正文。
+/// 正文不带效果才和不加阴影时一样清楚。只有模糊阴影时浅色壁纸上反差不够，边缘清晰度只有资源管理器桌面的一半左右，看着还是虚（#10，实测对比）；
+/// 加上八个方向各 1 像素、每层 25% 的描边后和资源管理器相当，描边再浓就比系统桌面明显发黑。
+/// 副本的文字、字体、换行、截断、边距、可见性等都跟着正文。
 /// </summary>
 internal sealed class TextShadow : Decorator
 {
+	static readonly TextOutlineEffect OutlineEffect = CreateOutline();
+
 	/// <summary>
 	/// 加在副本上的模糊效果；为 null 时不画阴影。
 	/// </summary>
@@ -41,6 +45,8 @@ internal sealed class TextShadow : Decorator
 	];
 
 	readonly TextBlock _copy = new() { IsHitTestVisible = false };
+	// 描边由着色器向四周扩，副本本身要是不透明的黑色，不偏移
+	readonly TextBlock _outline = new() { IsHitTestVisible = false, Foreground = Brushes.Black, Effect = OutlineEffect };
 	bool _copyAttached;
 	// 已经照着正文设好副本
 	TextBlock? _mirrored;
@@ -57,16 +63,23 @@ internal sealed class TextShadow : Decorator
 		set => SetValue(ShadowOpacityProperty, value);
 	}
 
-	protected override int VisualChildrenCount => (Child != null ? 1 : 0) + (_copyAttached ? 1 : 0);
+	protected override int VisualChildrenCount => (Child != null ? 1 : 0) + (_copyAttached ? 2 : 0);
 
 	protected override Visual GetVisualChild(int index)
 	{
-		// 副本在下面
-		if (_copyAttached && index == 0)
+		// 两份副本在下面：模糊阴影最底，描边其次
+		if (_copyAttached && index < 2)
 		{
-			return _copy;
+			return index == 0 ? _copy : _outline;
 		}
 		return Child ?? throw new ArgumentOutOfRangeException(nameof(index));
+	}
+
+	static TextOutlineEffect CreateOutline()
+	{
+		var effect = new TextOutlineEffect { Strength = 0.25, Offset = 1 };
+		effect.Freeze();
+		return effect;
 	}
 
 	protected override void OnVisualChildrenChanged(DependencyObject? visualAdded, DependencyObject? visualRemoved)
@@ -85,6 +98,7 @@ internal sealed class TextShadow : Decorator
 				Mirror(text);
 			}
 			_copy.Measure(constraint);
+			_outline.Measure(constraint);
 		}
 		return base.MeasureOverride(constraint);
 	}
@@ -92,22 +106,25 @@ internal sealed class TextShadow : Decorator
 	void Mirror(TextBlock text)
 	{
 		_mirrored = text;
-		foreach (var property in AlwaysBound)
+		foreach (var copy in new[] { _copy, _outline })
 		{
-			_copy.SetBinding(property, new Binding(property.Name) { Source = text });
-		}
-		foreach (var property in BoundIfSet)
-		{
-			if (IsSet(text, property))
+			foreach (var property in AlwaysBound)
 			{
-				_copy.SetBinding(property, new Binding(property.Name) { Source = text });
+				copy.SetBinding(property, new Binding(property.Name) { Source = text });
 			}
-		}
-		foreach (var property in CopiedIfSet)
-		{
-			if (IsSet(text, property))
+			foreach (var property in BoundIfSet)
 			{
-				_copy.SetValue(property, text.GetValue(property));
+				if (IsSet(text, property))
+				{
+					copy.SetBinding(property, new Binding(property.Name) { Source = text });
+				}
+			}
+			foreach (var property in CopiedIfSet)
+			{
+				if (IsSet(text, property))
+				{
+					copy.SetValue(property, text.GetValue(property));
+				}
 			}
 		}
 		// 阴影在文字下方 1 处。RenderTransform 是在 LayoutTransform 转过之后才加的（实测），
@@ -130,6 +147,7 @@ internal sealed class TextShadow : Decorator
 		if (_copyAttached)
 		{
 			_copy.Arrange(new Rect(arrangeSize));
+			_outline.Arrange(new Rect(arrangeSize));
 		}
 		return base.ArrangeOverride(arrangeSize);
 	}
@@ -143,10 +161,12 @@ internal sealed class TextShadow : Decorator
 			if (show)
 			{
 				AddVisualChild(_copy);
+				AddVisualChild(_outline);
 			}
 			else
 			{
 				RemoveVisualChild(_copy);
+				RemoveVisualChild(_outline);
 			}
 			InvalidateMeasure();
 		}
