@@ -48,6 +48,7 @@ internal static class NativeMethods
 	public const int WM_WINDOWPOSCHANGED = 0x0047;
 	public const int WM_DISPLAYCHANGE = 0x007E;
 	public const int WM_NCHITTEST = 0x0084;
+	public const int WM_COMMAND = 0x0111;
 	public const int WM_SYSCOMMAND = 0x0112;
 	public const int WM_INITMENUPOPUP = 0x0117;
 	public const int WM_MENUCHAR = 0x0120;

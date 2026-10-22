@@ -18,6 +18,9 @@ internal enum DesktopKey
 	SelectAll,
 	Copy,
 	Cut,
+	Paste,
+	Undo,
+	Redo,
 	ContextMenu,
 	Properties,
 	Left,
@@ -334,6 +337,10 @@ internal sealed class DesktopMouseWatcher : IDisposable
 			'A' when ctrl && !alt => DesktopKey.SelectAll,
 			'C' when ctrl && !alt => DesktopKey.Copy,
 			'X' when ctrl && !alt => DesktopKey.Cut,
+			// 隐藏的图标列表收不到这几个快捷键（用户反馈按了没反应），拦下后转成桌面视图自己的命令
+			'V' when ctrl && !alt => DesktopKey.Paste,
+			'Z' when ctrl && !alt => DesktopKey.Undo,
+			'Y' when ctrl && !alt => DesktopKey.Redo,
 			// 资源管理器中 Ctrl+D 也是删除
 			'D' when ctrl && !alt => DesktopKey.Delete,
 			VK_APPS => DesktopKey.ContextMenu,

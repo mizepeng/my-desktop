@@ -1126,6 +1126,9 @@ internal sealed class DesktopTakeover : IDisposable
 			DesktopKey.SelectAll => SelectAllOnDesktop,
 			DesktopKey.Copy => () => ItemOps.CopyToClipboard(all, false),
 			DesktopKey.Cut => () => ItemOps.CopyToClipboard(all, true),
+			DesktopKey.Paste => () => DesktopHost.PostViewCommand(DesktopHost.ViewCommand.Paste),
+			DesktopKey.Undo => () => DesktopHost.PostViewCommand(DesktopHost.ViewCommand.Undo),
+			DesktopKey.Redo => () => DesktopHost.PostViewCommand(DesktopHost.ViewCommand.Redo),
 			DesktopKey.ContextMenu => () => ShowMenuForSelection(owner, selected),
 			DesktopKey.Properties => () => ShowPropertiesForSelection(owner),
 			DesktopKey.Left or DesktopKey.Up or DesktopKey.Right or DesktopKey.Down or DesktopKey.Home or DesktopKey.End => () => Navigate(key, shift),
@@ -1288,12 +1291,6 @@ internal sealed class DesktopTakeover : IDisposable
 	}
 
 	public void Open(List<FenceItem> items, IntPtr hwnd) => ItemOps.Open(hwnd, items, true);
-
-	public void Paste(IntPtr hwnd)
-	{
-		ItemOps.Paste(hwnd, AppPaths.Desktop);
-		Items.RefreshSoon();
-	}
 
 	public void OnRenamed(string oldPath, string newPath)
 	{
