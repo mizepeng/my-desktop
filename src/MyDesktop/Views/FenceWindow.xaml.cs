@@ -74,9 +74,9 @@ internal partial class FenceWindow : Window
 	long _crumbClickedAt;
 	bool _allowClose;
 	bool _tempExpanded;
-	// 详细信息视图里名称列至少留的宽度，后三列的宽度
+	// 详细信息视图里名称列至少留的宽度，后三列拖动调整时至少留的宽度，类型、大小两列在 12 号字时的自动宽度
 	const double DetailsNameMinWidth = 120;
-	const double DetailsDateWidth = 116;
+	const double DetailsColumnMinWidth = 40;
 	const double DetailsTypeWidth = 110;
 	const double DetailsSizeWidth = 80;
 	// 卷起、展开动画的裁剪区域，没在播时为 null
@@ -1712,6 +1712,8 @@ internal partial class FenceWindow : Window
 		Resources["TitleFontSize"] = Math.Min(size + 1, TextFont.MaxSize);
 		Resources["NameMaxHeight"] = Math.Ceiling(line * 2) + 2;
 		Resources["ListNameMargin"] = new Thickness(0, Math.Max(0, Math.Round((20 - line) / 2)), 0, 0);
+		// 详细信息视图没调过的列按字体自动算宽度
+		UpdateDetailsColumns();
 	}
 
 	public void ApplyAppearance()
@@ -1928,7 +1930,8 @@ internal partial class FenceWindow : Window
 	};
 
 	/// <summary>
-	/// 详细信息视图的列宽：表头和每一行一样宽（不含滚动条）；名称至少留 DetailsNameMinWidth，放不下时从右往左依次不显示大小、类型、修改日期。
+	/// 详细信息视图的列宽：表头和每一行一样宽（不含滚动条）；后三列用拖动调过的宽度，没调过的按当前字体自动计算；
+	/// 名称至少留 DetailsNameMinWidth，放不下时从右往左依次不显示大小、类型、修改日期。
 	/// </summary>
 	void UpdateDetailsColumns()
 	{
@@ -1943,14 +1946,140 @@ internal partial class FenceWindow : Window
 		}
 		double width = _scroller.ViewportWidth;
 		DetailsHeader.Width = width;
+		var auto = AutoDetailsWidths();
+		double dateWidth = Model.DetailsDateWidth ?? auto.Date;
+		double typeWidth = Model.DetailsTypeWidth ?? auto.Type;
+		double sizeWidth = Model.DetailsSizeWidth ?? auto.Size;
+		double rest = DetailsNameRoom(width);
+		bool date = rest >= dateWidth;
+		bool type = date && rest >= dateWidth + typeWidth;
+		bool size = type && rest >= dateWidth + typeWidth + sizeWidth;
+		SetColumnWidth("DetailsDateWidth", date ? dateWidth : 0);
+		SetColumnWidth("DetailsTypeWidth", type ? typeWidth : 0);
+		SetColumnWidth("DetailsSizeWidth", size ? sizeWidth : 0);
+		DateSplitter.Visibility = date ? Visibility.Visible : Visibility.Collapsed;
+		TypeSplitter.Visibility = type ? Visibility.Visible : Visibility.Collapsed;
+		SizeSplitter.Visibility = size ? Visibility.Visible : Visibility.Collapsed;
+	}
+
+	/// <summary>
+	/// 列表可用宽度里，名称列留够 DetailsNameMinWidth 后还能分给后三列的宽度。
+	/// </summary>
+	static double DetailsNameRoom(double viewportWidth)
+	{
 		// 每一行左右各有 5（选中框的边框和内边距），名称前面是 30 宽的图标
-		double rest = width - 10 - 30 - DetailsNameMinWidth;
-		bool date = rest >= DetailsDateWidth;
-		bool type = date && rest >= DetailsDateWidth + DetailsTypeWidth;
-		bool size = type && rest >= DetailsDateWidth + DetailsTypeWidth + DetailsSizeWidth;
-		SetColumnWidth("DetailsDateWidth", date ? DetailsDateWidth : 0);
-		SetColumnWidth("DetailsTypeWidth", type ? DetailsTypeWidth : 0);
-		SetColumnWidth("DetailsSizeWidth", size ? DetailsSizeWidth : 0);
+		return viewportWidth - 10 - 30 - DetailsNameMinWidth;
+	}
+
+	/// <summary>
+	/// 后三列的自动宽度：修改日期按当前字体量出最宽的日期能完整显示（字号调大、换字体后写死的宽度会放不下，只看得到年月），
+	/// 类型、大小按字号等比放大。
+	/// </summary>
+	(double Date, double Type, double Size) AutoDetailsWidths()
+	{
+		var typeface = new Typeface(FontFamily, FontStyle, FontWeight, FontStretch);
+		var text = new FormattedText("2026/12/28 23:59", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, typeface, FontSize, Brushes.Black,
+				VisualTreeHelper.GetDpi(this).PixelsPerDip);
+		// 左边距 12（DetailsInfoText），右边再留 8，免得紧贴下一列
+		double date = Math.Ceiling(12 + text.WidthIncludingTrailingWhitespace + 8);
+		double scale = FontSize / 12;
+		return (date, Math.Ceiling(DetailsTypeWidth * scale), Math.Ceiling(DetailsSizeWidth * scale));
+	}
+
+	/// <summary>
+	/// 拖动表头的列分隔线：分隔线左右两列此消彼长；左边是名称列时只改右边那一列，名称列至少留 DetailsNameMinWidth。
+	/// 分隔线的 Tag 是它右边那一列。
+	/// </summary>
+	void DetailsSplitter_DragDelta(object sender, DragDeltaEventArgs e)
+	{
+		if (sender is not FrameworkElement { Tag: SortField right } || _scroller == null)
+		{
+			return;
+		}
+		double dx = e.HorizontalChange;
+		double rightWidth = DetailsColumnWidth(right);
+		if (DetailsLeftColumn(right) is SortField left)
+		{
+			double leftWidth = DetailsColumnWidth(left);
+			// 不用 Math.Clamp：字号很小时自动宽度可能小于 DetailsColumnMinWidth，上下限颠倒会抛异常
+			dx = Math.Min(Math.Max(dx, DetailsColumnMinWidth - leftWidth), rightWidth - DetailsColumnMinWidth);
+			SetDetailsWidth(left, leftWidth + dx);
+		}
+		else
+		{
+			// 往左拖时右边那一列变宽，名称列变窄
+			double used = DetailsColumnWidth(SortField.Modified) + DetailsColumnWidth(SortField.Type) + DetailsColumnWidth(SortField.Size);
+			double spare = DetailsNameRoom(_scroller.ViewportWidth) - used;
+			dx = Math.Min(Math.Max(dx, -spare), rightWidth - DetailsColumnMinWidth);
+		}
+		SetDetailsWidth(right, rightWidth - dx);
+		UpdateDetailsColumns();
+	}
+
+	void DetailsSplitter_DragCompleted(object sender, DragCompletedEventArgs e) => _manager.SaveSoon();
+
+	/// <summary>
+	/// 双击分隔线：它两侧的列恢复自动宽度。
+	/// </summary>
+	void DetailsSplitter_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+	{
+		if (sender is not FrameworkElement { Tag: SortField right })
+		{
+			return;
+		}
+		SetDetailsWidth(right, null);
+		if (DetailsLeftColumn(right) is SortField left)
+		{
+			SetDetailsWidth(left, null);
+		}
+		UpdateDetailsColumns();
+		_manager.SaveSoon();
+		e.Handled = true;
+	}
+
+	/// <summary>
+	/// 分隔线左边的列；左边是名称列时为 null。
+	/// </summary>
+	static SortField? DetailsLeftColumn(SortField right) => right switch
+	{
+		SortField.Modified => null,
+		SortField.Type => SortField.Modified,
+		SortField.Size => SortField.Type,
+		SortField.Name or SortField.Custom => throw new ArgumentOutOfRangeException(nameof(right), right, "不是可以调整宽度的列"),
+	};
+
+	/// <summary>
+	/// 这一列现在显示的宽度（隐藏时为 0）。
+	/// </summary>
+	double DetailsColumnWidth(SortField column)
+	{
+		var key = column switch
+		{
+			SortField.Modified => "DetailsDateWidth",
+			SortField.Type => "DetailsTypeWidth",
+			SortField.Size => "DetailsSizeWidth",
+			SortField.Name or SortField.Custom => throw new ArgumentOutOfRangeException(nameof(column), column, "不是可以调整宽度的列"),
+		};
+		return Resources[key] is GridLength length ? length.Value : 0;
+	}
+
+	void SetDetailsWidth(SortField column, double? width)
+	{
+		switch (column)
+		{
+			case SortField.Modified:
+				Model.DetailsDateWidth = width;
+				break;
+			case SortField.Type:
+				Model.DetailsTypeWidth = width;
+				break;
+			case SortField.Size:
+				Model.DetailsSizeWidth = width;
+				break;
+			case SortField.Name:
+			case SortField.Custom:
+				throw new ArgumentOutOfRangeException(nameof(column), column, "不是可以调整宽度的列");
+		}
 	}
 
 	void SetColumnWidth(string key, double width)
