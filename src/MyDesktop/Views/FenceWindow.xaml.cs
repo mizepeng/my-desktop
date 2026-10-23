@@ -4055,6 +4055,13 @@ internal partial class FenceWindow : Window
 			ScheduleRefresh();
 			return;
 		}
+		// 有的拖放源松手后才给出真正的文件，要和资源管理器一样在这时重新读取：PeaZip 从压缩包里拖出时，拖动期间只给一个空的占位文件夹
+		// （临时目录下的 source），松手后解压好再换成解压出的文件（见其 dragdropfilesdll 源码），沿用拖入时读到的列表只会放进一个空的 source（#12）
+		if (DesktopDrag.Current == null)
+		{
+			_dropKeys = GetDropPaths(e.Data);
+			_dropFiles = _dropKeys ?? [];
+		}
 		var effect = ComputeDropEffect(e);
 		var keys = _dropKeys;
 		var paths = _dropFiles;
