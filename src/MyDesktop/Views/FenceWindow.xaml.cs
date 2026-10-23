@@ -4007,6 +4007,12 @@ internal partial class FenceWindow : Window
 		}
 		var effect = ComputeDropEffect(e);
 		TrackReorder(e, effect);
+		// 调整顺序、桌面图标归入桌面分区都不动文件，和在桌面上挪图标一样不画放置说明的图标；每次经过都写，
+		// 停在图标上时它自己的放置目标改写过说明（加号等），离开时改回默认，不重写的话回到空白处会出现默认的箭头（用户反馈）
+		if (IsReorderDrag() || (IsDesktopFence && _dropFromDesktop))
+		{
+			_dropPreview.HideDropImage(e);
+		}
 		return effect;
 	}
 

@@ -932,17 +932,31 @@ internal partial class DesktopLayerWindow : Window
 	/// </summary>
 	DragDropEffects ComputeEffect(DragEventArgs e)
 	{
-		return _forwarder.Over(_hwnd, DropItemAt(e), true, e) ?? _takeover.GetLayerDropEffect(e);
+		if (_forwarder.Over(_hwnd, DropItemAt(e), true, e) is DragDropEffects forwarded)
+		{
+			return forwarded;
+		}
+		if (DesktopDrag.Current?.FromDesktop == true)
+		{
+			_dropPreview.HideDropImage(e);
+		}
+		return _takeover.GetLayerDropEffect(e);
 	}
 
 	/// <summary>
-	/// 拖动经过的图标；正被拖动的图标自身不算。
+	/// 拖动经过的图标；正被拖动的图标自身不算。在桌面上挪图标（包括从桌面分区拖出）时只有拖到图标图像上才算，
+	/// 落在名称、空隙处仍是挪位置，和分区里调整顺序一样（见 FenceWindow.DropItemAt），免得挪图标时误把文件交给程序打开（用户反馈）。
 	/// </summary>
 	FenceItem? DropItemAt(DragEventArgs e)
 	{
-		var item = ItemFromSource(InputHitTest(e.GetPosition(this)));
-		var dragged = DesktopDrag.Current?.Keys;
-		return item != null && dragged != null && dragged.Contains(item.FullPath, StringComparer.OrdinalIgnoreCase) ? null : item;
+		var element = InputHitTest(e.GetPosition(this));
+		var item = ItemFromSource(element);
+		var drag = DesktopDrag.Current;
+		if (item == null || (drag != null && drag.Keys.Contains(item.FullPath, StringComparer.OrdinalIgnoreCase)))
+		{
+			return null;
+		}
+		return drag?.FromDesktop == true && !ItemOps.IsInside<Image>(element) ? null : item;
 	}
 
 	protected override void OnDragEnter(DragEventArgs e)

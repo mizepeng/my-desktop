@@ -284,16 +284,22 @@ internal interface IDropTargetHelper
 	int Show([MarshalAs(UnmanagedType.Bool)] bool show);
 }
 
+/// <summary>
+/// 拖动源的预览图助手（IDragSourceHelper 的扩展）：SetFlags 要在 InitializeFrom* 之前调用。
+/// </summary>
 [ComImport]
-[Guid("DE5BF786-477A-11D2-839D-00C04FD918D0")]
+[Guid("83E07D0D-0C5F-4163-BF1A-60B274051E40")]
 [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IDragSourceHelper
+internal interface IDragSourceHelper2
 {
 	[PreserveSig]
 	int InitializeFromBitmap(ref SHDRAGIMAGE dragImage, IntPtr dataObject);
 
 	[PreserveSig]
 	int InitializeFromWindow(IntPtr hwnd, ref POINT point, IntPtr dataObject);
+
+	[PreserveSig]
+	int SetFlags(uint flags);
 }
 
 [ComImport]

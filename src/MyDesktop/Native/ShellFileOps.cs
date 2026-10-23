@@ -118,9 +118,13 @@ internal static class ShellFileOps
 
 	static bool SetDragImage(IntPtr dataObject, SHDRAGIMAGE image)
 	{
-		var helper = (IDragSourceHelper)new DragDropHelper();
+		const uint DSH_ALLOWDROPDESCRIPTIONTEXT = 0x0001;
+		var helper = (IDragSourceHelper2)new DragDropHelper();
 		try
 		{
+			// 允许放置目标在预览图下显示说明文字（「+ 用 记事本 打开」「→ 移动到 文档」），和资源管理器一样；
+			// 不声明的话只显示一个箭头、加号，看不出松手后会做什么（用户反馈）
+			helper.SetFlags(DSH_ALLOWDROPDESCRIPTIONTEXT);
 			return helper.InitializeFromBitmap(ref image, dataObject) == 0;
 		}
 		finally

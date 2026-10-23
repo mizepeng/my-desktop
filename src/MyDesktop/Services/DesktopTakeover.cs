@@ -1490,7 +1490,29 @@ internal sealed class DesktopTakeover : IDisposable
 			}
 			points.Add(ToPosition(snapshot, cell));
 		}
-		Items.Move(keys, points);
+		if (snapshot.AutoArrange)
+		{
+			Items.Move(keys, points);
+			return;
+		}
+		// 收进分区的图标在资源管理器里仍占着原来的格子，桌面上看是空位，放过去会被资源管理器挤到相邻的空格（用户反馈「想放到 A，它跳到 C」）。
+		// 占着目标格子的分区图标换到被拖图标原来的格子上：它显示在分区里，在资源管理器里的位置看不见。排在前面先摆，先腾出目标格子
+		var fenced = _manager.FencedKeys();
+		var moving = keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+		var vacated = new Queue<POINT>(keys.Select(Items.Find).OfType<DesktopEntry>().Select(e => e.Position));
+		var swapKeys = new List<string>();
+		var swapPoints = new List<POINT>();
+		foreach (var target in points)
+		{
+			var occupant = snapshot.Items.FirstOrDefault(e => fenced.Contains(e.Key) && !moving.Contains(e.Key) && !swapKeys.Contains(e.Key)
+					&& Math.Abs(e.Position.X - target.X) < spacing.X / 2 && Math.Abs(e.Position.Y - target.Y) < spacing.Y / 2);
+			if (occupant != null && vacated.Count > 0)
+			{
+				swapKeys.Add(occupant.Key);
+				swapPoints.Add(vacated.Dequeue());
+			}
+		}
+		Items.Move([.. swapKeys, .. keys], [.. swapPoints, .. points]);
 	}
 
 	#endregion
