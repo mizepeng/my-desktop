@@ -2862,13 +2862,17 @@ internal partial class FenceWindow : Window
 		}
 		if (e.ClickCount >= 2)
 		{
-			if (ItemsList.SelectedItems.Contains(item))
+			// 单击打开时第一下抬起时已经打开过，双击的第二下不再打开
+			if (!Settings.SingleClickOpen)
 			{
-				OpenSelected();
-			}
-			else
-			{
-				OpenItems([item]);
+				if (ItemsList.SelectedItems.Contains(item))
+				{
+					OpenSelected();
+				}
+				else
+				{
+					OpenItems([item]);
+				}
 			}
 			_pressedItem = null;
 			e.Handled = true;
@@ -2940,8 +2944,19 @@ internal partial class FenceWindow : Window
 			ItemsList.UnselectAll();
 			ItemsList.SelectedItem = _pressedItem;
 		}
-		// 没有拖动、抬起时还在按下的图标上：单击的是已选中图标的名称时，过一会儿开始改名
-		_clickRename.Release(_pressedItem);
+		if (Settings.SingleClickOpen)
+		{
+			// 单击打开（B 站评论建议）：没有拖动、抬起时还在按下的图标上就打开它；按住 Ctrl、Shift 是多选，不打开
+			if (_pressedItem != null && Keyboard.Modifiers == ModifierKeys.None)
+			{
+				OpenItems([_pressedItem]);
+			}
+		}
+		else
+		{
+			// 没有拖动、抬起时还在按下的图标上：单击的是已选中图标的名称时，过一会儿开始改名
+			_clickRename.Release(_pressedItem);
+		}
 		_deferSelection = false;
 		_pressedItem = null;
 	}
@@ -3454,6 +3469,7 @@ internal partial class FenceWindow : Window
 			if (Model.IsPortal)
 			{
 				menu.Add("在资源管理器中打开", OpenFolderInExplorer, enabled: folderExists);
+				menu.Add("复制文件夹路径", CopyFolderPath);
 				menu.Add("更换映射文件夹…", () => _manager.ChangePortalFolder(this));
 			}
 			menu.AddSeparator();
@@ -3682,6 +3698,21 @@ internal partial class FenceWindow : Window
 		catch (Exception ex)
 		{
 			Log.Warn($"打开文件夹失败：{CurrentFolder}", ex);
+		}
+	}
+
+	/// <summary>
+	/// 映射分区当前显示的文件夹（进入子文件夹后是子文件夹）的路径复制成文本（B 站评论建议）。
+	/// </summary>
+	void CopyFolderPath()
+	{
+		try
+		{
+			Clipboard.SetText(CurrentFolder);
+		}
+		catch (Exception ex)
+		{
+			Log.Warn($"复制文件夹路径失败：{CurrentFolder}", ex);
 		}
 	}
 

@@ -43,12 +43,13 @@ internal partial class SettingsWindow : Window
 		[
 			"拖动标题栏移动分区、拖动边缘调整大小（会按整行整列吸附），双击标题栏卷起/展开",
 			"把一个分区拖到另一个分区的标题栏上松手，就合并成标签页；按住 Shift 拖动标签可以调整顺序，拖出标题栏就拆成独立分区",
-			"右键分区空白处或点击标题栏的「⋯」打开分区菜单，可修改颜色、排序、视图等",
+			"右键分区空白处或点击标题栏的「⋯」打开分区菜单，可修改颜色、排序、视图等；映射分区的菜单里可以复制文件夹路径",
 		]),
 		new("文件操作",
 		[
 			"右键文件弹出系统右键菜单",
 			"F2 重命名，Delete 删除到回收站",
+			"想单击就打开图标，可以在「分区」页打开「单击打开图标」",
 		]),
 		new("桌面与搜索",
 		[
@@ -128,6 +129,7 @@ internal partial class SettingsWindow : Window
 		DrawToCreateBox.IsChecked = Settings.DrawToCreate;
 		DesktopMenuBox.IsChecked = Settings.DesktopContextMenu;
 		ExpandOnHoverBox.IsChecked = Settings.ExpandOnHover;
+		SingleClickOpenBox.IsChecked = Settings.SingleClickOpen;
 		SnapBox.IsChecked = Settings.SnapToEdges;
 		SnapGridBox.IsChecked = Settings.SnapToGrid;
 		ShowHiddenBox.IsChecked = Settings.ShowHiddenFiles;
@@ -304,6 +306,7 @@ internal partial class SettingsWindow : Window
 		Settings.DoubleClickToHide = DoubleClickBox.IsChecked == true;
 		Settings.DrawToCreate = DrawToCreateBox.IsChecked == true;
 		Settings.ExpandOnHover = ExpandOnHoverBox.IsChecked == true;
+		Settings.SingleClickOpen = SingleClickOpenBox.IsChecked == true;
 		Settings.SnapToEdges = SnapBox.IsChecked == true;
 		Settings.SnapToGrid = SnapGridBox.IsChecked == true;
 		Settings.AutoOrganize = AutoOrganizeBox.IsChecked == true;
@@ -733,6 +736,7 @@ internal partial class SettingsWindow : Window
 			case "分区":
 				bool hiddenChanged = Settings.ShowHiddenFiles != defaults.ShowHiddenFiles;
 				Settings.ExpandOnHover = defaults.ExpandOnHover;
+				Settings.SingleClickOpen = defaults.SingleClickOpen;
 				Settings.CollapseDelay = defaults.CollapseDelay;
 				Settings.TabsFillWidth = defaults.TabsFillWidth;
 				Settings.TabAlignment = defaults.TabAlignment;

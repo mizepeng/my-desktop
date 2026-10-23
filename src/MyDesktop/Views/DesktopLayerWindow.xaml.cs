@@ -603,7 +603,11 @@ internal partial class DesktopLayerWindow : Window
 		_deferSelection = false;
 		if (e.ClickCount >= 2)
 		{
-			_takeover.Open(ItemsList.SelectedItems.Contains(item) ? _takeover.AllSelectedItems() : [item], _hwnd);
+			// 单击打开时第一下抬起时已经打开过，双击的第二下不再打开
+			if (!_takeover.Settings.SingleClickOpen)
+			{
+				_takeover.Open(ItemsList.SelectedItems.Contains(item) ? _takeover.AllSelectedItems() : [item], _hwnd);
+			}
 			_pressedItem = null;
 			e.Handled = true;
 			return;
@@ -656,8 +660,19 @@ internal partial class DesktopLayerWindow : Window
 			ItemsList.UnselectAll();
 			ItemsList.SelectedItem = _pressedItem;
 		}
-		// 没有拖动、抬起时还在按下的图标上：单击的是已选中图标的名称时，过一会儿开始改名
-		_clickRename.Release(_pressedItem);
+		if (_takeover.Settings.SingleClickOpen)
+		{
+			// 单击打开（B 站评论建议）：没有拖动、抬起时还在按下的图标上就打开它；按住 Ctrl、Shift 是多选，不打开
+			if (_pressedItem != null && Keyboard.Modifiers == ModifierKeys.None)
+			{
+				_takeover.Open([_pressedItem], _hwnd);
+			}
+		}
+		else
+		{
+			// 没有拖动、抬起时还在按下的图标上：单击的是已选中图标的名称时，过一会儿开始改名
+			_clickRename.Release(_pressedItem);
+		}
 		_deferSelection = false;
 		_pressedItem = null;
 	}

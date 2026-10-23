@@ -4,6 +4,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using MyDesktop.Core;
+using MyDesktop.Models;
 using MyDesktop.Native;
 using MyDesktop.Views;
 using static MyDesktop.Native.NativeMethods;
@@ -116,6 +117,8 @@ internal sealed class DesktopTakeover : IDisposable
 	}
 
 	public DesktopItems Items { get; }
+
+	public AppSettings Settings => _manager.Settings;
 
 	/// <summary>
 	/// 是否已隐藏资源管理器的图标、由图标层画出散放图标。读不到资源管理器的桌面视图时不接管。
