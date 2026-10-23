@@ -122,6 +122,8 @@ internal sealed class FileDragDrop(DesktopSession session)
 			var target = fence?.Frame.Active;
 			try
 			{
+				// 松手时重新读取，不用拖入时缓存的列表：PeaZip 这类拖放源拖动期间只给空的占位文件夹，松手后才换成真正的文件（旧版 #12）
+				_reading = null;
 				var payload = await ResolveAsync(args.DataView);
 				string? hover = fence == null ? surface.DesktopIcons.KeyAt(args.OriginalSource as DependencyObject) : FenceView.ItemKeyAt(args.OriginalSource as DependencyObject);
 				var point = args.GetPosition(fence ?? (UIElement)surface.RootElement);
