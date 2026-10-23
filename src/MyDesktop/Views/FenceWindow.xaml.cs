@@ -147,10 +147,10 @@ internal partial class FenceWindow : Window
 		_clickRename = new ClickToRename(BeginRename, item => IsActive && ItemsList.SelectedItems.Count == 1 && ItemsList.SelectedItem == item);
 		// 按在空白处时框选的处理会把事件标记为已处理，仍要收到它才能取消别处的选择
 		ItemsList.AddHandler(PreviewMouseDownEvent, new MouseButtonEventHandler(ItemsList_PreviewMouseDown), true);
-		// 列表可用宽度变了（分区改大小、出现或去掉滚动条）时，详细信息视图重排各列
+		// 列表可用宽度变了（分区改大小）、出现或去掉滚动条（叠在内容上，不改变可用宽度，看内容和可视高度）时，详细信息视图重排各列
 		ItemsList.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((_, e) =>
 		{
-			if (e.ViewportWidthChange != 0)
+			if (e.ViewportWidthChange != 0 || e.ExtentHeightChange != 0 || e.ViewportHeightChange != 0)
 			{
 				UpdateDetailsColumns();
 			}
@@ -1944,7 +1944,13 @@ internal partial class FenceWindow : Window
 		{
 			return;
 		}
-		double width = _scroller.ViewportWidth;
+		// 滚动条叠在内容上（见 FenceListBox），出现时表头和每一行都给它留出位置（宽 5、右边距 5），免得压住右对齐的大小列
+		double gap = _scroller.ComputedVerticalScrollBarVisibility == Visibility.Visible ? 10 : 0;
+		if (Resources["DetailsScrollGap"] is not Thickness current || current.Right != gap)
+		{
+			Resources["DetailsScrollGap"] = new Thickness(0, 0, gap, 0);
+		}
+		double width = _scroller.ViewportWidth - gap;
 		DetailsHeader.Width = width;
 		var auto = AutoDetailsWidths();
 		double dateWidth = Model.DetailsDateWidth ?? auto.Date;
