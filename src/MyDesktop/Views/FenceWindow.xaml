@@ -52,6 +52,8 @@
 		<GridLength x:Key="DetailsDateWidth">0</GridLength>
 		<GridLength x:Key="DetailsTypeWidth">0</GridLength>
 		<GridLength x:Key="DetailsSizeWidth">0</GridLength>
+		<!-- 详细信息视图每一行右侧给叠在内容上的滚动条留的位置，出现滚动条时在代码里设置，和表头一致 -->
+		<Thickness x:Key="DetailsScrollGap">0</Thickness>
 
 		<!-- 详细信息视图的表头格：悬停时有底色，点一下按这一列排序 -->
 		<Style x:Key="DetailsHeaderCell" TargetType="Border">
@@ -219,7 +221,7 @@
 
 		<!-- 详细信息视图的一行：图标、名称和列表视图一样，后面是修改日期、类型、大小，列宽与表头（DetailsHeader）一致 -->
 		<DataTemplate x:Key="DetailsTemplate" DataType="{x:Type local:FenceItem}">
-			<Grid x:Name="Row" ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="700">
+			<Grid x:Name="Row" Margin="{DynamicResource DetailsScrollGap}" ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="700">
 				<Grid.ColumnDefinitions>
 					<ColumnDefinition Width="Auto" />
 					<ColumnDefinition Width="*" />

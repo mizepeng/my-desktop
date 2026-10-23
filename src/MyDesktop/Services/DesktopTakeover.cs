@@ -4,6 +4,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using MyDesktop.Core;
+using MyDesktop.Models;
 using MyDesktop.Native;
 using MyDesktop.Views;
 using static MyDesktop.Native.NativeMethods;
@@ -116,6 +117,8 @@ internal sealed class DesktopTakeover : IDisposable
 	}
 
 	public DesktopItems Items { get; }
+
+	public AppSettings Settings => _manager.Settings;
 
 	/// <summary>
 	/// 是否已隐藏资源管理器的图标、由图标层画出散放图标。读不到资源管理器的桌面视图时不接管。
@@ -1325,6 +1328,8 @@ internal sealed class DesktopTakeover : IDisposable
 	/// <summary>
 	/// 框选后桌面还在前台，这时按删除键由键盘钩子转过来，本程序不在前台，系统不让弹出的确认框（Shift+Delete 永久删除）到前面，
 	/// 用户反馈多选后按 Shift+Delete 没反应；和桌面在前台时按 F2 改名一样，先把图标层切到前台。
+	/// 确认框不挂在图标层名下：从属窗口必须在所有者之上，而图标层在 WM_WINDOWPOSCHANGING 里总把自己摆回紧贴桌面（KeepAboveDesktop），
+	/// 确认框一提到前面就连带图标层上来、又被一起压回去，用户反馈「删除多个项目」确认框一直闪烁；不指定所有者时它是独立的顶层窗口。
 	/// </summary>
 	void DeleteFromKeyboard(DesktopLayerWindow owner, List<FenceItem> items, bool permanent)
 	{
@@ -1332,7 +1337,7 @@ internal sealed class DesktopTakeover : IDisposable
 		{
 			Log.Warn("删除前没能切到前台，确认框可能被挡住");
 		}
-		ItemOps.Delete(owner.Handle, items, permanent);
+		ItemOps.Delete(IntPtr.Zero, items, permanent);
 	}
 
 	void ShowPropertiesForSelection(DesktopLayerWindow owner)
@@ -1488,7 +1493,29 @@ internal sealed class DesktopTakeover : IDisposable
 			}
 			points.Add(ToPosition(snapshot, cell));
 		}
-		Items.Move(keys, points);
+		if (snapshot.AutoArrange)
+		{
+			Items.Move(keys, points);
+			return;
+		}
+		// 收进分区的图标在资源管理器里仍占着原来的格子，桌面上看是空位，放过去会被资源管理器挤到相邻的空格（用户反馈「想放到 A，它跳到 C」）。
+		// 占着目标格子的分区图标换到被拖图标原来的格子上：它显示在分区里，在资源管理器里的位置看不见。排在前面先摆，先腾出目标格子
+		var fenced = _manager.FencedKeys();
+		var moving = keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+		var vacated = new Queue<POINT>(keys.Select(Items.Find).OfType<DesktopEntry>().Select(e => (POINT)e.Position));
+		var swapKeys = new List<string>();
+		var swapPoints = new List<POINT>();
+		foreach (var target in points)
+		{
+			var occupant = snapshot.Items.FirstOrDefault(e => fenced.Contains(e.Key) && !moving.Contains(e.Key) && !swapKeys.Contains(e.Key)
+					&& Math.Abs(e.Position.X - target.X) < spacing.X / 2 && Math.Abs(e.Position.Y - target.Y) < spacing.Y / 2);
+			if (occupant != null && vacated.Count > 0)
+			{
+				swapKeys.Add(occupant.Key);
+				swapPoints.Add(vacated.Dequeue());
+			}
+		}
+		Items.Move([.. swapKeys, .. keys], [.. swapPoints, .. points]);
 	}
 
 	#endregion

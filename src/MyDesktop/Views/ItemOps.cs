@@ -51,10 +51,20 @@ internal sealed record DesktopDrag(IReadOnlyList<string> Keys, IReadOnlyList<str
 /// </summary>
 internal sealed class DropPreview
 {
+	// DROPDESCRIPTION 的图标类型：不画放置说明的图标
+	const int DropImageNoImage = 8;
+
+	// 当前接收拖动的那个（分区或图标层）。系统的拖动预览在各窗口之间是共用的：分区、图标层的离开要延后一拍才处理，
+	// 那时拖动可能已经进了另一个窗口，再通知离开会把那边刚显示的预览图一起关掉，经过分区再出来预览图就不见了（用户反馈）
+	static DropPreview? _current;
+
 	IDropTargetHelper? _helper;
+	IntPtr _hwnd;
 
 	public void Enter(IntPtr hwnd, DragEventArgs e)
 	{
+		_current = this;
+		_hwnd = hwnd;
 		try
 		{
 			_helper ??= (IDropTargetHelper)new DragDropHelper();
@@ -73,6 +83,12 @@ internal sealed class DropPreview
 
 	public void Over(DragEventArgs e)
 	{
+		// 拖出去又很快拖回来时，本窗口延后的离开被取消、不会再收到拖入，期间另一个窗口接手过：重新接手，免得那边迟到的离开关掉预览图
+		if (_current != this && _hwnd != IntPtr.Zero)
+		{
+			Enter(_hwnd, e);
+			return;
+		}
 		if (_helper == null)
 		{
 			return;
@@ -81,16 +97,73 @@ internal sealed class DropPreview
 		_helper.DragOver(ref point, (int)e.Effects);
 	}
 
-	public void Leave() => _helper?.DragLeave();
+	public void Leave()
+	{
+		if (_current != this)
+		{
+			return;
+		}
+		_current = null;
+		_helper?.DragLeave();
+	}
 
 	public void Drop(DragEventArgs e, DragDropEffects effect)
 	{
+		_current = null;
 		if (_helper == null || e.Data is not ComIDataObject data)
 		{
 			return;
 		}
 		var point = NativeMethods.GetCursorPos();
 		_helper.Drop(data, ref point, (int)effect);
+	}
+
+	/// <summary>
+	/// 在桌面上挪动图标位置时不画放置说明的图标，在 Enter、Over 之前调用：放置目标不写说明时，系统在鼠标处画一个默认的移动箭头，
+	/// 随按住图标的位置不同还会压在图标名称上（用户反馈），资源管理器挪图标时也不显示它。
+	/// 分区里写「移动到 xx」的说明文字试过，没有显示（说明文字要拖动源开始拖动时声明允许，本程序拖出时没有声明，用户实机反馈）。
+	/// </summary>
+	public void HideDropImage(DragEventArgs e)
+	{
+		if (e.Data is not ComIDataObject data)
+		{
+			return;
+		}
+		// DROPDESCRIPTION：图标类型，再是两个各 260 个字符（MAX_PATH）的字符串，这里都留空
+		int size = 4 + 260 * 2 * 2;
+		var memory = GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)size);
+		if (memory == IntPtr.Zero)
+		{
+			Log.Warn($"写入放置说明失败：{Marshal.GetLastWin32Error()}");
+			return;
+		}
+		var bytes = new byte[size];
+		BitConverter.GetBytes(DropImageNoImage).CopyTo(bytes, 0);
+		Marshal.Copy(bytes, 0, GlobalLock(memory), size);
+		GlobalUnlock(memory);
+		var format = new System.Runtime.InteropServices.ComTypes.FORMATETC
+		{
+			cfFormat = unchecked((short)DataFormats.GetDataFormat("DropDescription").Id),
+			dwAspect = System.Runtime.InteropServices.ComTypes.DVASPECT.DVASPECT_CONTENT,
+			lindex = -1,
+			tymed = System.Runtime.InteropServices.ComTypes.TYMED.TYMED_HGLOBAL,
+		};
+		var medium = new System.Runtime.InteropServices.ComTypes.STGMEDIUM
+		{
+			tymed = System.Runtime.InteropServices.ComTypes.TYMED.TYMED_HGLOBAL,
+			unionmember = memory,
+		};
+		try
+		{
+			// fRelease 为 true：成功后内存归数据对象所有
+			data.SetData(ref format, ref medium, true);
+		}
+		catch (Exception ex)
+		{
+			// 拖动源的数据对象不一定接受写入（如部分第三方程序），那样就照旧显示系统默认的样子
+			GlobalFree(memory);
+			Log.Warn("写入放置说明失败", ex);
+		}
 	}
 }
 

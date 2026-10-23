@@ -147,6 +147,11 @@ public sealed class AppSettings
 	public bool ExpandOnHover { get; set; } = true;
 
 	/// <summary>
+	/// 单击图标就打开，不用双击；按住 Ctrl、Shift 单击仍是多选。开着时不再「单击已选中图标的名称开始改名」，改名用 F2 或右键菜单。
+	/// </summary>
+	public bool SingleClickOpen { get; set; }
+
+	/// <summary>
 	/// 鼠标移开后多久收起悬停展开的分区（毫秒）；收起前鼠标还在分区上时按这个间隔再看，所以不能为 0。
 	/// </summary>
 	public int CollapseDelay { get; set; } = 400;

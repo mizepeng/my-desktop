@@ -147,10 +147,10 @@ internal partial class FenceWindow : Window
 		_clickRename = new ClickToRename(BeginRename, item => IsActive && ItemsList.SelectedItems.Count == 1 && ItemsList.SelectedItem == item);
 		// 按在空白处时框选的处理会把事件标记为已处理，仍要收到它才能取消别处的选择
 		ItemsList.AddHandler(PreviewMouseDownEvent, new MouseButtonEventHandler(ItemsList_PreviewMouseDown), true);
-		// 列表可用宽度变了（分区改大小、出现或去掉滚动条）时，详细信息视图重排各列
+		// 列表可用宽度变了（分区改大小）、出现或去掉滚动条（叠在内容上，不改变可用宽度，看内容和可视高度）时，详细信息视图重排各列
 		ItemsList.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((_, e) =>
 		{
-			if (e.ViewportWidthChange != 0)
+			if (e.ViewportWidthChange != 0 || e.ExtentHeightChange != 0 || e.ViewportHeightChange != 0)
 			{
 				UpdateDetailsColumns();
 			}
@@ -1944,7 +1944,13 @@ internal partial class FenceWindow : Window
 		{
 			return;
 		}
-		double width = _scroller.ViewportWidth;
+		// 滚动条叠在内容上（见 FenceListBox），出现时表头和每一行都给它留出位置（宽 5、右边距 5），免得压住右对齐的大小列
+		double gap = _scroller.ComputedVerticalScrollBarVisibility == Visibility.Visible ? 10 : 0;
+		if (Resources["DetailsScrollGap"] is not Thickness current || current.Right != gap)
+		{
+			Resources["DetailsScrollGap"] = new Thickness(0, 0, gap, 0);
+		}
+		double width = _scroller.ViewportWidth - gap;
 		DetailsHeader.Width = width;
 		var auto = AutoDetailsWidths();
 		double dateWidth = Model.DetailsDateWidth ?? auto.Date;
@@ -2856,13 +2862,17 @@ internal partial class FenceWindow : Window
 		}
 		if (e.ClickCount >= 2)
 		{
-			if (ItemsList.SelectedItems.Contains(item))
+			// 单击打开时第一下抬起时已经打开过，双击的第二下不再打开
+			if (!Settings.SingleClickOpen)
 			{
-				OpenSelected();
-			}
-			else
-			{
-				OpenItems([item]);
+				if (ItemsList.SelectedItems.Contains(item))
+				{
+					OpenSelected();
+				}
+				else
+				{
+					OpenItems([item]);
+				}
 			}
 			_pressedItem = null;
 			e.Handled = true;
@@ -2934,8 +2944,19 @@ internal partial class FenceWindow : Window
 			ItemsList.UnselectAll();
 			ItemsList.SelectedItem = _pressedItem;
 		}
-		// 没有拖动、抬起时还在按下的图标上：单击的是已选中图标的名称时，过一会儿开始改名
-		_clickRename.Release(_pressedItem);
+		if (Settings.SingleClickOpen)
+		{
+			// 单击打开（B 站评论建议）：没有拖动、抬起时还在按下的图标上就打开它；按住 Ctrl、Shift 是多选，不打开
+			if (_pressedItem != null && Keyboard.Modifiers == ModifierKeys.None)
+			{
+				OpenItems([_pressedItem]);
+			}
+		}
+		else
+		{
+			// 没有拖动、抬起时还在按下的图标上：单击的是已选中图标的名称时，过一会儿开始改名
+			_clickRename.Release(_pressedItem);
+		}
 		_deferSelection = false;
 		_pressedItem = null;
 	}
@@ -3448,6 +3469,7 @@ internal partial class FenceWindow : Window
 			if (Model.IsPortal)
 			{
 				menu.Add("在资源管理器中打开", OpenFolderInExplorer, enabled: folderExists);
+				menu.Add("复制文件夹路径", CopyFolderPath);
 				menu.Add("更换映射文件夹…", () => _manager.ChangePortalFolder(this));
 			}
 			menu.AddSeparator();
@@ -3676,6 +3698,21 @@ internal partial class FenceWindow : Window
 		catch (Exception ex)
 		{
 			Log.Warn($"打开文件夹失败：{CurrentFolder}", ex);
+		}
+	}
+
+	/// <summary>
+	/// 映射分区当前显示的文件夹（进入子文件夹后是子文件夹）的路径复制成文本（B 站评论建议）。
+	/// </summary>
+	void CopyFolderPath()
+	{
+		try
+		{
+			Clipboard.SetText(CurrentFolder);
+		}
+		catch (Exception ex)
+		{
+			Log.Warn($"复制文件夹路径失败：{CurrentFolder}", ex);
 		}
 	}
 
@@ -4007,6 +4044,12 @@ internal partial class FenceWindow : Window
 		}
 		var effect = ComputeDropEffect(e);
 		TrackReorder(e, effect);
+		// 调整顺序、桌面图标归入桌面分区都不动文件，和在桌面上挪图标一样不画放置说明的图标；每次经过都写，
+		// 停在图标上时它自己的放置目标改写过说明（加号等），离开时改回默认，不重写的话回到空白处会出现默认的箭头（用户反馈）
+		if (IsReorderDrag() || (IsDesktopFence && _dropFromDesktop))
+		{
+			_dropPreview.HideDropImage(e);
+		}
 		return effect;
 	}
 

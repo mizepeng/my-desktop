@@ -199,6 +199,16 @@
 				<StackPanel x:Name="FencesPage" Visibility="Collapsed">
 					<TextBlock Style="{StaticResource PageTitle}" Text="分区" />
 
+					<TextBlock Style="{StaticResource SectionTitle}" Text="图标" />
+					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="SingleClickOpenBox" Click="Setting_Changed">
+							<StackPanel>
+								<TextBlock Text="单击打开图标" />
+								<TextBlock Style="{StaticResource Hint}" Text="分区和桌面上的图标都适用；按住 Ctrl 或 Shift 单击仍是多选，改名用 F2 或右键菜单" />
+							</StackPanel>
+						</CheckBox>
+					</Border>
+
 					<TextBlock Style="{StaticResource SectionTitle}" Text="卷起与展开" />
 					<Border Style="{StaticResource Card}">
 						<CheckBox x:Name="ExpandOnHoverBox" Click="Setting_Changed">

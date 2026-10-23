@@ -3,7 +3,7 @@
 本文件为在此仓库中工作的 AI 编程助手提供项目约定和开发指导。只放每次都要遵守的内容，细节按需阅读下面的文档。
 
 ## 项目概况
-MyDesktop：Windows 11 桌面分区整理工具（对标 Fences），.NET 10，正在迁移到 WinUI 3 + Composition。
+MyDesktop：Windows 10 / 11 桌面分区整理工具（对标 Fences），.NET 10，正在迁移到 WinUI 3 + Composition。
 - `src/MyDesktop.Core`：不依赖界面框架的模型、配置存储、备份、使用记录、拼音搜索、标签组、桌面快照和散放布局规则；保留现有配置命名空间及 JSON 格式。
 - `src/MyDesktop.WinUI`：新界面入口，使用 Windows App SDK 2.5.1；每屏一个桌面宿主，分区和标签均为内部视图，收起的分区常驻同屏浮层。
 - `src/MyDesktop`：迁移期间保留的 WPF 入口，引用同一个核心工程；安装包仍使用此入口，尚未切换发行入口。
