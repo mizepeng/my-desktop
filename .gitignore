@@ -4,7 +4,6 @@ obj/
 .idea/
 *.user
 *.suo
-publish/
 dist/
 artifacts/
 *_wpftmp.csproj
