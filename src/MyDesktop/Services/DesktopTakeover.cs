@@ -1325,6 +1325,8 @@ internal sealed class DesktopTakeover : IDisposable
 	/// <summary>
 	/// 框选后桌面还在前台，这时按删除键由键盘钩子转过来，本程序不在前台，系统不让弹出的确认框（Shift+Delete 永久删除）到前面，
 	/// 用户反馈多选后按 Shift+Delete 没反应；和桌面在前台时按 F2 改名一样，先把图标层切到前台。
+	/// 确认框不挂在图标层名下：从属窗口必须在所有者之上，而图标层在 WM_WINDOWPOSCHANGING 里总把自己摆回紧贴桌面（KeepAboveDesktop），
+	/// 确认框一提到前面就连带图标层上来、又被一起压回去，用户反馈「删除多个项目」确认框一直闪烁；不指定所有者时它是独立的顶层窗口。
 	/// </summary>
 	void DeleteFromKeyboard(DesktopLayerWindow owner, List<FenceItem> items, bool permanent)
 	{
@@ -1332,7 +1334,7 @@ internal sealed class DesktopTakeover : IDisposable
 		{
 			Log.Warn("删除前没能切到前台，确认框可能被挡住");
 		}
-		ItemOps.Delete(owner.Handle, items, permanent);
+		ItemOps.Delete(IntPtr.Zero, items, permanent);
 	}
 
 	void ShowPropertiesForSelection(DesktopLayerWindow owner)

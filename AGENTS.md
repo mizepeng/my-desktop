@@ -3,7 +3,7 @@
 本文件为在此仓库中工作的 AI 编程助手提供项目约定和开发指导。只放每次都要遵守的内容，细节按需阅读下面的文档。
 
 ## 项目概况
-MyDesktop：Windows 11 桌面分区整理工具（对标 Fences），.NET 10 + WPF，单个项目 `src/MyDesktop`，没有第三方依赖。没有测试项目和 lint 配置，验证靠编译加实机运行。README 面向最终用户，开发说明写在脚本开头：`installer/MyDesktop.iss`、`src/MyDesktop/ShellExtension/Pack-DesktopMenu.ps1`。
+MyDesktop：Windows 10 / 11 桌面分区整理工具（对标 Fences），.NET 10 + WPF，单个项目 `src/MyDesktop`，没有第三方依赖。没有测试项目和 lint 配置，验证靠编译加实机运行。README 面向最终用户，开发说明写在脚本开头：`installer/MyDesktop.iss`、`src/MyDesktop/ShellExtension/Pack-DesktopMenu.ps1`。
 ## 按需阅读的文档
 | 文档 | 什么时候读 |
 | --- | --- |

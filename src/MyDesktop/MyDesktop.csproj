@@ -13,7 +13,7 @@
 		<!-- 自定义入口：右键菜单服务进程不加载 WPF -->
 		<StartupObject>MyDesktop.Program</StartupObject>
 		<Product>MyDesktop 桌面分区</Product>
-		<Description>Windows 11 桌面分区整理工具</Description>
+		<Description>Windows 10 / 11 桌面分区整理工具</Description>
 		<Version>1.4.2</Version>
 		<SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
 		<!-- 枚举 switch 表达式漏掉分支时直接编译失败；未命名枚举值的提示无意义，关闭 -->
