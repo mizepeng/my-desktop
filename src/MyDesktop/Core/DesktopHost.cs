@@ -757,9 +757,12 @@ internal static class DesktopHost
 				problem = $"{labels.GetValueOrDefault(fence)}在桌面下面";
 				break;
 			}
-			// 展开置顶的亚克力跟着自己的分区在应用之上，盖住其他分区是预期的；盖住自己的分区才算错
+			// 展开置顶的亚克力跟着自己的分区在应用之上，盖住其他分区是预期的；盖住自己的分区才算错。
+			// 和分区不重叠的亚克力排在它上面看不出来，不算错：显示桌面后别的分区（连同亚克力）进了置顶层、这个分区展开后放回普通层时就是这样，
+			// 以前也报，日志里反复出现带整份层级快照的误报（2026-10）
+			var fenceRect = GetWindowRect(fence);
 			var coveringBackdrop = Backdrops.FirstOrDefault(h => IsWindowVisible(h) && order.TryGetValue(h, out int index) && index < fenceIndex
-					&& ExpandedBackdropCovers(h, fence));
+					&& ExpandedBackdropCovers(h, fence) && GetWindowRect(h).IntersectsWith(fenceRect));
 			if (coveringBackdrop != IntPtr.Zero)
 			{
 				problem = $"{labels.GetValueOrDefault(coveringBackdrop)}在{labels.GetValueOrDefault(fence)}上面";
