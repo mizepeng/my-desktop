@@ -1282,6 +1282,11 @@ internal partial class FenceWindow : Window
 	/// 用 DWM 把窗口藏起来（cloak）或取消：藏着时照常绘制，只是不显示在屏幕上，显示和隐藏都在下一次屏幕刷新时生效。
 	/// </summary>
 	/// <summary>
+	/// 没显示的标签预热自己的亚克力窗口，第一次切过来时不闪（见 AcrylicBackdrop.WarmUpAsync）；显示着的、不用亚克力的什么也不做。
+	/// </summary>
+	public Task WarmUpBackdropAsync() => _backdrop != null && !IsVisible ? _backdrop.WarmUpAsync(TargetRect()) : Task.CompletedTask;
+
+	/// <summary>
 	/// 用 DWM 藏起（cloak）分区，亚克力窗口一起藏。
 	/// </summary>
 	public void SetCloaked(bool cloaked)

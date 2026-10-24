@@ -202,6 +202,18 @@ internal sealed class FenceManager
 		}
 		RefreshAllTabs();
 		EnsureAllOnScreen();
+		// 同组没显示的标签先让 DWM 准备好亚克力，第一次切过去时不闪（见 AcrylicBackdrop.WarmUpAsync）
+		_dispatcher.InvokeAsync(() =>
+		{
+			if (_fencesHidden)
+			{
+				return;
+			}
+			foreach (var window in _windows)
+			{
+				_ = window.WarmUpBackdropAsync();
+			}
+		}, DispatcherPriority.ApplicationIdle);
 		// 要播启动动画时先等桌面显示出来、分区里的图标加载好，再接管桌面图标
 		if (_flyInAtStartup)
 		{

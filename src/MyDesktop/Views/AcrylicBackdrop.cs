@@ -20,6 +20,8 @@ internal sealed class AcrylicBackdrop : IDisposable
 	readonly IntPtr _hwnd;
 	byte _alpha = 255;
 	int _corner = -1;
+	// 正在预热（见 WarmUpAsync）
+	bool _warming;
 
 	public AcrylicBackdrop()
 	{
@@ -92,6 +94,7 @@ internal sealed class AcrylicBackdrop : IDisposable
 	/// </summary>
 	public void Show(RECT rect, byte alpha)
 	{
+		_warming = false;
 		if (alpha != _alpha)
 		{
 			_alpha = alpha;
@@ -101,6 +104,27 @@ internal sealed class AcrylicBackdrop : IDisposable
 		// 否则它会按那一批的要求再插一次，跑到刚摆好的分区上面
 		uint zOrder = DesktopHost.IsAdjustingZOrder ? SWP_NOZORDER : 0;
 		SetWindowPos(_hwnd, HWND_TOP, rect.Left, rect.Top, rect.Width, rect.Height, SWP_NOACTIVATE | SWP_SHOWWINDOW | zOrder);
+	}
+
+	/// <summary>
+	/// 预热：DWM 第一次合成亚克力窗口时，头一帧还没模糊好，分区底下透出来的不对，整个分区连标题栏看上去闪一下
+	/// （用户反馈：重启后第一次切到同组没显示的标签时闪，之后就不太闪；对照实验：背景改成半透明就不闪）。
+	/// 所以先以几乎全透明（1/255）在 rect（屏幕物理像素）显示几帧，让 DWM 准备好，再藏起来；准备过一次以后藏起再显示不会再闪。
+	/// 期间正式显示（Show）了就不再藏起。
+	/// </summary>
+	public async Task WarmUpAsync(RECT rect)
+	{
+		Show(rect, 1);
+		_warming = true;
+		for (int i = 0; i < 3; i++)
+		{
+			await FlyingIcon.NextFrame();
+		}
+		if (_warming)
+		{
+			_warming = false;
+			Hide();
+		}
 	}
 
 	public IntPtr Handle => _hwnd;
