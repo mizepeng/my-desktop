@@ -597,6 +597,13 @@ internal static class NativeMethods
 	[DllImport("kernel32.dll")]
 	public static extern IntPtr GlobalFree(IntPtr memory);
 
+	public const uint MEM_COMMIT = 0x1000;
+	public const uint MEM_PRIVATE = 0x20000;
+	public const uint PAGE_WRITECOMBINE = 0x400;
+
+	[DllImport("kernel32.dll")]
+	public static extern UIntPtr VirtualQuery(IntPtr address, out MEMORY_BASIC_INFORMATION info, UIntPtr length);
+
 	#endregion
 
 	#region comdlg32 / uxtheme
@@ -701,6 +708,44 @@ internal static class NativeMethods
 		var monitor = MonitorFromRect(ref rect, MONITOR_DEFAULTTONEAREST);
 		return GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, out uint dpi, out _) == 0 && dpi > 0 ? (int)dpi : 96;
 	}
+
+	/// <summary>
+	/// 本进程里已提交的写合并私有内存：硬件加速时显卡驱动在进程里分配的命令缓冲和画面缓冲都是这种，
+	/// 别的分配（托管堆、原生堆）不会用写合并，可以借它把驱动占的那部分从私有内存里单独拿出来。
+	/// </summary>
+	public static long DriverMemoryBytes()
+	{
+		long total = 0;
+		long address = 0;
+		var size = (UIntPtr)Marshal.SizeOf<MEMORY_BASIC_INFORMATION>();
+		while (VirtualQuery(new IntPtr(address), out var info, size) != UIntPtr.Zero)
+		{
+			long region = (long)info.RegionSize;
+			if (info.State == MEM_COMMIT && info.Type == MEM_PRIVATE && (info.Protect & PAGE_WRITECOMBINE) != 0)
+			{
+				total += region;
+			}
+			address = info.BaseAddress.ToInt64() + region;
+			if (address <= 0)
+			{
+				break;
+			}
+		}
+		return total;
+	}
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MEMORY_BASIC_INFORMATION
+{
+	public IntPtr BaseAddress;
+	public IntPtr AllocationBase;
+	public uint AllocationProtect;
+	public ushort PartitionId;
+	public UIntPtr RegionSize;
+	public uint State;
+	public uint Protect;
+	public uint Type;
 }
 
 [StructLayout(LayoutKind.Sequential)]

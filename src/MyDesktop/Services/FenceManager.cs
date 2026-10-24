@@ -279,6 +279,7 @@ internal sealed class FenceManager
 		var gc = GC.GetGCMemoryInfo();
 		Log.Info($"内存：私有 {process.PrivateMemorySize64 / 1048576} MB，工作集 {process.WorkingSet64 / 1048576} MB，"
 				+ $"托管堆 {GC.GetTotalMemory(false) / 1048576} MB（已提交 {gc.TotalCommittedBytes / 1048576} MB），"
+				+ $"显卡驱动 {DriverMemoryBytes() / 1048576} MB，"
 				+ $"分区窗口 {_windows.Count} 个，硬件加速{(Settings.HardwareAcceleration ? "开" : "关")}");
 	}
 
