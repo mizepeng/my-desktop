@@ -10,6 +10,7 @@ MyDesktop：Windows 10 / 11 桌面分区整理工具（对标 Fences），.NET 1
 | [docs/dev/architecture.md](docs/dev/architecture.md) | 改接管、窗口层级、分区、标签页、背景效果、整理动画、搜索、右键菜单、安装与自动更新等模块前 |
 | [docs/dev/constraints.md](docs/dev/constraints.md) | 改窗口层级、透明窗口、钩子、Shell 图标、亚克力与毛玻璃、动画、内存相关代码前（必读，都是实测结论） |
 | [docs/dev/setup-and-release.md](docs/dev/setup-and-release.md) | 换电脑配环境、签名证书、打测试包或发行版安装包时 |
+| [docs/dev/winui-migration-retrospective.md](docs/dev/winui-migration-retrospective.md) | 想重新考虑换界面框架（如 WinUI 3）时；2026-10 的 WinUI 迁移已暂停，记录了原因、内存实测和经验教训 |
 ## 常用命令
 ```bash
 dotnet build src/MyDesktop/MyDesktop.csproj
