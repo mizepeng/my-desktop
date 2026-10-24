@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Windows.Input;
 using MyDesktop.Core;
 using static MyDesktop.Native.NativeMethods;
 
@@ -10,6 +9,9 @@ namespace MyDesktop.Native;
 /// </summary>
 internal static class ShellContextMenu
 {
+	// 不用 WPF 的 Keyboard.Modifiers：WinUI 入口也链接这个文件
+	static bool IsDown(int key) => (GetAsyncKeyState(key) & 0x8000) != 0;
+
 	const uint CMF_NORMAL = 0x0000;
 	const uint CMF_DEFAULTONLY = 0x0001;
 	const uint CMF_CANRENAME = 0x0010;
@@ -69,7 +71,7 @@ internal static class ShellContextMenu
 		var menu = CreatePopupMenu();
 		try
 		{
-			bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+			bool shift = IsDown(VK_SHIFT);
 			uint flags = CMF_NORMAL | CMF_CANRENAME | (shift ? CMF_EXTENDEDVERBS : 0);
 			Marshal.ThrowExceptionForHR(contextMenu.QueryContextMenu(menu, 0, FirstShellId, LastShellId, flags));
 			if (extraItems.Count > 0)
@@ -208,13 +210,12 @@ internal static class ShellContextMenu
 
 	static void Invoke(IContextMenu contextMenu, IntPtr hwnd, uint offset, POINT point)
 	{
-		var modifiers = Keyboard.Modifiers;
 		var info = new CMINVOKECOMMANDINFOEX
 		{
 			cbSize = Marshal.SizeOf<CMINVOKECOMMANDINFOEX>(),
 			fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE
-					| ((modifiers & ModifierKeys.Control) != 0 ? CMIC_MASK_CONTROL_DOWN : 0)
-					| ((modifiers & ModifierKeys.Shift) != 0 ? CMIC_MASK_SHIFT_DOWN : 0),
+					| (IsDown(VK_CONTROL) ? CMIC_MASK_CONTROL_DOWN : 0)
+					| (IsDown(VK_SHIFT) ? CMIC_MASK_SHIFT_DOWN : 0),
 			hwnd = hwnd,
 			lpVerb = (IntPtr)offset,
 			lpVerbW = (IntPtr)offset,

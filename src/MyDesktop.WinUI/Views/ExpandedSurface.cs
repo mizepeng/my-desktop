@@ -106,6 +106,8 @@ internal sealed class ExpandedSurface : Window, IDisposable
 	{
 		// 临时浮层不能被系统关闭命令单独关掉，生命周期由桌面会话管理。
 		if (message == 0x0010 && !_disposed) { return 0; }
+		// 收起分区的系统右键菜单以浮层为宿主，菜单消息同样转给 Shell
+		if (ShellContextMenu.TryHandleMenuMessage((int)message, wParam, lParam, out var menuResult)) { return menuResult; }
 		if (message == DesktopPlacement.RefreshMessage) { _placement.Refresh(); return 0; }
 		if (message == WM_WINDOWPOSCHANGING) { _placement?.Constrain(lParam); }
 		if (message == 0x0014) { return TransparentBackdrop.ClearBackground(hwnd, wParam); }

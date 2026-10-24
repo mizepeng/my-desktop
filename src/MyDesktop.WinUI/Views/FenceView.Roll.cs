@@ -16,6 +16,8 @@ public sealed partial class FenceView
 {
 	const float TitleThickness = 36;
 	readonly HashSet<MenuFlyout> _openMenus = [];
+	// 正开着的模态原生菜单（系统右键菜单）层数
+	int _nativeMenus;
 	DispatcherQueueTimer _collapseTimer = null!;
 	bool _temporaryExpanded, _pointerInside, _dropInside;
 	double _reveal = 1;
@@ -81,7 +83,7 @@ public sealed partial class FenceView
 		_collapseTimer.Interval = TimeSpan.FromMilliseconds(_settings.CollapseDelay);
 		_collapseTimer.Tick += (_, _) =>
 		{
-			if (_pointerInside || _dropInside || _openMenus.Count > 0 || IsEditing || RollInteractionHeld?.Invoke() == true) { return; }
+			if (_pointerInside || _dropInside || _openMenus.Count > 0 || _nativeMenus > 0 || IsEditing || RollInteractionHeld?.Invoke() == true) { return; }
 			if (Native.DesktopInput.IsInputDesktop())
 			{
 				var cursor = NativeMethods.GetCursorPos();
@@ -155,6 +157,24 @@ public sealed partial class FenceView
 	{
 		menu.Opened += (_, _) => { _openMenus.Add(menu); _collapseTimer.Stop(); };
 		menu.Closed += (_, _) => { _openMenus.Remove(menu); if (_temporaryExpanded) { _collapseTimer.Start(); } };
+	}
+
+	/// <summary>
+	/// 弹出模态的原生菜单（系统右键菜单）期间不收回临时展开，和 MenuFlyout 一样；菜单关掉后再照常计时收回。
+	/// </summary>
+	internal void HoldExpansion(Action showModalMenu)
+	{
+		_nativeMenus++;
+		_collapseTimer.Stop();
+		try
+		{
+			showModalMenu();
+		}
+		finally
+		{
+			_nativeMenus--;
+			if (_temporaryExpanded) { _collapseTimer.Start(); }
+		}
 	}
 
 	void UpdateRollLayout()

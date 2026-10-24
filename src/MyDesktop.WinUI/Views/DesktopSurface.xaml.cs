@@ -451,6 +451,11 @@ public sealed partial class DesktopSurface : Window
 
 	nint WindowMessage(nint hwnd, uint message, nint wParam, nint lParam, nuint id, nuint data)
 	{
+		// 系统右键菜单的宿主：绘制、子菜单展开的消息转给 Shell，「发送到」「打开方式」才展得开
+		if (ShellContextMenu.TryHandleMenuMessage((int)message, wParam, lParam, out var menuResult))
+		{
+			return menuResult;
+		}
 		if (message == 0x031D)
 		{
 			ClipboardChanged?.Invoke();

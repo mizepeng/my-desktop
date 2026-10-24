@@ -9,7 +9,8 @@
 - `FileCommands` 使用原生 CF_HDROP / Preferred DropEffect 与 Shell 互通，按序号清除本次完成的剪切，不能清掉操作期间的新剪贴板。
   桌面内剪切只变更成员，复制或跨目录移动使用独立 STA 上的 `IFileOperation`，按逐项回调的实际路径同步归属；重名不猜文件名，部分失败不清剪切列表。
   同卷移动成功可返回 `COPYENGINE_S_DONT_PROCESS_CHILDREN`，不能只认 S_OK。
-- Delete 使用回收站及永久删除警告，Shift+Delete 尚未迁移。系统入口不按普通文件复制或删除；完整系统菜单和系统新建后的改名接手仍需后续迁移。
+- Delete 使用回收站及永久删除警告，Shift+Delete 尚未迁移。系统入口不按普通文件复制或删除；系统新建后的改名接手仍需后续迁移。
+- 图标右键菜单与旧版共用 `ShellContextMenu`（链接自 WPF 工程，不依赖 WPF）：桌面项目合成一组，映射分区只取右键所在分区的选择；宿主（`DesktopSurface`、`ExpandedSurface`）把菜单消息转给 Shell，否则「发送到」「打开方式」展不开；菜单开着时 `FenceView.HoldExpansion(Action)` 不收回临时展开；「重命名」改用本程序的改名框。预览和隔离验证仍用只含文件命令的 `FileCommands.CreateMenu`。
   未实现操作会被截住并明确提示；Win 快捷键、其他程序及系统菜单输入照常放行，吞掉的按下和松开成对处理。
 - 左键框选已连接分区和散放图标：按开始时的选择重算，Ctrl/Shift 追加，取消恢复；选框画在已有宿主内，桌面框选越过阈值后才临时扩展输入区域。
   空闲时鼠标移动直接放行，仅框选期间合并投递最新位置；所有鼠标按下、松开均放行，Escape、Win 键、Alt+Tab、右键及接管撤销会取消框选。

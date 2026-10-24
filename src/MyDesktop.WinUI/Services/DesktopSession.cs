@@ -110,11 +110,7 @@ internal sealed class DesktopSession : IDisposable
 			surface.Placement.MergeRequested += (source, target) => Tabs.Merge(surface, source, target);
 			surface.Placement.Changed += () => { UpdateInteraction(); InteractionFinished(); };
 			surface.DesktopIcons.SelectionRequested += (key, extend) => SelectLoose(key, extend, surface);
-			surface.DesktopIcons.ItemContextRequested += (_, anchor, point) =>
-			{
-				SetContext(surface, null);
-				Commands.CreateMenu().ShowAt(anchor, point);
-			};
+			surface.DesktopIcons.ItemContextRequested += (_, anchor, point) => ShowItemMenu(surface, null, anchor, point);
 			surface.ClipboardChanged += () => Commands.RefreshClipboard();
 			DragDrop.ConnectTarget(surface.RootElement, surface, null);
 			surface.DesktopIcons.DragSourceCreated += (source, key) => DragDrop.ConnectSource(source, () => key, surface, null);
@@ -214,11 +210,7 @@ internal sealed class DesktopSession : IDisposable
 			Selection.Retain(fence.Frame.Active.Id, fence.DisplayedPaths);
 			ProjectSelection();
 		};
-		fence.ItemContextRequested += (anchor, point) =>
-		{
-			SetContext(surface, fence);
-			Commands.CreateMenu().ShowAt(anchor, point);
-		};
+		fence.ItemContextRequested += (anchor, point) => ShowItemMenu(surface, fence, anchor, point);
 	}
 
 	internal void LayoutChanged(DesktopSurface surface, FenceView fence)
@@ -332,6 +324,59 @@ internal sealed class DesktopSession : IDisposable
 			}
 		}
 		return result;
+	}
+
+	/// <summary>
+	/// 图标的右键菜单：和资源管理器一致的系统菜单（打开方式、发送到、属性及第三方扩展），与旧版共用 ShellContextMenu。
+	/// 桌面上的项目（散放图标和桌面分区里的）合成一组；映射分区只取右键所在分区里选中的，和旧版 SelectionForShell 一样。
+	/// 「重命名」由本程序的改名框处理，其余命令交给 Shell。预览和隔离验证仍用只含文件命令的简易菜单：不能对真实文件弹系统菜单。
+	/// </summary>
+	void ShowItemMenu(DesktopSurface surface, FenceView? fence, FrameworkElement anchor, Windows.Foundation.Point point)
+	{
+		SetContext(surface, fence);
+		if (IsPreview || _options.IsProbe)
+		{
+			Commands.CreateMenu().ShowAt(anchor, point);
+			return;
+		}
+		bool portal = fence?.Frame.Active.IsPortal == true;
+		var keys = portal
+			? Selection.InScope(fence!.Frame.Active.Id).ToList()
+			: Selection.InScope(Guid.Empty).Concat(_surfaces.SelectMany(item => item.Fences).Where(item => !item.Frame.Active.IsPortal)
+				.SelectMany(item => Selection.InScope(item.Frame.Active.Id))).ToList();
+		if (keys.Count == 0)
+		{
+			return;
+		}
+		nint owner = fence?.InputOwner ?? surface.Handle;
+		try
+		{
+			using var set = (portal ? ShellItemSet.Create(keys) : ShellItemSet.CreateDesktop(keys))
+				?? throw new InvalidOperationException("找不到所选的项目，可能已被移走或删除。");
+			void Show() => ShellContextMenu.Show(owner, set, GetCursorPos(), [], verb =>
+			{
+				// Shell 自己不会处理重命名（需要视图配合），改用本程序的改名框
+				if (!string.Equals(verb, "rename", StringComparison.OrdinalIgnoreCase))
+				{
+					return false;
+				}
+				BeginSelectedRename();
+				return true;
+			});
+			if (fence != null)
+			{
+				fence.HoldExpansion(Show);
+			}
+			else
+			{
+				Show();
+			}
+		}
+		catch (Exception ex)
+		{
+			Log.Error("显示系统右键菜单失败", ex);
+			Notice(ex.Message);
+		}
 	}
 
 	internal void BeginSelectedRename()
