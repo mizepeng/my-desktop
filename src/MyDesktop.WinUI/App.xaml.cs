@@ -42,6 +42,8 @@ public partial class App : Application
 				Log.Init(AppPaths.DataDir);
 				_commands = new Native.InstanceCommands(Shutdown);
 			}
+			// 本进程弹出的 Win32 菜单（系统文件右键菜单）跟随系统深浅色，和旧版一样；不设的话一直是浅色（用户反馈）
+			SystemTheme.ApplyToMenus();
 			var settings = options.PreviewFile == null ? SettingsStore.Load(out _) : SettingsStore.ReadFrom(options.PreviewFile);
 			_session = new DesktopSession(settings, options, Shutdown);
 			_session.Start();

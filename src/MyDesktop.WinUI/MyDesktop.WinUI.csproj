@@ -20,7 +20,11 @@
 	</PropertyGroup>
 	<ItemGroup>
 		<ProjectReference Include="../MyDesktop.Core/MyDesktop.Core.csproj" />
-		<PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
+		<!-- 不引用 Microsoft.WindowsAppSDK 总包：它会带上 AI、机器学习（onnxruntime、DirectML）、搜索、小组件、DWriteCore 等用不到的组件，发布产物多出 50 MB 以上。
+			 只引用用到的组件包，版本与总包 2.5.1 所含的一致 -->
+		<PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.9" />
+		<PackageReference Include="Microsoft.WindowsAppSDK.Foundation" Version="2.3.12" />
+		<PackageReference Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="2.1.9" />
 		<Compile Include="../MyDesktop/Native/NativeMethods.cs" Link="Native/NativeMethods.cs" />
 		<Compile Include="../MyDesktop/Native/ShellInterop.cs" Link="Native/ShellInterop.cs" />
 		<Compile Include="../MyDesktop/Native/ShellContextMenu.cs" Link="Native/ShellContextMenu.cs" />
@@ -33,9 +37,22 @@
 		<Compile Include="../MyDesktop/Native/ExplorerDesktopWindow.cs" Link="Native/ExplorerDesktopWindow.cs" />
 		<Compile Include="../MyDesktop/Core/ExplorerShell.cs" Link="Services/ExplorerShell.cs" />
 		<Compile Include="../MyDesktop/Core/AppCommand.cs" Link="Services/AppCommand.cs" />
+		<Compile Include="../MyDesktop/Core/SystemTheme.cs" Link="Services/SystemTheme.cs" />
 		<Compile Include="../../tests/MyDesktop.WinUI.Smoke/DesktopFixtureProtocol.cs" Link="Verification/DesktopFixtureProtocol.cs" />
 		<RuntimeHostConfigurationOption Include="System.GC.Gen0MaxBudget" Value="6291456" />
 	</ItemGroup>
+	<!--
+		界面只有中文：WinUI 包自带 80 多种语言的系统资源目录（如 de-DE\*.mui），发布时只留 zh-CN 和作为后备的 en-us。
+		它们不是 .NET 卫星程序集，SatelliteResourceLanguages 管不到，只能按发布路径的首级目录过滤。
+	-->
+	<Target Name="TrimWinUILanguages" AfterTargets="ComputeResolvedFilesToPublishList">
+		<ItemGroup>
+			<_OtherLanguageFile Include="@(ResolvedFileToPublish)"
+					Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(ResolvedFileToPublish.RelativePath)', '^[A-Za-z]{2,3}(-[A-Za-z0-9]+)+[\\/]'))
+						And !$([System.Text.RegularExpressions.Regex]::IsMatch('%(ResolvedFileToPublish.RelativePath)', '(?i)^(zh-CN|en-us)[\\/]'))" />
+			<ResolvedFileToPublish Remove="@(_OtherLanguageFile)" />
+		</ItemGroup>
+	</Target>
 	<!--
 		非 MSIX 发布需要显式携带应用资源；SDK 的复制到编译目录规则不会自动进入 dotnet publish。
 	-->

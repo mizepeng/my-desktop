@@ -28,13 +28,33 @@ internal sealed class FileDragDrop(DesktopSession session)
 	{
 		source.CanDrag = !session.IsPreview;
 		DrawPoint? press = null;
+		bool dragging = false;
 		source.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, args) =>
 		{
 			if (args.GetCurrentPoint(source).Properties.IsLeftButtonPressed)
 			{
 				var point = GetCursorPos();
 				press = new(point.X, point.Y);
+				dragging = false;
 			}
+		}), true);
+		// 散放图标是按钮：按下时按钮捕获指针处理点击，用鼠标拖时系统的拖动手势识别不到，CanDrag 不起作用（实机反馈桌面图标拖不动）。
+		// 自己判断：按着左键移出系统拖动阈值就主动开始拖动，之后照常走 DragStarting
+		source.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler((_, args) =>
+		{
+			var current = args.GetCurrentPoint(source);
+			if (session.IsPreview || dragging || press is not DrawPoint start || !current.Properties.IsLeftButtonPressed)
+			{
+				return;
+			}
+			var cursor = GetCursorPos();
+			if (Math.Abs(cursor.X - start.X) < GetSystemMetrics(SM_CXDRAG) && Math.Abs(cursor.Y - start.Y) < GetSystemMetrics(SM_CYDRAG))
+			{
+				return;
+			}
+			dragging = true;
+			source.ReleasePointerCaptures();
+			_ = source.StartDragAsync(current);
 		}), true);
 		source.DragStarting += (_, args) =>
 		{
@@ -44,7 +64,7 @@ internal sealed class FileDragDrop(DesktopSession session)
 			}
 			catch (Exception ex) { args.Cancel = true; Failed(ex); End(); }
 		};
-		source.DropCompleted += (_, _) => { press = null; End(); };
+		source.DropCompleted += (_, _) => { press = null; dragging = false; End(); };
 	}
 
 	internal void ConnectList(FenceView fence, DesktopSurface surface)

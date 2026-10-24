@@ -125,9 +125,26 @@ internal sealed class FileClipboard : IFileClipboard
 		}
 	}
 
+	/// <summary>
+	/// 剪贴板一变，系统的剪贴板历史、写入方等都会去读，同一时刻只能有一方打开，其余得到「拒绝访问」；
+	/// 稍等重试几次（WPF 的 Clipboard 内部也是这样），仍打不开才报错。只读一次时用户剪切后粘贴会提示「无法读取剪贴板：拒绝访问」（实机反馈）。
+	/// </summary>
 	static void Open(nint owner)
 	{
-		if (!OpenClipboard(owner)) { throw new Win32Exception(); }
+		const int ErrorAccessDenied = 5;
+		for (int attempt = 0; ; attempt++)
+		{
+			if (OpenClipboard(owner))
+			{
+				return;
+			}
+			int error = Marshal.GetLastWin32Error();
+			if (error != ErrorAccessDenied || attempt >= 9)
+			{
+				throw new Win32Exception(error);
+			}
+			Thread.Sleep(20);
+		}
 	}
 
 	static nint Lock(nint handle) => GlobalLock(handle) is var pointer && pointer != 0 ? pointer : throw new Win32Exception();

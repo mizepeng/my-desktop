@@ -461,6 +461,11 @@ public sealed partial class DesktopSurface : Window
 			ClipboardChanged?.Invoke();
 			return 0;
 		}
+		// WM_SETTINGCHANGE：系统切换深浅色后，菜单跟着换
+		if (message == 0x001A)
+		{
+			MyDesktop.Core.SystemTheme.ApplyToMenus();
+		}
 		if (message == DesktopPlacement.RefreshMessage)
 		{
 			_placement.Refresh();
