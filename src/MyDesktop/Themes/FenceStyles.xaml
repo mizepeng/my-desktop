@@ -126,6 +126,8 @@
 			<Setter.Value>
 				<ControlTemplate TargetType="ListBoxItem">
 					<Grid>
+						<!-- 用户标的高亮底色（FenceItem.Highlight），铺在悬停、选中底色下面 -->
+						<Border x:Name="HighlightBd" CornerRadius="5" Background="{Binding Highlight}" />
 						<Border x:Name="Bd"
 								CornerRadius="5"
 								Background="Transparent"
@@ -216,6 +218,17 @@
 						</DataTrigger>
 						<DataTrigger Binding="{Binding IsInFlight}" Value="True">
 							<Setter TargetName="Expanded" Property="Opacity" Value="0" />
+						</DataTrigger>
+						<!-- 飞过的图标的高亮底色等这一轮图标全部落定才一起淡入，不一下子冒出来，见 FenceItem.IsHighlightPending -->
+						<DataTrigger Binding="{Binding IsHighlightPending}" Value="True">
+							<Setter TargetName="HighlightBd" Property="Opacity" Value="0" />
+							<DataTrigger.ExitActions>
+								<BeginStoryboard>
+									<Storyboard>
+										<DoubleAnimation Storyboard.TargetName="HighlightBd" Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.3" FillBehavior="Stop" />
+									</Storyboard>
+								</BeginStoryboard>
+							</DataTrigger.ExitActions>
 						</DataTrigger>
 					</ControlTemplate.Triggers>
 				</ControlTemplate>

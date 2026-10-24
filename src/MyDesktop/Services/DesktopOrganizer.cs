@@ -124,6 +124,7 @@ internal sealed class DesktopOrganizer : IDisposable
 			}
 		}
 		await WhenLanded(flights.Select(f => f.Flight));
+		_manager.RevealHighlights();
 	}
 
 	/// <summary>
@@ -198,6 +199,7 @@ internal sealed class DesktopOrganizer : IDisposable
 			// 只是动画出错，飞行结束时图标都已显示出来
 			Log.Warn("启动动画出错", ex);
 		}
+		_manager.RevealHighlights();
 	}
 
 	/// <summary>

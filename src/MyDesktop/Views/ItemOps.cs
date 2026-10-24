@@ -407,7 +407,7 @@ internal static class ItemOps
 		}
 	}
 
-	public static void ShowContextMenu(IntPtr hwnd, IReadOnlyList<FenceItem> items, bool desktop, POINT point, IReadOnlyList<(string Text, Action Action)> extras,
+	public static void ShowContextMenu(IntPtr hwnd, IReadOnlyList<FenceItem> items, bool desktop, POINT point, IReadOnlyList<ExtraMenuItem> extras,
 			Func<string, bool> handleVerb)
 	{
 		using var set = CreateItemSet(items, desktop);

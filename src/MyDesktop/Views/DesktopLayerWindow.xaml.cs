@@ -712,7 +712,7 @@ internal partial class DesktopLayerWindow : Window
 		}
 		try
 		{
-			ItemOps.ShowContextMenu(_hwnd, items, desktop, point, [], verb =>
+			ItemOps.ShowContextMenu(_hwnd, items, desktop, point, [_takeover.HighlightMenu(_hwnd, items.Select(i => i.FullPath).ToList())], verb =>
 			{
 				// Shell 自己不会处理重命名（需要视图配合），改为在图标层内联编辑
 				if (!string.Equals(verb, "rename", StringComparison.OrdinalIgnoreCase))

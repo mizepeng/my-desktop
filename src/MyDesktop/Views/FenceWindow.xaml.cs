@@ -48,7 +48,6 @@ internal partial class FenceWindow : Window
 	static readonly SolidColorBrush HintBackground = Frozen(Color.FromArgb(0xB3, 0x00, 0x00, 0x00));
 	static readonly SolidColorBrush SnappedHintBackground = Frozen(Color.FromArgb(0xE6, 0x3B, 0x82, 0xF6));
 	static readonly SolidColorBrush SnappedHintText = Frozen(Color.FromRgb(0x60, 0xA5, 0xFA));
-	static readonly int[] CustomColors = new int[16];
 
 	readonly FenceManager _manager;
 	readonly ObservableCollection<FenceItem> _items = [];
@@ -1737,7 +1736,7 @@ internal partial class FenceWindow : Window
 		Frame.BorderBrush = _frameBorder;
 		Frame.CornerRadius = new CornerRadius(Radius);
 		UpdateBlur();
-		// 标题栏的灰底随背景不透明度一起变淡：默认的 45% 及以上和原来一样，低于 45% 按比例减，调到 0% 时几乎看不见，
+		// 标题栏的灰底随背景不透明度一起变淡：45% 及以上和原来一样，低于 45% 按比例减，调到 0% 时几乎看不见，
 		// 背景调成全透明、只留图标时不会剩一条灰底；至少留 1/255，标题栏照样能拖（见上面背景色的说明）
 		double titleScale = Math.Min(1, opacity / 0.45);
 		byte titleAlpha = (byte)Math.Max(1, Math.Round((light ? 0x12 : 0x30) * titleScale));
@@ -2515,6 +2514,7 @@ internal partial class FenceWindow : Window
 			RequestIcon(item);
 		}
 		ApplyCutState();
+		ApplyHighlights();
 		EmptyHint.Text = IsDesktopFence ? "把桌面图标拖到这里" : _folderExisted ? "拖放文件到这里" : $"文件夹不存在\n{CurrentFolder}";
 		EmptyHint.Visibility = fresh.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 	}
@@ -2612,6 +2612,28 @@ internal partial class FenceWindow : Window
 		foreach (var item in _items)
 		{
 			item.IsCut = _manager.IsCut(item.FullPath);
+		}
+	}
+
+	/// <summary>
+	/// 用户标了高亮的图标铺上彩色底块。
+	/// </summary>
+	public void ApplyHighlights()
+	{
+		foreach (var item in _items)
+		{
+			item.Highlight = _manager.HighlightOf(item.FullPath);
+		}
+	}
+
+	/// <summary>
+	/// 飞入动画全部落定后，飞过的图标的高亮底色一起淡入，见 FenceItem.IsHighlightPending。
+	/// </summary>
+	public void RevealHighlights()
+	{
+		foreach (var item in _items)
+		{
+			item.IsHighlightPending = false;
 		}
 	}
 
@@ -2795,6 +2817,8 @@ internal partial class FenceWindow : Window
 			watcher.Deleted += OnFolderEvent;
 			watcher.Changed += OnFolderEvent;
 			watcher.Renamed += OnFolderEvent;
+			// 映射文件夹里改名时高亮跟着走（桌面上的改名由 DesktopItems 统一处理）
+			watcher.Renamed += (_, e) => Dispatcher.InvokeAsync(() => _manager.RenameHighlight(e.OldFullPath, e.FullPath));
 			watcher.Error += (_, _) => Dispatcher.InvokeAsync(OnFolderChanged);
 			watcher.EnableRaisingEvents = true;
 			_watcher = watcher;
@@ -3505,14 +3529,14 @@ internal partial class FenceWindow : Window
 		try
 		{
 			var paths = items.Select(i => i.FullPath).ToList();
-			var extras = new List<(string, Action)>();
+			var extras = new List<ExtraMenuItem> { _manager.HighlightMenu(_hwnd, paths) };
 			if (desktop)
 			{
-				extras.Add(("移出分区", () => _manager.AssignToFence(null, paths)));
+				extras.Add(new ExtraMenuItem("移出分区", () => _manager.AssignToFence(null, paths)));
 			}
 			else
 			{
-				extras.Add(("移回桌面", () => MoveToDesktop(paths)));
+				extras.Add(new ExtraMenuItem("移回桌面", () => MoveToDesktop(paths)));
 			}
 			ItemOps.ShowContextMenu(_hwnd, items, desktop, point, extras, verb =>
 			{
@@ -3601,29 +3625,9 @@ internal partial class FenceWindow : Window
 	void PickCustomColor()
 	{
 		var current = Appearance.ParseColor(Model.Color ?? Settings.DefaultColor, Colors.Black);
-		var buffer = Marshal.AllocHGlobal(CustomColors.Length * sizeof(int));
-		try
+		if (ColorDialog.Pick(_hwnd, current) is Color picked)
 		{
-			Marshal.Copy(CustomColors, 0, buffer, CustomColors.Length);
-			var choose = new CHOOSECOLOR
-			{
-				lStructSize = Marshal.SizeOf<CHOOSECOLOR>(),
-				hwndOwner = _hwnd,
-				rgbResult = current.R | (current.G << 8) | (current.B << 16),
-				lpCustColors = buffer,
-				Flags = CC_RGBINIT | CC_FULLOPEN,
-			};
-			if (!ChooseColor(ref choose))
-			{
-				return;
-			}
-			Marshal.Copy(buffer, CustomColors, 0, CustomColors.Length);
-			var picked = Color.FromRgb((byte)(choose.rgbResult & 0xFF), (byte)((choose.rgbResult >> 8) & 0xFF), (byte)((choose.rgbResult >> 16) & 0xFF));
 			SetColor(Appearance.ToHex(picked));
-		}
-		finally
-		{
-			Marshal.FreeHGlobal(buffer);
 		}
 	}
 

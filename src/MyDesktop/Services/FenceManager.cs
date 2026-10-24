@@ -196,6 +196,7 @@ internal sealed class FenceManager
 		ApplyStartupHidden();
 		// 系统关掉了「显示桌面图标」时桌面上没有图标可以飞；启动时就藏起了图标或分区的、关掉了飞入动画的也不播
 		_flyInAtStartup = Settings.FlightAnimation && !DesktopHost.IconsHiddenBySystem() && !_iconsHidden && !_fencesHidden;
+		PruneHighlights();
 		foreach (var model in Settings.Fences.ToList())
 		{
 			OpenWindow(model);
@@ -613,6 +614,7 @@ internal sealed class FenceManager
 			// 只是动画出错，分区已经删除，每个图标结束时都已显示出来
 			Log.Warn("删除分区的动画出错", ex);
 		}
+		RevealHighlights();
 	}
 
 	async Task FlyHomeAsync(HomingIcon icon, TimeSpan delay)
@@ -1048,6 +1050,7 @@ internal sealed class FenceManager
 	public void OnItemRenamed(string oldPath, string newPath)
 	{
 		UsageStats.Rename(oldPath, newPath);
+		RenameHighlight(oldPath, newPath);
 		foreach (var model in Settings.Fences.Where(f => !f.IsPortal))
 		{
 			int index = model.Members.FindIndex(k => string.Equals(k, oldPath, StringComparison.OrdinalIgnoreCase));
@@ -1115,6 +1118,155 @@ internal sealed class FenceManager
 	}
 
 	public bool IsCut(string path) => _cutPaths.Contains(path);
+
+	/// <summary>
+	/// 高亮可选的颜色（#RRGGBB）和名称。
+	/// </summary>
+	static readonly (string Name, string Hex)[] HighlightColors =
+	[
+		("红色", "#E5484D"),
+		("橙色", "#F76B15"),
+		("黄色", "#FFC53D"),
+		("绿色", "#30A46C"),
+		("蓝色", "#0090FF"),
+		("紫色", "#8E4EC6"),
+	];
+
+	readonly Dictionary<string, Brush> _highlightBrushes = new(StringComparer.OrdinalIgnoreCase);
+
+	/// <summary>
+	/// 图标的高亮底色：颜色按 45% 的不透明度铺在图标下面，深色、浅色背景上都看得出来，又不盖住图标；没高亮时为 null。
+	/// </summary>
+	public Brush? HighlightOf(string path)
+	{
+		if (!Settings.Highlights.TryGetValue(path, out var hex))
+		{
+			return null;
+		}
+		if (!_highlightBrushes.TryGetValue(hex, out var brush))
+		{
+			var color = Appearance.ParseColor(hex, Colors.Transparent);
+			color.A = 0x73;
+			brush = new SolidColorBrush(color);
+			brush.Freeze();
+			_highlightBrushes[hex] = brush;
+		}
+		return brush;
+	}
+
+	/// <summary>
+	/// 图标右键菜单里的「高亮」子菜单：各颜色、「自定义颜色…」和「取消高亮」，选中的图标都是同一种颜色时那一项打勾；
+	/// 这种颜色不在预设里时勾在「自定义颜色…」上，色块显示这种颜色。owner 是颜色对话框的所有者窗口。
+	/// </summary>
+	public ExtraMenuItem HighlightMenu(IntPtr owner, IReadOnlyList<string> paths)
+	{
+		var current = paths.Select(p => Settings.Highlights.GetValueOrDefault(p)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+		string? shared = current.Count == 1 ? current[0] : null;
+		bool customShared = shared != null && !HighlightColors.Any(c => string.Equals(c.Hex, shared, StringComparison.OrdinalIgnoreCase));
+		var children = HighlightColors
+				.Select(c => new ExtraMenuItem(c.Name, () => SetHighlight(paths, c.Hex), Swatch: Appearance.ParseColor(c.Hex, Colors.Transparent),
+						Checked: string.Equals(shared, c.Hex, StringComparison.OrdinalIgnoreCase), Radio: true))
+				.Append(new ExtraMenuItem("自定义颜色…", () => PickHighlight(owner, paths, shared),
+						Swatch: customShared ? Appearance.ParseColor(shared, Colors.Transparent) : null, Checked: customShared, Radio: true))
+				.Append(ExtraMenuItem.Separator)
+				.Append(new ExtraMenuItem("取消高亮", () => SetHighlight(paths, null), Enabled: current.Any(h => h != null)))
+				.ToList();
+		return new ExtraMenuItem("高亮", Children: children);
+	}
+
+	/// <summary>
+	/// 用系统颜色对话框挑高亮颜色：初始选中这些图标共同的高亮色，没有时选中第一种预设色；取消时不变。
+	/// </summary>
+	void PickHighlight(IntPtr owner, IReadOnlyList<string> paths, string? shared)
+	{
+		var initial = Appearance.ParseColor(shared ?? HighlightColors[0].Hex, Colors.Black);
+		if (ColorDialog.Pick(owner, initial) is Color picked)
+		{
+			SetHighlight(paths, Appearance.ToHex(picked));
+		}
+	}
+
+	/// <summary>
+	/// 给这些图标设上高亮颜色（hex 为 null 时取消），分区和桌面上的图标立即更新。
+	/// </summary>
+	void SetHighlight(IReadOnlyList<string> paths, string? hex)
+	{
+		foreach (var path in paths)
+		{
+			if (hex == null)
+			{
+				Settings.Highlights.Remove(path);
+			}
+			else
+			{
+				Settings.Highlights[path] = hex;
+			}
+		}
+		SaveSoon();
+		ApplyHighlights();
+	}
+
+	void ApplyHighlights()
+	{
+		foreach (var window in _windows)
+		{
+			window.ApplyHighlights();
+		}
+		_takeover?.ApplyHighlights();
+	}
+
+	/// <summary>
+	/// 一轮飞行动画（启动飞入、整理、删除分区飞回桌面）全部落定后调用：飞过的图标的高亮底色一起淡入。
+	/// </summary>
+	public void RevealHighlights()
+	{
+		foreach (var window in _windows)
+		{
+			window.RevealHighlights();
+		}
+		_takeover?.RevealHighlights();
+	}
+
+	/// <summary>
+	/// 文件、文件夹改名后高亮跟着走；改名的是文件夹时，记在它里面的高亮（映射分区浏览子文件夹时标的）一起改。
+	/// </summary>
+	public void RenameHighlight(string oldPath, string newPath)
+	{
+		string prefix = oldPath.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+		var moved = Settings.Highlights.Keys
+				.Where(k => string.Equals(k, oldPath, StringComparison.OrdinalIgnoreCase) || k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+				.ToList();
+		if (moved.Count == 0)
+		{
+			return;
+		}
+		foreach (var key in moved)
+		{
+			string hex = Settings.Highlights[key];
+			Settings.Highlights.Remove(key);
+			Settings.Highlights[newPath + key[oldPath.Length..]] = hex;
+		}
+		SaveSoon();
+		ApplyHighlights();
+	}
+
+	/// <summary>
+	/// 启动时清掉已经删除的文件的高亮，免得以后出现同名文件时被高亮。只清所在文件夹还在、文件却没了的：
+	/// 文件夹也不在的（移动硬盘、网络位置没接上）可能只是暂时访问不到，先留着。
+	/// </summary>
+	void PruneHighlights()
+	{
+		var stale = Settings.Highlights.Keys.Where(k => Path.IsPathFullyQualified(k) && !File.Exists(k) && !Directory.Exists(k)
+				&& Path.GetDirectoryName(k) is { } parent && Directory.Exists(parent)).ToList();
+		foreach (var key in stale)
+		{
+			Settings.Highlights.Remove(key);
+		}
+		if (stale.Count > 0)
+		{
+			SaveSoon();
+		}
+	}
 
 	void UpdateCutState()
 	{

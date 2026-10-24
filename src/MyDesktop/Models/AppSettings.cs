@@ -233,7 +233,7 @@ public sealed class AppSettings
 
 	public string DefaultColor { get; set; } = "#1E1E1E";
 
-	public double DefaultOpacity { get; set; } = 0.45;
+	public double DefaultOpacity { get; set; } = 0.25;
 
 	public double CornerRadius { get; set; } = 8;
 
@@ -287,6 +287,15 @@ public sealed class AppSettings
 	/// 桌面上散放图标名称的字号（DIP）。
 	/// </summary>
 	public double DesktopFontSize { get; set; } = 12;
+
+	/// <summary>
+	/// 高亮的图标：完整路径 → 颜色（#RRGGBB），分区和桌面上的图标都按它铺一层彩色底块。路径不区分大小写。
+	/// </summary>
+	public Dictionary<string, string> Highlights
+	{
+		get;
+		set => field = new(value, StringComparer.OrdinalIgnoreCase);
+	} = new(StringComparer.OrdinalIgnoreCase);
 
 	/// <summary>
 	/// 上次运行的程序版本；升级后（不论自动更新还是手动安装）第一次启动时据此提示已更新。

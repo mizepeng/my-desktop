@@ -79,6 +79,19 @@ internal sealed class NativeMenu : IDisposable
 	/// </summary>
 	public IntPtr ColorSwatch(Color color)
 	{
+		var bitmap = CreateSwatch(color);
+		if (bitmap != IntPtr.Zero)
+		{
+			_bitmaps.Add(bitmap);
+		}
+		return bitmap;
+	}
+
+	/// <summary>
+	/// 生成一个纯色小方块位图（菜单项图标大小），由调用方用 DeleteObject 销毁；失败时返回 IntPtr.Zero。
+	/// </summary>
+	public static IntPtr CreateSwatch(Color color)
+	{
 		int size = Math.Max(12, GetSystemMetrics(SM_CXMENUCHECK));
 		var info = new BITMAPINFO
 		{
@@ -110,7 +123,6 @@ internal sealed class NativeMenu : IDisposable
 			}
 		}
 		Marshal.Copy(pixels, 0, bits, pixels.Length);
-		_bitmaps.Add(bitmap);
 		return bitmap;
 	}
 
@@ -142,5 +154,5 @@ internal sealed class NativeMenu : IDisposable
 		_bitmaps.ForEach(b => DeleteObject(b));
 	}
 
-	static string Escape(string text) => text.Replace("&", "&&");
+	public static string Escape(string text) => text.Replace("&", "&&");
 }

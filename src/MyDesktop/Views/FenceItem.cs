@@ -22,7 +22,9 @@ public sealed class FenceItem : INotifyPropertyChanged
 	bool _isHidden;
 	bool _isDropTarget;
 	bool _isInFlight;
+	bool _isHighlightPending;
 	bool _isNameExpanded;
+	Brush? _highlight;
 
 	FenceItem(string fullPath)
 	{
@@ -82,12 +84,38 @@ public sealed class FenceItem : INotifyPropertyChanged
 	}
 
 	/// <summary>
+	/// 用户标的高亮底色（见 AppSettings.Highlights），铺在悬停、选中底色下面；没高亮时为 null。
+	/// </summary>
+	public Brush? Highlight
+	{
+		get => _highlight;
+		set => Set(ref _highlight, value);
+	}
+
+	/// <summary>
 	/// 一键整理、删除分区动画里正在飞行：起飞后原处不再显示，飞到之前落点也先不显示。
 	/// </summary>
 	public bool IsInFlight
 	{
 		get => _isInFlight;
-		set => Set(ref _isInFlight, value);
+		set
+		{
+			Set(ref _isInFlight, value);
+			if (value)
+			{
+				IsHighlightPending = true;
+			}
+		}
+	}
+
+	/// <summary>
+	/// 飞过的图标先不显示高亮底色：等这一轮动画的图标全部落定，再由 FenceManager.RevealHighlights 一起淡入。
+	/// 每个图标落地时各自淡入的话，飞行期间分区窗口一直在逐帧重画，飞行图标会卡顿（用户反馈）。
+	/// </summary>
+	public bool IsHighlightPending
+	{
+		get => _isHighlightPending;
+		set => Set(ref _isHighlightPending, value);
 	}
 
 	/// <summary>

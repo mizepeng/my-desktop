@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Windows.Input;
+using System.Windows.Media;
 using MyDesktop.Core;
 using static MyDesktop.Native.NativeMethods;
 
@@ -62,11 +63,13 @@ internal static class ShellContextMenu
 	/// <param name="point">屏幕坐标（物理像素）。</param>
 	/// <param name="extraItems">追加在菜单末尾的自定义项。</param>
 	/// <param name="handleVerb">拦截指定动词（如 rename），返回 true 表示已自行处理。</param>
-	public static void Show(IntPtr hwnd, ShellItemSet items, POINT point, IReadOnlyList<(string Text, Action Action)> extraItems, Func<string, bool> handleVerb)
+	public static void Show(IntPtr hwnd, ShellItemSet items, POINT point, IReadOnlyList<ExtraMenuItem> extraItems, Func<string, bool> handleVerb)
 	{
 		var menuPtr = items.GetUIObject(hwnd, typeof(IContextMenu).GUID);
 		var contextMenu = (IContextMenu)Marshal.GetObjectForIUnknown(menuPtr);
 		var menu = CreatePopupMenu();
+		var actions = new List<Action?>();
+		var bitmaps = new List<IntPtr>();
 		try
 		{
 			bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
@@ -75,10 +78,7 @@ internal static class ShellContextMenu
 			if (extraItems.Count > 0)
 			{
 				InsertMenu(menu, uint.MaxValue, MF_BYPOSITION | MF_SEPARATOR, UIntPtr.Zero, null);
-				for (int i = 0; i < extraItems.Count; i++)
-				{
-					InsertMenu(menu, uint.MaxValue, MF_BYPOSITION | MF_STRING, (UIntPtr)(uint)(FirstExtraId + i), extraItems[i].Text);
-				}
+				AddExtras(menu, extraItems, actions, bitmaps);
 			}
 
 			int command;
@@ -98,9 +98,9 @@ internal static class ShellContextMenu
 			if (command >= FirstExtraId)
 			{
 				int index = command - FirstExtraId;
-				if (index < extraItems.Count)
+				if (index < actions.Count)
 				{
-					extraItems[index].Action();
+					actions[index]?.Invoke();
 				}
 			}
 			else if (command >= FirstShellId)
@@ -114,9 +114,54 @@ internal static class ShellContextMenu
 		}
 		finally
 		{
+			// DestroyMenu 会递归销毁挂在其上的子菜单
 			DestroyMenu(menu);
+			bitmaps.ForEach(b => DeleteObject(b));
 			Marshal.ReleaseComObject(contextMenu);
 			Marshal.Release(menuPtr);
+		}
+	}
+
+	/// <summary>
+	/// 把自定义项依次加到 menu 末尾，子菜单递归加；菜单项的编号从 FirstExtraId 起按 actions 里的位置排。
+	/// </summary>
+	static void AddExtras(IntPtr menu, IReadOnlyList<ExtraMenuItem> items, List<Action?> actions, List<IntPtr> bitmaps)
+	{
+		foreach (var item in items)
+		{
+			if (ReferenceEquals(item, ExtraMenuItem.Separator))
+			{
+				InsertMenu(menu, uint.MaxValue, MF_BYPOSITION | MF_SEPARATOR, UIntPtr.Zero, null);
+				continue;
+			}
+			var bitmap = item.Swatch is { } color ? NativeMenu.CreateSwatch(color) : IntPtr.Zero;
+			if (bitmap != IntPtr.Zero)
+			{
+				bitmaps.Add(bitmap);
+			}
+			var info = new MENUITEMINFO
+			{
+				cbSize = Marshal.SizeOf<MENUITEMINFO>(),
+				fMask = MIIM_STRING | MIIM_FTYPE | MIIM_STATE | (bitmap != IntPtr.Zero ? MIIM_BITMAP : 0),
+				fType = item.Radio ? MFT_RADIOCHECK : 0,
+				fState = (item.Checked ? MFS_CHECKED : 0) | (item.Enabled ? 0 : MFS_DISABLED),
+				dwTypeData = NativeMenu.Escape(item.Text),
+				hbmpItem = bitmap,
+			};
+			if (item.Children != null)
+			{
+				var sub = CreatePopupMenu();
+				AddExtras(sub, item.Children, actions, bitmaps);
+				info.fMask |= MIIM_SUBMENU;
+				info.hSubMenu = sub;
+			}
+			else
+			{
+				actions.Add(item.Action);
+				info.fMask |= MIIM_ID;
+				info.wID = (uint)(FirstExtraId + actions.Count - 1);
+			}
+			InsertMenuItem(menu, (uint)GetMenuItemCount(menu), true, ref info);
 		}
 	}
 
@@ -227,4 +272,16 @@ internal static class ShellContextMenu
 			Log.Warn($"执行菜单命令失败：0x{hr:X8}");
 		}
 	}
+}
+
+/// <summary>
+/// 追加在系统右键菜单末尾的自定义项：Children 不为 null 时是子菜单；Swatch 是菜单项前的颜色方块；Radio 时勾选显示成圆点。
+/// </summary>
+internal sealed record ExtraMenuItem(string Text, Action? Action = null, IReadOnlyList<ExtraMenuItem>? Children = null, Color? Swatch = null,
+		bool Checked = false, bool Radio = false, bool Enabled = true)
+{
+	/// <summary>
+	/// 分隔线。
+	/// </summary>
+	public static readonly ExtraMenuItem Separator = new("-");
 }

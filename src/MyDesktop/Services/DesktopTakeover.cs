@@ -765,6 +765,7 @@ internal sealed class DesktopTakeover : IDisposable
 			}
 		}
 		ApplyCutState();
+		ApplyHighlights();
 		_dispatcher.InvokeAsync(UpdateHitRects, DispatcherPriority.Loaded);
 	}
 
@@ -999,6 +1000,33 @@ internal sealed class DesktopTakeover : IDisposable
 			item.IsCut = _manager.IsCut(item.FullPath);
 		}
 	}
+
+	/// <summary>
+	/// 用户标了高亮的图标铺上彩色底块。
+	/// </summary>
+	public void ApplyHighlights()
+	{
+		foreach (var item in _layers.SelectMany(l => l.Items))
+		{
+			item.Highlight = _manager.HighlightOf(item.FullPath);
+		}
+	}
+
+	/// <summary>
+	/// 飞回桌面的动画全部落定后，飞过的图标的高亮底色一起淡入，见 FenceItem.IsHighlightPending。
+	/// </summary>
+	public void RevealHighlights()
+	{
+		foreach (var item in _layers.SelectMany(l => l.Items))
+		{
+			item.IsHighlightPending = false;
+		}
+	}
+
+	/// <summary>
+	/// 图标右键菜单里的「高亮」子菜单，见 FenceManager.HighlightMenu。
+	/// </summary>
+	public ExtraMenuItem HighlightMenu(IntPtr owner, IReadOnlyList<string> paths) => _manager.HighlightMenu(owner, paths);
 
 	#endregion
 

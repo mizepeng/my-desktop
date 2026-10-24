@@ -50,14 +50,19 @@
 			<Setter Property="Template">
 				<Setter.Value>
 					<ControlTemplate TargetType="ListBoxItem">
-						<Border x:Name="Bd"
-								Margin="1,0"
-								Padding="0,0,0,2"
-								Background="{StaticResource CellBackground}"
-								BorderBrush="Transparent"
-								BorderThickness="1">
-							<ContentPresenter HorizontalAlignment="Center" />
-						</Border>
+						<Grid Margin="1,0">
+							<!-- 用户标的高亮底色（FenceItem.Highlight），铺在悬停、选中底色下面 -->
+							<Border x:Name="HighlightBd" CornerRadius="5" Background="{Binding Highlight}" />
+							<!-- 圆角和分区里的图标（FenceStyles.xaml 的 FenceItemContainer）一致 -->
+							<Border x:Name="Bd"
+									CornerRadius="5"
+									Padding="0,0,0,2"
+									Background="{StaticResource CellBackground}"
+									BorderBrush="Transparent"
+									BorderThickness="1">
+								<ContentPresenter HorizontalAlignment="Center" />
+							</Border>
+						</Grid>
 						<ControlTemplate.Triggers>
 							<Trigger Property="IsMouseOver" Value="True">
 								<Setter TargetName="Bd" Property="Background" Value="{StaticResource CellHover}" />
@@ -71,6 +76,17 @@
 							<DataTrigger Binding="{Binding IsDropTarget}" Value="True">
 								<Setter TargetName="Bd" Property="Background" Value="{StaticResource CellSelected}" />
 								<Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource CellSelectedBorder}" />
+							</DataTrigger>
+							<!-- 起飞后原处的高亮底色不再显示；飞回桌面的图标等全部落定才一起淡入，见 FenceItem.IsHighlightPending -->
+							<DataTrigger Binding="{Binding IsHighlightPending}" Value="True">
+								<Setter TargetName="HighlightBd" Property="Opacity" Value="0" />
+								<DataTrigger.ExitActions>
+									<BeginStoryboard>
+										<Storyboard>
+											<DoubleAnimation Storyboard.TargetName="HighlightBd" Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.3" FillBehavior="Stop" />
+										</Storyboard>
+									</BeginStoryboard>
+								</DataTrigger.ExitActions>
 							</DataTrigger>
 						</ControlTemplate.Triggers>
 					</ControlTemplate>
