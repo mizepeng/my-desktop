@@ -603,7 +603,10 @@ internal sealed class FenceManager
 		// 重排出错也要接着让每个图标落地（不飞），否则它们会一直藏着
 		try
 		{
-			_takeover?.RelayoutNow();
+			using (FrameDiagnostics.Time("删除分区后重排桌面图标"))
+			{
+				_takeover?.RelayoutNow();
+			}
 			// 等图标层排好版，才知道每个图标落在哪一格
 			await Dispatcher.Yield(DispatcherPriority.Loaded);
 		}
@@ -638,6 +641,7 @@ internal sealed class FenceManager
 		}
 		finally
 		{
+			using var timing = FrameDiagnostics.Time("落地（关窗口 + 桌面上显示）");
 			icon.Icon.Close();
 			_takeover?.CompleteArrival(icon.Key);
 		}
@@ -1673,14 +1677,22 @@ internal sealed class FenceManager
 
 	/// <summary>
 	/// 由本程序激活桌面：先把图标层和分区临时置顶，桌面被提到最前时它们仍在上面，稍后再放回桌面之上。
-	/// 只在本程序的窗口在前台时才会走到这里，有权切换前台。
+	/// 只有桌面已在普通窗口最上层（如按过 Win+D）时激活才会把它提到分区之上，才要临时置顶；别的程序挡在桌面前面时
+	/// 不置顶，否则撤销置顶后分区会留在那个程序上面。右键时前台可能是别的程序，SetForegroundWindow 会被拒绝，用 ForceForegroundWindow。
 	/// </summary>
 	void ActivateDesktopKeepingFences()
 	{
-		DesktopHost.Lift(_windows.Select(w => w.Handle));
-		SetForegroundWindow(DesktopHost.FindDesktopWindow());
-		_unliftTimer.Stop();
-		_unliftTimer.Start();
+		bool lift = DesktopHost.IsDesktopOnTop();
+		if (lift)
+		{
+			DesktopHost.Lift(_windows.Select(w => w.Handle));
+		}
+		ForceForegroundWindow(DesktopHost.FindDesktopWindow());
+		if (lift)
+		{
+			_unliftTimer.Stop();
+			_unliftTimer.Start();
+		}
 	}
 
 	/// <summary>

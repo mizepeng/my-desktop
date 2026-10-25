@@ -93,8 +93,16 @@ internal sealed class DesktopOrganizer : IDisposable
 					continue;
 				}
 				// 起点要在归入分区之前取：归入后图标就从桌面上消失了
-				var sources = _manager.CaptureDesktopIcons(paths);
-				var window = _manager.GetOrCreateRuleFence(rule, reveal: interactive);
+				Dictionary<string, (RECT Rect, ImageSource Icon)> sources;
+				using (FrameDiagnostics.Time("CaptureDesktopIcons"))
+				{
+					sources = _manager.CaptureDesktopIcons(paths);
+				}
+				FenceWindow window;
+				using (FrameDiagnostics.Time("GetOrCreateRuleFence"))
+				{
+					window = _manager.GetOrCreateRuleFence(rule, reveal: interactive);
+				}
 				// 归入的是标签组里没显示的标签：等同组别的标签的图标都落定了再切过去，让用户看到图标飞进这个标签，
 				// 免得飞向上一个标签的图标飞到一半被切走
 				if (interactive && _manager.IsHiddenTab(window))
@@ -111,7 +119,10 @@ internal sealed class DesktopOrganizer : IDisposable
 					flights.Add((window, FlyAsync(window, key, source, delay)));
 					delay += FlyingIcon.Stagger;
 				}
-				_manager.AssignToFence(window, paths);
+				using (FrameDiagnostics.Time("AssignToFence"))
+				{
+					_manager.AssignToFence(window, paths);
+				}
 				await Task.Delay(GroupStagger);
 			}
 		}
@@ -157,6 +168,7 @@ internal sealed class DesktopOrganizer : IDisposable
 			var groupDelay = TimeSpan.Zero;
 			foreach (var window in windows)
 			{
+				using var timing = FrameDiagnostics.Time("启动动画准备一个分区");
 				var sources = _manager.ExplorerIconRects(window.Model.Members);
 				var keys = new List<string>();
 				var delay = groupDelay;
@@ -216,6 +228,7 @@ internal sealed class DesktopOrganizer : IDisposable
 		}
 		finally
 		{
+			using var timing = FrameDiagnostics.Time("落地（关窗口 + 分区里显示）");
 			flying.Close();
 			window.CompleteArrival(key);
 		}
@@ -234,15 +247,19 @@ internal sealed class DesktopOrganizer : IDisposable
 			await Dispatcher.Yield(DispatcherPriority.Loaded);
 			var target = window.GetIconRect(key);
 			var to = target ?? FlyingIcon.CenteredIn(window.FlightFallbackRect(), source.Rect.Width / 2, source.Rect.Height / 2);
-			flying = new FlyingIcon(source.Icon, _manager.FlightInsertAfter());
-			flying.Place(source.Rect, 1);
-			// 桌面原处的图标与飞行的图标同时换手
-			_manager.TakeOff(key);
-			flying.Show();
+			using (FrameDiagnostics.Time("起飞（建窗口 + 首帧 + 桌面上拿走）"))
+			{
+				flying = new FlyingIcon(source.Icon, _manager.FlightInsertAfter());
+				flying.Place(source.Rect, 1);
+				// 桌面原处的图标与飞行的图标同时换手
+				_manager.TakeOff(key);
+				flying.Show();
+			}
 			await flying.FlyAsync(source.Rect, to, fadeIn: false, fadeOut: target == null);
 		}
 		finally
 		{
+			using var timing = FrameDiagnostics.Time("落地（关窗口 + 分区里显示）");
 			flying?.Close();
 			// 中途出错时也要把图标从桌面上拿走、在分区里显示出来
 			_manager.TakeOff(key);

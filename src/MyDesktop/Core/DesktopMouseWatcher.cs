@@ -141,8 +141,9 @@ internal sealed class DesktopMouseWatcher : IDisposable
 	public event Action<POINT>? RightBandFinished;
 
 	/// <summary>
-	/// 本程序的窗口在前台、桌面又在最上层时，在桌面空白处按下了鼠标，要由本程序来激活桌面（左键的这次按下已被扣下，右键不扣），在界面线程上触发。
-	/// 让系统随点击激活的话，桌面会被提到分区之上闪一下，见 DesktopHost.Lift。
+	/// 要由本程序来激活桌面，在界面线程上触发：左键是本程序的窗口在前台、桌面又在最上层时在桌面空白处按下（这次按下已被扣下），
+	/// 让系统随点击激活的话，桌面会被提到分区之上闪一下，见 DesktopHost.Lift；右键是桌面不在前台时在桌面空白处按下（不扣），
+	/// 见 DesktopNeedsActivationForMenu。
 	/// </summary>
 	public event Action? DesktopActivationNeeded;
 
@@ -481,8 +482,8 @@ internal sealed class DesktopMouseWatcher : IDisposable
 					_rightDown = true;
 					_rightStart = info.pt;
 					_uiDispatcher.BeginInvoke(() => BlankPressed?.Invoke(false));
-					// 系统随这次点击激活桌面时会把它提到分区之上，先由本程序把分区临时置顶
-					if (WillRaiseDesktop())
+					// 桌面不在前台时由本程序赶在菜单弹出前激活桌面（见 DesktopNeedsActivationForMenu）
+					if (DesktopNeedsActivationForMenu())
 					{
 						_uiDispatcher.BeginInvoke(() => DesktopActivationNeeded?.Invoke());
 					}
@@ -648,6 +649,27 @@ internal sealed class DesktopMouseWatcher : IDisposable
 			return false;
 		}
 		return DesktopHost.IsDesktopOnTop();
+	}
+
+	/// <summary>
+	/// 在桌面空白处按下右键时，桌面不在前台就要由本程序先激活它：这次点击不会让桌面成为前台（实测前台变成「无」），
+	/// 资源管理器在没有前台的情况下弹出菜单，等鼠标移进菜单时桌面才被激活，这次激活把刚弹出的菜单关掉了；第二次桌面已在前台，才正常。
+	/// 本程序自己的菜单开着时不管（这次点击是去关掉它的）。只读窗口属性、不发消息，可以在钩子回调里调用。
+	/// </summary>
+	static bool DesktopNeedsActivationForMenu()
+	{
+		var foreground = GetForegroundWindow();
+		if (DesktopHost.IsDesktopSurface(foreground))
+		{
+			return false;
+		}
+		uint thread = GetWindowThreadProcessId(foreground, out uint process);
+		if (process != (uint)Environment.ProcessId)
+		{
+			return true;
+		}
+		var info = new GUITHREADINFO { cbSize = Marshal.SizeOf<GUITHREADINFO>() };
+		return !(GetGUIThreadInfo(thread, ref info) && (info.flags & (GUI_INMENUMODE | GUI_POPUPMENUMODE)) != 0);
 	}
 
 	/// <summary>

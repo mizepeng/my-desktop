@@ -136,6 +136,7 @@ internal sealed class FlyingIcon
 		int height = image.Height + padY * 2;
 		var destination = new POINT(image.Left - padX, image.Top - padY);
 		var blend = new BLENDFUNCTION { BlendOp = AC_SRC_OVER, SourceConstantAlpha = (byte)Math.Round(opacity * 255), AlphaFormat = AC_SRC_ALPHA };
+		FrameDiagnostics.Place(width != _width || height != _height);
 		if (width == _width && height == _height)
 		{
 			UpdateLayeredWindow(_hwnd, IntPtr.Zero, ref destination, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 0, ref blend, ULW_ALPHA);
@@ -337,6 +338,7 @@ internal sealed class FlyingIcon
 		{
 			_frameClockRunning = true;
 			var dispatcher = Dispatcher.CurrentDispatcher;
+			FrameDiagnostics.Begin(dispatcher);
 			new Thread(() => RunFrameClock(dispatcher)) { IsBackground = true, Name = "FrameClock" }.Start();
 		}
 		return _nextFrame.Task;
@@ -353,13 +355,16 @@ internal sealed class FlyingIcon
 		while (true)
 		{
 			WaitForComposition(false);
+			int flushes = 1;
 			while (Stopwatch.GetElapsedTime(lastFrame) < MinFrameInterval)
 			{
 				WaitForComposition(true);
+				flushes++;
 			}
 			lastFrame = Stopwatch.GetTimestamp();
+			long flushedAt = lastFrame;
 			// 用这个重载：程序退出、调度器关闭后它返回 null；泛型的 Invoke<T> 会抛 TaskCanceledException，后台线程上没人接住，进程就崩了（实测）
-			if (dispatcher.Invoke(DispatcherPriority.Input, new Func<bool>(CompleteFrame)) is not true)
+			if (dispatcher.Invoke(DispatcherPriority.Input, new Func<bool>(() => CompleteFrame(flushedAt, flushes))) is not true)
 			{
 				return;
 			}
@@ -382,16 +387,20 @@ internal sealed class FlyingIcon
 	/// <summary>
 	/// 在界面线程上完成等这一帧的任务；没人等时返回 false，让后台线程退出。
 	/// </summary>
-	static bool CompleteFrame()
+	static bool CompleteFrame(long flushedAt, int flushes)
 	{
 		var frame = _nextFrame;
 		if (frame == null)
 		{
 			_frameClockRunning = false;
+			FrameDiagnostics.End();
 			return false;
 		}
 		_nextFrame = null;
+		long start = Stopwatch.GetTimestamp();
+		FrameDiagnostics.FrameStart(flushedAt, flushes, start);
 		frame.SetResult();
+		FrameDiagnostics.FrameEnd(start);
 		return true;
 	}
 }
