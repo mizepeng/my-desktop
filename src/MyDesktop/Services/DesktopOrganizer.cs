@@ -146,12 +146,15 @@ internal sealed class DesktopOrganizer : IDisposable
 	/// 启动（包括恢复配置后重启）时接管桌面的那一刻，分区里的图标从资源管理器桌面上的原处飞进分区，节奏与整理相同。
 	/// 资源管理器的图标列表马上要藏起来，所以先在每个图标的原处放上飞行的图标接替它，再按分区依次起飞，落定后在分区里显示；
 	/// 列表里没有它（拿不到起点）或图像还没加载出来的图标不飞，直接显示。
+	/// 资源管理器开着自动排列时，留在桌面上的图标同时从原处飞到排好的格子（见 SettleAsync）。
 	/// </summary>
 	public async Task FlyInAtStartupAsync()
 	{
 		var flights = new List<Task>();
 		var windows = _manager.Windows.Where(w => !w.Model.IsPortal).ToList();
 		var insertAfter = _manager.FlightInsertAfter();
+		// 飞进分区的图标的起点和起飞时刻，留在桌面上的图标要等落点上的图标飞走
+		var departures = new List<(RECT Rect, TimeSpan Delay)>();
 		try
 		{
 			var groupDelay = TimeSpan.Zero;
@@ -170,6 +173,7 @@ internal sealed class DesktopOrganizer : IDisposable
 					flying.Place(source, 1);
 					flying.Show();
 					flights.Add(FlyInAsync(window, item.FullPath, flying, source, delay));
+					departures.Add((source, delay));
 					keys.Add(item.FullPath);
 					delay += FlyingIcon.Stagger;
 				}
@@ -180,6 +184,30 @@ internal sealed class DesktopOrganizer : IDisposable
 				}
 			}
 			Log.Info($"启动动画：{flights.Count} 个图标飞进分区");
+			// 留在桌面上的图标：先在原处放上飞行的图标，再让图标层按自动排列重排，免得图标消失一下
+			var settling = _manager.IconsAtExplorerPlaces();
+			var settlers = new List<(string Key, FlyingIcon Icon, RECT From)>();
+			foreach (var (key, (rect, icon)) in settling)
+			{
+				var flying = new FlyingIcon(icon, insertAfter);
+				flying.Place(rect, 1);
+				flying.Show();
+				settlers.Add((key, flying, rect));
+			}
+			var moves = _manager.ReleaseExplorerPlaces(settling.Keys);
+			foreach (var (key, flying, from) in settlers)
+			{
+				if (moves.TryGetValue(key, out var move))
+				{
+					var to = new RECT(from.Left + move.X, from.Top + move.Y, from.Right + move.X, from.Bottom + move.Y);
+					flights.Add(SettleAsync(key, flying, from, to, departures));
+				}
+				else
+				{
+					// 没换格子，图标层里已经照常显示
+					flying.Close();
+				}
+			}
 		}
 		catch (Exception ex)
 		{
@@ -199,6 +227,7 @@ internal sealed class DesktopOrganizer : IDisposable
 			// 只是动画出错，飞行结束时图标都已显示出来
 			Log.Warn("启动动画出错", ex);
 		}
+		_manager.EndStartupFlight();
 		_manager.RevealHighlights();
 	}
 
@@ -218,6 +247,25 @@ internal sealed class DesktopOrganizer : IDisposable
 		{
 			flying.Close();
 			window.CompleteArrival(key);
+		}
+	}
+
+	/// <summary>
+	/// 启动动画里留在桌面上的图标从资源管理器排的原处飞到自动排列的格子，和飞进分区的图标同时播。
+	/// 格子上还停着要飞进分区的图标时，跟它同时出发：它先慢后快地离开，这个图标到得晚，不会叠在一起。
+	/// </summary>
+	async Task SettleAsync(string key, FlyingIcon flying, RECT from, RECT to, List<(RECT Rect, TimeSpan Delay)> departures)
+	{
+		try
+		{
+			var delay = departures.Where(d => d.Rect.IntersectsWith(to)).Select(d => d.Delay).DefaultIfEmpty(TimeSpan.Zero).Max();
+			await Task.Delay(delay);
+			await flying.FlyAsync(from, to, fadeIn: false, fadeOut: false);
+		}
+		finally
+		{
+			flying.Close();
+			_manager.CompleteDesktopArrival(key);
 		}
 	}
 

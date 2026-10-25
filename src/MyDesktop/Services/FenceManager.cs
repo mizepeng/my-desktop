@@ -312,6 +312,8 @@ internal sealed class FenceManager
 			return;
 		}
 		_takeover = new DesktopTakeover(this);
+		// 要播启动动画时，播完之前散放图标先留在资源管理器排的原处，免得挪进还没飞走的分区图标的格子
+		_takeover.KeepExplorerPlaces = _flyInAtStartup;
 		// 接管之前就藏起了桌面图标（启动时隐藏，或等桌面显示出来期间双击了桌面），图标层接着藏着
 		if (_iconsHidden)
 		{
@@ -331,6 +333,7 @@ internal sealed class FenceManager
 			if (_flyInAtStartup)
 			{
 				_flyInAtStartup = false;
+				EndStartupFlight();
 				Log.Warn("30 秒内没能接管桌面图标，分区里的图标不播启动动画");
 				foreach (var window in _windows)
 				{
@@ -384,11 +387,12 @@ internal sealed class FenceManager
 	/// <summary>
 	/// 启动后第一次接管、藏起资源管理器的图标列表之前，等分区里的图标图像加载好（最多 3 秒）：分区读到桌面视图才有图标，
 	/// 接管时才开始加载，图像还没出来的图标飞不起来、只能直接显示。
+	/// 散放图标层里的也要等：列表藏起时它们的图像还没出来，就空着一下只剩名字（用户反馈「此电脑」消失了一下）。
 	/// </summary>
 	public async Task WaitForFenceIconsAsync()
 	{
 		var started = DateTime.UtcNow;
-		while (_flyInAtStartup && !FenceIconsLoaded() && DateTime.UtcNow - started < TimeSpan.FromSeconds(3))
+		while (_flyInAtStartup && !(FenceIconsLoaded() && _takeover?.IconsLoaded != false) && DateTime.UtcNow - started < TimeSpan.FromSeconds(3))
 		{
 			await Task.Delay(100);
 		}
@@ -993,6 +997,27 @@ internal sealed class FenceManager
 	public void TakeOff(string key) => _takeover?.TakeOff(key);
 
 	/// <summary>
+	/// 启动动画里要从资源管理器原处挪到自动排列格子的散放图标，见 DesktopTakeover.IconsAtExplorerPlaces。
+	/// </summary>
+	public Dictionary<string, (RECT Rect, ImageSource Icon)> IconsAtExplorerPlaces()
+	{
+		return _takeover?.IconsAtExplorerPlaces() ?? new Dictionary<string, (RECT Rect, ImageSource Icon)>(StringComparer.OrdinalIgnoreCase);
+	}
+
+	/// <summary>
+	/// 散放图标按自动排列重排，返回换了格子的图标挪动的距离，见 DesktopTakeover.ReleaseExplorerPlaces。
+	/// </summary>
+	public Dictionary<string, POINT> ReleaseExplorerPlaces(IReadOnlyCollection<string> keys)
+	{
+		return _takeover?.ReleaseExplorerPlaces(keys) ?? new Dictionary<string, POINT>(StringComparer.OrdinalIgnoreCase);
+	}
+
+	/// <summary>
+	/// 飞到桌面上的图标落地，在图标层里显示出来。
+	/// </summary>
+	public void CompleteDesktopArrival(string key) => _takeover?.CompleteArrival(key);
+
+	/// <summary>
 	/// 这些图标在资源管理器图标列表里的位置（物理像素），启动动画的起点；没接管桌面图标时为空。
 	/// </summary>
 	public Dictionary<string, RECT> ExplorerIconRects(IEnumerable<string> keys)
@@ -1011,6 +1036,17 @@ internal sealed class FenceManager
 		}
 		_flyInAtStartup = false;
 		_ = Organizer.FlyInAtStartupAsync();
+	}
+
+	/// <summary>
+	/// 启动动画播完（或不播了）：散放图标不再留在资源管理器排的原处，按自动排列重排。
+	/// </summary>
+	public void EndStartupFlight()
+	{
+		if (_takeover != null)
+		{
+			_takeover.KeepExplorerPlaces = false;
+		}
 	}
 
 	/// <summary>

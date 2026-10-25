@@ -85,6 +85,8 @@ internal sealed class DesktopTakeover : IDisposable
 	readonly HashSet<string> _waitingToFly = new(StringComparer.OrdinalIgnoreCase);
 	// 删除分区时正从分区飞回桌面的图标：已经排在桌面上，落地前先不显示
 	readonly HashSet<string> _arriving = new(StringComparer.OrdinalIgnoreCase);
+	// 启动动画播完之前，散放图标留在资源管理器排的原处，不按自动排列补到分区图标空出的格子里（见 KeepExplorerPlaces）
+	bool _keepExplorerPlaces;
 	// 桌面空白处框选时的选框
 	DrawFrameWindow? _marquee;
 	// 见过的桌面项目，用来认出新出现的文件；为 null 时下一次读到的是全量（接管、资源管理器重启），不算新文件
@@ -716,6 +718,78 @@ internal sealed class DesktopTakeover : IDisposable
 	}
 
 	/// <summary>
+	/// 启动动画期间设为 true：散放图标留在资源管理器排的原处。资源管理器开着自动排列时，接管那一刻散放图标会补进分区图标空出的格子，
+	/// 而分区图标这时还停在原处排队起飞，两个图标就叠在一起（用户反馈）。动画播完设回 false，立即按自动排列重排。
+	/// </summary>
+	public bool KeepExplorerPlaces
+	{
+		get => _keepExplorerPlaces;
+		set
+		{
+			if (_keepExplorerPlaces == value)
+			{
+				return;
+			}
+			_keepExplorerPlaces = value;
+			RelayoutNow();
+		}
+	}
+
+	/// <summary>
+	/// 散放图标层里的图标图像都已加载。
+	/// </summary>
+	public bool IconsLoaded => _layers.All(l => l.Items.All(i => i.Icon != null));
+
+	/// <summary>
+	/// 启动动画开始时，停在资源管理器原处、要挪到自动排列格子里的散放图标的位置和图像（飞行的起点）；不用挪时为空。
+	/// 调用方在这些起点放好飞行的图标后，再用 ReleaseExplorerPlaces 把它们排到新格子里。
+	/// </summary>
+	public Dictionary<string, (RECT Rect, ImageSource Icon)> IconsAtExplorerPlaces()
+	{
+		var result = new Dictionary<string, (RECT Rect, ImageSource Icon)>(StringComparer.OrdinalIgnoreCase);
+		if (!_keepExplorerPlaces || Items.Snapshot is not { AutoArrange: true } || !LayersVisible)
+		{
+			return result;
+		}
+		foreach (var layer in _layers)
+		{
+			foreach (var item in layer.Items)
+			{
+				if (layer.GetIcon(item.FullPath) is { } icon)
+				{
+					result.TryAdd(item.FullPath, icon);
+				}
+			}
+		}
+		return result;
+	}
+
+	/// <summary>
+	/// 散放图标不再停在资源管理器原处，立即按自动排列重排。返回 keys 里换了格子的图标挪动的距离（物理像素），
+	/// 它们由飞行的图标挪过去，在新格子里先不显示，落地时由 CompleteArrival 显示；没换格子的照常显示。
+	/// 落点按格子的挪动算，不取图标层里图像的位置：重排后要等排版完才取得到，取不到时图标就不飞、直接出现在新格子里。
+	/// </summary>
+	public Dictionary<string, POINT> ReleaseExplorerPlaces(IReadOnlyCollection<string> keys)
+	{
+		var moves = new Dictionary<string, POINT>(StringComparer.OrdinalIgnoreCase);
+		if (Items.Snapshot is DesktopSnapshot snapshot && _keepExplorerPlaces && snapshot.AutoArrange)
+		{
+			// 先算出自动排列后的格子，只把换了格子的标成正在飞来：重排时它们在新格子里不显示，没换格子的一直照常显示
+			var arranged = Arrange(snapshot, LooseEntries(snapshot)).ToDictionary(p => p.Entry.Key, p => p.Cell, StringComparer.OrdinalIgnoreCase);
+			foreach (var key in keys)
+			{
+				if (_placement.TryGetValue(key, out var from) && arranged.TryGetValue(key, out var to) && (from.X != to.X || from.Y != to.Y))
+				{
+					moves[key] = new POINT(to.X - from.X, to.Y - from.Y);
+				}
+			}
+		}
+		ExpectArrivals(moves.Keys);
+		KeepExplorerPlaces = false;
+		return moves;
+	}
+
+	/// <summary>
 	/// 分区移动、缩放、卷起或成员变化后重新排布散放图标（合并短时间内的多次请求）。
 	/// </summary>
 	public void RelayoutSoon()
@@ -740,10 +814,8 @@ internal sealed class DesktopTakeover : IDisposable
 		{
 			return;
 		}
-		var fenced = _manager.FencedKeys();
-		fenced.ExceptWith(_waitingToFly);
-		var loose = snapshot.Items.Where(e => !fenced.Contains(e.Key)).ToList();
-		var placed = snapshot.AutoArrange
+		var loose = LooseEntries(snapshot);
+		var placed = snapshot.AutoArrange && !_keepExplorerPlaces
 				? Arrange(snapshot, loose)
 				: loose.Select(e => (Entry: e, Cell: ToCell(snapshot, e.Position))).ToList();
 		var placement = new Dictionary<string, POINT>(StringComparer.OrdinalIgnoreCase);
@@ -767,6 +839,16 @@ internal sealed class DesktopTakeover : IDisposable
 		ApplyCutState();
 		ApplyHighlights();
 		_dispatcher.InvokeAsync(UpdateHitRects, DispatcherPriority.Loaded);
+	}
+
+	/// <summary>
+	/// 散放图标层要显示的项目：不在分区里的，加上已经归入分区、还没起飞的。
+	/// </summary>
+	List<DesktopEntry> LooseEntries(DesktopSnapshot snapshot)
+	{
+		var fenced = _manager.FencedKeys();
+		fenced.ExceptWith(_waitingToFly);
+		return snapshot.Items.Where(e => !fenced.Contains(e.Key)).ToList();
 	}
 
 	/// <summary>
