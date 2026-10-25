@@ -603,10 +603,7 @@ internal sealed class FenceManager
 		// 重排出错也要接着让每个图标落地（不飞），否则它们会一直藏着
 		try
 		{
-			using (FrameDiagnostics.Time("删除分区后重排桌面图标"))
-			{
-				_takeover?.RelayoutNow();
-			}
+			_takeover?.RelayoutNow();
 			// 等图标层排好版，才知道每个图标落在哪一格
 			await Dispatcher.Yield(DispatcherPriority.Loaded);
 		}
@@ -641,7 +638,6 @@ internal sealed class FenceManager
 		}
 		finally
 		{
-			using var timing = FrameDiagnostics.Time("落地（关窗口 + 桌面上显示）");
 			icon.Icon.Close();
 			_takeover?.CompleteArrival(icon.Key);
 		}

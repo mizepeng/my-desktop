@@ -175,28 +175,18 @@ internal sealed class FlyingIcon
 		int height = image.Height + padY * 2;
 		var destination = new POINT(image.Left - padX, image.Top - padY);
 		var blend = new BLENDFUNCTION { BlendOp = AC_SRC_OVER, SourceConstantAlpha = (byte)Math.Round(opacity * 255), AlphaFormat = AC_SRC_ALPHA };
-		bool recompose = width != _width || height != _height;
-		long placeStart = Stopwatch.GetTimestamp();
-		FrameDiagnostics.Place(recompose);
 		if (width == _width && height == _height)
 		{
-			long t0 = Stopwatch.GetTimestamp();
 			UpdateLayeredWindow(_hwnd, IntPtr.Zero, ref destination, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 0, ref blend, ULW_ALPHA);
-			FrameDiagnostics.Part(t0, true);
 		}
 		else
 		{
-			long t0 = Stopwatch.GetTimestamp();
 			Compose(width, height);
-			FrameDiagnostics.Part(t0, false);
 			var size = new SIZE(width, height);
 			var source = new POINT(0, 0);
-			t0 = Stopwatch.GetTimestamp();
 			UpdateLayeredWindow(_hwnd, IntPtr.Zero, ref destination, ref size, _frameDc, ref source, 0, ref blend, ULW_ALPHA);
-			FrameDiagnostics.Part(t0, true);
 			(_width, _height) = (width, height);
 		}
-		FrameDiagnostics.PlaceEnd(placeStart, recompose);
 		// 第一次摆放时定好层级
 		if (!_placed)
 		{
@@ -540,7 +530,6 @@ internal sealed class FlyingIcon
 		{
 			_frameClockRunning = true;
 			var dispatcher = Dispatcher.CurrentDispatcher;
-			FrameDiagnostics.Begin(dispatcher);
 			new Thread(() => RunFrameClock(dispatcher)) { IsBackground = true, Name = "FrameClock" }.Start();
 		}
 	}
@@ -556,11 +545,9 @@ internal sealed class FlyingIcon
 		while (true)
 		{
 			WaitForComposition(false);
-			int flushes = 1;
 			while (Stopwatch.GetElapsedTime(lastFrame) < MinFrameInterval)
 			{
 				WaitForComposition(true);
-				flushes++;
 			}
 			lastFrame = Stopwatch.GetTimestamp();
 			lock (FrameLock)
@@ -569,13 +556,9 @@ internal sealed class FlyingIcon
 				if (dispatcher.HasShutdownStarted || (_flights.Count == 0 && _nextFrame == null && !_completionPosted))
 				{
 					_frameClockRunning = false;
-					FrameDiagnostics.End();
 					return;
 				}
-				long start = Stopwatch.GetTimestamp();
-				FrameDiagnostics.FrameStart(lastFrame, flushes, start);
 				AdvanceFlights(lastFrame);
-				FrameDiagnostics.FrameEnd(start);
 				if (_nextFrame != null && !_completionPosted)
 				{
 					_completionPosted = true;
@@ -592,9 +575,7 @@ internal sealed class FlyingIcon
 	static void WaitForComposition(bool justReturned)
 	{
 		long start = Stopwatch.GetTimestamp();
-		int result = DwmFlush();
-		FrameDiagnostics.Flushed();
-		if (result < 0 || (justReturned && Stopwatch.GetElapsedTime(start) < TimeSpan.FromMilliseconds(1)))
+		if (DwmFlush() < 0 || (justReturned && Stopwatch.GetElapsedTime(start) < TimeSpan.FromMilliseconds(1)))
 		{
 			Thread.Sleep(MinFrameInterval);
 		}
