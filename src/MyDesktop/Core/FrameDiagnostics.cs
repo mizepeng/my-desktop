@@ -21,6 +21,8 @@ internal static class FrameDiagnostics
 	/// </summary>
 	const double LateFrameMs = 12;
 
+	// 帧时钟线程和界面线程（调度器钩子、计时）都会写，汇总和清空时用它互斥
+	static readonly object Gate = new();
 	static bool _active;
 	static bool _hooked;
 	static bool _hadFlights;
@@ -40,6 +42,20 @@ internal static class FrameDiagnostics
 	static readonly Dictionary<string, (int Count, double Total, double Max)> Timed = [];
 	static readonly Stack<long> OperationStarts = new();
 	static int _placedThisFrame;
+	static long _frameFlushedAt;
+	static long _firstPlace;
+	static long _lastPlace;
+	static readonly List<double> Spreads = [];
+	static readonly List<double> PlaceTimes = [];
+	static readonly List<double> UlwTimes = [];
+	static readonly List<double> ComposeTimes = [];
+	static readonly List<double> PlaceTimesComposed = [];
+	static readonly List<double> Lags = [];
+	static readonly List<int> Straddles = [];
+	static readonly List<int> Missed = [];
+	// 后台线程每次 DwmFlush 返回的时刻（环形），用来看一帧里的摆放有没有跨过一次合成
+	static readonly long[] FlushRing = new long[8192];
+	static int _flushCount;
 	static int _composedThisFrame;
 	static int _composed;
 
@@ -51,36 +67,49 @@ internal static class FrameDiagnostics
 	/// </summary>
 	public static void Begin(Dispatcher dispatcher)
 	{
-		if (!_hooked)
+		lock (Gate)
 		{
-			_hooked = true;
-			dispatcher.Hooks.OperationStarted += (_, _) => OperationStarts.Push(Stopwatch.GetTimestamp());
-			dispatcher.Hooks.OperationCompleted += OnOperationCompleted;
-			dispatcher.Hooks.OperationAborted += (_, _) =>
+			if (!_hooked)
 			{
-				if (OperationStarts.Count > 0)
+				_hooked = true;
+				dispatcher.Hooks.OperationStarted += (_, _) => OperationStarts.Push(Stopwatch.GetTimestamp());
+				dispatcher.Hooks.OperationCompleted += OnOperationCompleted;
+				dispatcher.Hooks.OperationAborted += (_, _) =>
 				{
-					OperationStarts.Pop();
-				}
-			};
+					if (OperationStarts.Count > 0)
+					{
+						OperationStarts.Pop();
+					}
+				};
+			}
+			_active = true;
+			_hadFlights = false;
+			_sessionStart = Stopwatch.GetTimestamp();
+			_lastFrameStart = 0;
+			_gen0 = GC.CollectionCount(0);
+			_gen1 = GC.CollectionCount(1);
+			_gen2 = GC.CollectionCount(2);
+			_gcPause = GC.GetTotalPauseDuration();
+			_composed = 0;
+			Intervals.Clear();
+			Latencies.Clear();
+			Works.Clear();
+			Flushes.Clear();
+			Placed.Clear();
+			Spreads.Clear();
+			PlaceTimes.Clear();
+			UlwTimes.Clear();
+			ComposeTimes.Clear();
+			PlaceTimesComposed.Clear();
+			Lags.Clear();
+			Straddles.Clear();
+			Missed.Clear();
+			_firstPlace = 0;
+			_placedThisFrame = 0;
+			LateFrames.Clear();
+			SlowOperations.Clear();
+			Timed.Clear();
 		}
-		_active = true;
-		_hadFlights = false;
-		_sessionStart = Stopwatch.GetTimestamp();
-		_lastFrameStart = 0;
-		_gen0 = GC.CollectionCount(0);
-		_gen1 = GC.CollectionCount(1);
-		_gen2 = GC.CollectionCount(2);
-		_gcPause = GC.GetTotalPauseDuration();
-		_composed = 0;
-		Intervals.Clear();
-		Latencies.Clear();
-		Works.Clear();
-		Flushes.Clear();
-		Placed.Clear();
-		LateFrames.Clear();
-		SlowOperations.Clear();
-		Timed.Clear();
 	}
 
 	/// <summary>
@@ -90,11 +119,82 @@ internal static class FrameDiagnostics
 	{
 		_hadFlights = true;
 		_placedThisFrame++;
+		long now = Stopwatch.GetTimestamp();
+		if (_firstPlace == 0)
+		{
+			_firstPlace = now;
+		}
+		_lastPlace = now;
 		if (composed)
 		{
 			_composedThisFrame++;
 			_composed++;
 		}
+	}
+
+	/// <summary>
+	/// 一次摆放结束，start 是开始摆放的时刻。
+	/// </summary>
+	public static void PlaceEnd(long start, bool composed)
+	{
+		if (_active)
+		{
+			(composed ? PlaceTimesComposed : PlaceTimes).Add(Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+		}
+	}
+
+	/// <summary>
+	/// UpdateLayeredWindow 或合成画面一次的耗时。
+	/// </summary>
+	public static void Part(long start, bool ulw)
+	{
+		if (_active)
+		{
+			(ulw ? UlwTimes : ComposeTimes).Add(Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+		}
+	}
+
+	/// <summary>
+	/// 后台线程上 DwmFlush 返回时调用。
+	/// </summary>
+	public static void Flushed()
+	{
+		int i = Interlocked.Increment(ref _flushCount) - 1;
+		Volatile.Write(ref FlushRing[i & (FlushRing.Length - 1)], Stopwatch.GetTimestamp());
+	}
+
+	/// <summary>
+	/// 结算上一帧的摆放：第一次到最后一次摆放隔了多久、中间跨过几次合成、第一次摆放前是否已经错过了合成。
+	/// </summary>
+	static void FinishFrame()
+	{
+		if (_placedThisFrame == 0 || _firstPlace == 0)
+		{
+			_firstPlace = 0;
+			return;
+		}
+		Placed.Add(_placedThisFrame);
+		Spreads.Add(Stopwatch.GetElapsedTime(_firstPlace, _lastPlace).TotalMilliseconds);
+		Lags.Add(Stopwatch.GetElapsedTime(_frameFlushedAt, _firstPlace).TotalMilliseconds);
+		int count = Volatile.Read(ref _flushCount);
+		int straddle = 0;
+		int missed = 0;
+		for (int i = Math.Max(0, count - 64); i < count; i++)
+		{
+			long t = Volatile.Read(ref FlushRing[i & (FlushRing.Length - 1)]);
+			if (t > _firstPlace && t <= _lastPlace)
+			{
+				straddle++;
+			}
+			// 比合成返回晚 0.5 毫秒以上才算这次合成之后
+			else if (t > _frameFlushedAt + Stopwatch.Frequency / 2000 && t <= _firstPlace)
+			{
+				missed++;
+			}
+		}
+		Straddles.Add(straddle);
+		Missed.Add(missed);
+		_firstPlace = 0;
 	}
 
 	/// <summary>
@@ -106,13 +206,16 @@ internal static class FrameDiagnostics
 	{
 		public void Dispose()
 		{
-			if (!_active)
+			lock (Gate)
 			{
-				return;
+				if (!_active)
+				{
+					return;
+				}
+				double ms = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+				var (count, total, max) = Timed.GetValueOrDefault(name);
+				Timed[name] = (count + 1, total + ms, Math.Max(max, ms));
 			}
-			double ms = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
-			var (count, total, max) = Timed.GetValueOrDefault(name);
-			Timed[name] = (count + 1, total + ms, Math.Max(max, ms));
 		}
 	}
 
@@ -125,6 +228,8 @@ internal static class FrameDiagnostics
 		{
 			return;
 		}
+		FinishFrame();
+		_frameFlushedAt = flushedAt;
 		_placedThisFrame = 0;
 		_composedThisFrame = 0;
 		Latencies.Add(Stopwatch.GetElapsedTime(flushedAt, start).TotalMilliseconds);
@@ -151,7 +256,6 @@ internal static class FrameDiagnostics
 			return;
 		}
 		Works.Add(Stopwatch.GetElapsedTime(start).TotalMilliseconds);
-		Placed.Add(_placedThisFrame);
 	}
 
 	/// <summary>
@@ -159,51 +263,64 @@ internal static class FrameDiagnostics
 	/// </summary>
 	public static void End()
 	{
-		if (!_active)
+		lock (Gate)
 		{
-			return;
+			if (!_active)
+			{
+				return;
+			}
+			FinishFrame();
+			_active = false;
+			if (!_hadFlights || Works.Count < 10)
+			{
+				return;
+			}
+			var lines = new List<string>
+			{
+				$"[诊断] 帧时钟：{Works.Count} 帧，历时 {Offset(Stopwatch.GetTimestamp()):F0} ms，重新合成 {_composed} 次",
+				$"[诊断]   间隔 {Stats(Intervals)}",
+				$"[诊断]   DwmFlush 次数分布 {string.Join("，", Flushes.GroupBy(f => f).OrderBy(g => g.Key).Select(g => $"{g.Key} 次×{g.Count()}"))}",
+				$"[诊断]   合成后到界面线程开始的派发延迟 {Stats(Latencies)}",
+				$"[诊断]   界面线程上完成帧任务的耗时 {Stats(Works)}",
+				$"[诊断]   有摆放的帧 {Placed.Count} 个，每帧摆放图标 平均 {(Placed.Count > 0 ? Placed.Average() : 0):F1}、最多 {(Placed.Count > 0 ? Placed.Max() : 0)}",
+				$"[诊断]   一次摆放耗时：只挪 {Stats(PlaceTimes)}；重新合成 {Stats(PlaceTimesComposed)}",
+				$"[诊断]   其中 UpdateLayeredWindow {Stats(UlwTimes)}；合成画面 {Stats(ComposeTimes)}",
+				$"[诊断]   合成返回到这一帧第一次摆放 {Stats(Lags)}",
+				$"[诊断]   一帧里第一次到最后一次摆放 {Stats(Spreads)}",
+				$"[诊断]   一帧的摆放中间跨过合成：{Straddles.Count(c => c > 0)} 帧（{Straddles.Sum()} 次）；第一次摆放前已错过合成：{Missed.Count(c => c > 0)} 帧",
+				$"[诊断]   GC 次数 gen0 {GC.CollectionCount(0) - _gen0}、gen1 {GC.CollectionCount(1) - _gen1}、gen2 {GC.CollectionCount(2) - _gen2}，"
+						+ $"暂停共 {(GC.GetTotalPauseDuration() - _gcPause).TotalMilliseconds:F1} ms",
+			};
+			foreach (var (name, (count, total, max)) in Timed.OrderByDescending(t => t.Value.Total))
+			{
+				lines.Add($"[诊断]   计时 {name}：{count} 次，共 {total:F1} ms，最长 {max:F1} ms");
+			}
+			lines.Add($"[诊断]   晚到的帧（间隔超过 {LateFrameMs} ms）{Intervals.Count(i => i > LateFrameMs)} 次：");
+			lines.AddRange(LateFrames.Select(f => "[诊断]     " + f));
+			lines.Add($"[诊断]   界面线程上超过 {SlowOperationMs} ms 的调度器操作 {SlowOperations.Count} 个（按时间）：");
+			lines.AddRange(SlowOperations.Take(60).Select(o => $"[诊断]     {o.At:F0}ms 处 {o.Ms:F1} ms {o.Name}"));
+			Log.Info(string.Join(Environment.NewLine, lines));
 		}
-		_active = false;
-		if (!_hadFlights || Works.Count < 10)
-		{
-			return;
-		}
-		var lines = new List<string>
-		{
-			$"[诊断] 帧时钟：{Works.Count} 帧，历时 {Offset(Stopwatch.GetTimestamp()):F0} ms，重新合成 {_composed} 次",
-			$"[诊断]   间隔 {Stats(Intervals)}",
-			$"[诊断]   DwmFlush 次数分布 {string.Join("，", Flushes.GroupBy(f => f).OrderBy(g => g.Key).Select(g => $"{g.Key} 次×{g.Count()}"))}",
-			$"[诊断]   合成后到界面线程开始的派发延迟 {Stats(Latencies)}",
-			$"[诊断]   界面线程上一帧的耗时 {Stats(Works)}；每帧摆放图标 平均 {Placed.Average():F1}、最多 {Placed.Max()}",
-			$"[诊断]   GC 次数 gen0 {GC.CollectionCount(0) - _gen0}、gen1 {GC.CollectionCount(1) - _gen1}、gen2 {GC.CollectionCount(2) - _gen2}，"
-					+ $"暂停共 {(GC.GetTotalPauseDuration() - _gcPause).TotalMilliseconds:F1} ms",
-		};
-		foreach (var (name, (count, total, max)) in Timed.OrderByDescending(t => t.Value.Total))
-		{
-			lines.Add($"[诊断]   计时 {name}：{count} 次，共 {total:F1} ms，最长 {max:F1} ms");
-		}
-		lines.Add($"[诊断]   晚到的帧（间隔超过 {LateFrameMs} ms）{Intervals.Count(i => i > LateFrameMs)} 次：");
-		lines.AddRange(LateFrames.Select(f => "[诊断]     " + f));
-		lines.Add($"[诊断]   界面线程上超过 {SlowOperationMs} ms 的调度器操作 {SlowOperations.Count} 个（按时间）：");
-		lines.AddRange(SlowOperations.Take(60).Select(o => $"[诊断]     {o.At:F0}ms 处 {o.Ms:F1} ms {o.Name}"));
-		Log.Info(string.Join(Environment.NewLine, lines));
 	}
 
 	static void OnOperationCompleted(object? sender, DispatcherHookEventArgs e)
 	{
-		if (OperationStarts.Count == 0)
+		lock (Gate)
 		{
-			return;
-		}
-		long start = OperationStarts.Pop();
-		if (!_active)
-		{
-			return;
-		}
-		double ms = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
-		if (ms >= SlowOperationMs && SlowOperations.Count < 400)
-		{
-			SlowOperations.Add((Offset(start), ms, $"[{e.Operation.Priority}] {Describe(e.Operation)}"));
+			if (OperationStarts.Count == 0)
+			{
+				return;
+			}
+			long start = OperationStarts.Pop();
+			if (!_active)
+			{
+				return;
+			}
+			double ms = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+			if (ms >= SlowOperationMs && SlowOperations.Count < 400)
+			{
+				SlowOperations.Add((Offset(start), ms, $"[{e.Operation.Priority}] {Describe(e.Operation)}"));
+			}
 		}
 	}
 

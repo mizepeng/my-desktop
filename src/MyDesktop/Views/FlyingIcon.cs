@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -45,25 +46,50 @@ internal sealed class FlyingIcon
 	static readonly TimeSpan MinFrameInterval = TimeSpan.FromMilliseconds(5);
 
 	/// <summary>
-	/// 等下一帧的都共用这一个任务，为 null 表示还没人等；和 _frameClockRunning 一样只在界面线程上读写。
+	/// 帧时钟线程和界面线程共用的状态（_nextFrame、_completionPosted、_frameClockRunning、_flights）以及合成画面用的共用位图都由它保护。
+	/// </summary>
+	static readonly object FrameLock = new();
+
+	/// <summary>
+	/// 等下一帧的都共用这一个任务，为 null 表示还没人等。
 	/// </summary>
 	static TaskCompletionSource? _nextFrame;
 
 	/// <summary>
-	/// 等帧的后台线程在运行：有人等时启动，一帧下来没人等就退出。
+	/// 已经排给界面线程去完成 _nextFrame，还没执行：界面线程忙时不重复排。
+	/// </summary>
+	static bool _completionPosted;
+
+	/// <summary>
+	/// 帧时钟线程在运行：有人等帧或有图标在飞时启动，都没有了就退出。
 	/// </summary>
 	static bool _frameClockRunning;
 
 	/// <summary>
-	/// 合成画面用的离屏位图和 GDI 位图，所有飞行图标共用：都在界面线程上，UpdateLayeredWindow 会把像素拷进窗口，用完就能给下一个。
-	/// 最后一个飞行图标关闭时释放。
+	/// 正在飞的图标：每帧在帧时钟线程上一次摆完，见 AdvanceFlights。
 	/// </summary>
-	static RenderTargetBitmap? _frameTarget;
-	static readonly DrawingGroup FrameDrawing = new();
-	static readonly DrawingVisual FrameVisual = new();
+	static readonly List<Flight> _flights = [];
+
+	/// <summary>
+	/// 一次飞行：起止范围、淡入淡出、起飞时刻（Stopwatch 时间戳），飞完时完成 Done。
+	/// </summary>
+	sealed record Flight(FlyingIcon Icon, RECT From, RECT To, bool FadeIn, bool FadeOut, long Start, TaskCompletionSource Done);
+
+	/// <summary>
+	/// 合成画面用的 GDI 位图（_frameWidth × _frameHeight），所有飞行图标共用（在 FrameLock 里用），UpdateLayeredWindow 会把像素拷进窗口，
+	/// 用完就能给下一个。最后一个飞行图标关闭时释放。
+	/// </summary>
 	static IntPtr _frameDc;
 	static IntPtr _frameBitmap;
 	static IntPtr _frameBits;
+	static int _frameWidth;
+	static int _frameHeight;
+
+	/// <summary>
+	/// 缩放画面用的中间结果和一行输出，所有飞行图标共用，只增不减，最后一个飞行图标关闭时释放：每帧现分配的话 GC 太频繁。
+	/// </summary>
+	static Vector4[] _scaleBuffer = [];
+	static int[] _rowBuffer = [];
 	static int _openCount;
 	// 还开着的飞行图标窗口：桌面被提到最前时要一起压回分区之上（只在界面线程上读写）
 	static readonly List<IntPtr> _openWindows = [];
@@ -75,9 +101,10 @@ internal sealed class FlyingIcon
 	bool _closed;
 
 	/// <summary>
-	/// 预先画好的阴影，合成时拉满整个窗口衬在图标下面。
+	/// 预先合成好的整幅画面（阴影衬着图标，边长 _spriteSize，预乘透明度的 BGRA，每个通道 0～255），每帧缩放成窗口大小；为 null 表示还没画。
 	/// </summary>
-	BitmapSource? _shadow;
+	Vector4[]? _sprite;
+	int _spriteSize;
 
 	/// <summary>
 	/// 阴影图里阴影的边距与图标边长之比：窗口四周按这个比例留边，阴影跟着图标一起缩放。
@@ -119,36 +146,57 @@ internal sealed class FlyingIcon
 
 	/// <summary>
 	/// 让图像正好落在屏幕上的 image 范围（物理像素），窗口四周按图像大小的比例多出阴影的边距。
+	/// 第一次摆放要在界面线程上（要用 WPF 画阴影、定层级），之后飞行中的摆放在帧时钟线程上。
 	/// </summary>
 	public void Place(RECT image, double opacity)
 	{
-		// 第一次摆放时按起点和图标本身里大的那个尺寸画阴影（启动时从桌面飞进小图标的分区，起点比图标大）
-		if (_shadow == null)
+		// 第一次摆放时按起点和图标本身里大的那个尺寸画阴影（启动时从桌面飞进小图标的分区，起点比图标大）；
+		// 只用到自己的字段，在锁外面画，不耽误帧时钟线程摆别的图标
+		if (_sprite == null)
 		{
 			int iconPixels = _icon is BitmapSource bitmap ? bitmap.PixelWidth : (int)Math.Round(_icon.Width);
 			int size = Math.Max(image.Width, iconPixels);
-			_shadow = DrawShadow(size, GetDpiForRect(image) / 96.0, out int pad);
+			var shadow = DrawShadow(size, GetDpiForRect(image) / 96.0, out int pad);
 			_padRatio = (double)pad / size;
+			_spriteSize = size + pad * 2;
+			_sprite = DrawSprite(shadow, pad, size);
 		}
+		lock (FrameLock)
+		{
+			PlaceCore(image, opacity);
+		}
+	}
+
+	void PlaceCore(RECT image, double opacity)
+	{
 		int padX = (int)Math.Round(image.Width * _padRatio);
 		int padY = (int)Math.Round(image.Height * _padRatio);
 		int width = image.Width + padX * 2;
 		int height = image.Height + padY * 2;
 		var destination = new POINT(image.Left - padX, image.Top - padY);
 		var blend = new BLENDFUNCTION { BlendOp = AC_SRC_OVER, SourceConstantAlpha = (byte)Math.Round(opacity * 255), AlphaFormat = AC_SRC_ALPHA };
-		FrameDiagnostics.Place(width != _width || height != _height);
+		bool recompose = width != _width || height != _height;
+		long placeStart = Stopwatch.GetTimestamp();
+		FrameDiagnostics.Place(recompose);
 		if (width == _width && height == _height)
 		{
+			long t0 = Stopwatch.GetTimestamp();
 			UpdateLayeredWindow(_hwnd, IntPtr.Zero, ref destination, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 0, ref blend, ULW_ALPHA);
+			FrameDiagnostics.Part(t0, true);
 		}
 		else
 		{
-			Compose(_shadow, width, height, padX, padY, image.Width, image.Height);
+			long t0 = Stopwatch.GetTimestamp();
+			Compose(width, height);
+			FrameDiagnostics.Part(t0, false);
 			var size = new SIZE(width, height);
 			var source = new POINT(0, 0);
+			t0 = Stopwatch.GetTimestamp();
 			UpdateLayeredWindow(_hwnd, IntPtr.Zero, ref destination, ref size, _frameDc, ref source, 0, ref blend, ULW_ALPHA);
+			FrameDiagnostics.Part(t0, true);
 			(_width, _height) = (width, height);
 		}
+		FrameDiagnostics.PlaceEnd(placeStart, recompose);
 		// 第一次摆放时定好层级
 		if (!_placed)
 		{
@@ -176,9 +224,13 @@ internal sealed class FlyingIcon
 		_closed = true;
 		_openWindows.Remove(_hwnd);
 		DestroyWindow(_hwnd);
+		// 一个都不开着时也就没有在飞的了，帧时钟线程不会再用共用位图；加锁只是保证它这一帧已经用完
 		if (--_openCount == 0)
 		{
-			ReleaseFrame();
+			lock (FrameLock)
+			{
+				ReleaseFrame();
+			}
 		}
 	}
 
@@ -210,29 +262,134 @@ internal sealed class FlyingIcon
 	}
 
 	/// <summary>
-	/// 在 CPU 上把阴影和图标合成为 width × height 的一帧，放进共用的 GDI 位图：用 WPF 的软件渲染，图标高质量缩放，和原来的样子一致。
+	/// 把阴影和图标合成为一整幅画面（边长 size + pad * 2），图标用 WPF 高质量缩放画在中间。只在第一次摆放时画一次，之后每帧只缩放它。
 	/// </summary>
-	void Compose(BitmapSource shadow, int width, int height, int padX, int padY, int imageWidth, int imageHeight)
+	Vector4[] DrawSprite(BitmapSource shadow, int pad, int size)
 	{
-		if (_frameTarget == null || width > _frameTarget.PixelWidth || height > _frameTarget.PixelHeight)
+		int side = size + pad * 2;
+		var drawing = new DrawingGroup();
+		// 高质量缩放要设在 DrawingGroup 上：设在 DrawingVisual 上时画进离屏位图不起作用（实测和双线性一模一样）
+		RenderOptions.SetBitmapScalingMode(drawing, BitmapScalingMode.HighQuality);
+		using (var context = drawing.Open())
 		{
-			// 多留一些，飞行中图标变大时不用每帧重新分配
-			CreateFrame(Math.Max(width, _frameTarget?.PixelWidth ?? 0) + 64, Math.Max(height, _frameTarget?.PixelHeight ?? 0) + 64);
+			context.DrawImage(shadow, new Rect(0, 0, side, side));
+			context.DrawImage(_icon, new Rect(pad, pad, size, size));
 		}
-		using (var context = FrameDrawing.Open())
+		var visual = new DrawingVisual();
+		using (var context = visual.RenderOpen())
 		{
-			context.DrawImage(shadow, new Rect(0, 0, width, height));
-			context.DrawImage(_icon, new Rect(padX, padY, imageWidth, imageHeight));
+			context.DrawDrawing(drawing);
 		}
-		_frameTarget!.Clear();
-		_frameTarget.Render(FrameVisual);
-		// 两张位图一样大，按 GDI 位图的行宽直接拷进去
-		int stride = _frameTarget.PixelWidth * 4;
-		_frameTarget.CopyPixels(new Int32Rect(0, 0, width, height), _frameBits, stride * height, stride);
+		var target = new RenderTargetBitmap(side, side, 96, 96, PixelFormats.Pbgra32);
+		target.Render(visual);
+		var pixels = new int[side * side];
+		target.CopyPixels(pixels, side * 4, 0);
+		var sprite = new Vector4[pixels.Length];
+		for (int i = 0; i < pixels.Length; i++)
+		{
+			int p = pixels[i];
+			sprite[i] = new Vector4(p & 0xFF, (p >> 8) & 0xFF, (p >> 16) & 0xFF, (p >>> 24) & 0xFF);
+		}
+		return sprite;
 	}
 
 	/// <summary>
-	/// 换一套 width × height 的共用位图：离屏位图和同样大的 GDI 位图（自上而下、32 位）。
+	/// 把预先合成好的画面缩放成 width × height 的一帧，放进共用的 GDI 位图。
+	/// 以前每帧用 WPF 的软件渲染重画阴影和图标（RenderTargetBitmap，实测每次约 0.23 毫秒），一帧里十几二十个图标都要重画时一帧就超时了；
+	/// 现在只缩放：横竖两遍分开算，缩小时按覆盖面积取平均（三角形滤波，半径为缩小倍数），放大时双线性，和 WPF 的高质量缩放效果相近。
+	/// </summary>
+	void Compose(int width, int height)
+	{
+		if (width > _frameWidth || height > _frameHeight)
+		{
+			// 多留一些，飞行中图标变大时不用每帧重新分配
+			CreateFrame(Math.Max(width, _frameWidth) + 64, Math.Max(height, _frameHeight) + 64);
+		}
+		int side = _spriteSize;
+		var sprite = _sprite!;
+		var (startX, countX, weightsX, tapsX) = ScaleWeights(side, width);
+		var (startY, countY, weightsY, tapsY) = ScaleWeights(side, height);
+		// 先横向：side 行 × width 列
+		if (_scaleBuffer.Length < side * width)
+		{
+			_scaleBuffer = new Vector4[side * width];
+		}
+		var buffer = _scaleBuffer;
+		for (int y = 0; y < side; y++)
+		{
+			int row = y * side;
+			for (int x = 0; x < width; x++)
+			{
+				var sum = Vector4.Zero;
+				int from = row + startX[x];
+				int w = x * tapsX;
+				for (int k = 0; k < countX[x]; k++)
+				{
+					sum += sprite[from + k] * weightsX[w + k];
+				}
+				buffer[y * width + x] = sum;
+			}
+		}
+		// 再纵向，逐行写进 GDI 位图（行宽是整个共用位图的宽度）
+		if (_rowBuffer.Length < width)
+		{
+			_rowBuffer = new int[width];
+		}
+		var line = _rowBuffer;
+		var max = new Vector4(255);
+		var half = new Vector4(0.5f);
+		for (int y = 0; y < height; y++)
+		{
+			int w = y * tapsY;
+			for (int x = 0; x < width; x++)
+			{
+				var sum = Vector4.Zero;
+				int from = startY[y] * width + x;
+				for (int k = 0; k < countY[y]; k++)
+				{
+					sum += buffer[from + k * width] * weightsY[w + k];
+				}
+				var c = Vector4.Clamp(sum + half, Vector4.Zero, max);
+				line[x] = (int)c.X | ((int)c.Y << 8) | ((int)c.Z << 16) | ((int)c.W << 24);
+			}
+			Marshal.Copy(line, 0, _frameBits + y * _frameWidth * 4, width);
+		}
+	}
+
+	/// <summary>
+	/// 一个方向上从 source 个像素缩放到 target 个像素时，每个输出像素取哪些输入像素（从 Start 起 Count 个）、各占多少权重（每个输出像素占 Taps 格）。
+	/// </summary>
+	static (int[] Start, int[] Count, float[] Weights, int Taps) ScaleWeights(int source, int target)
+	{
+		double scale = (double)source / target;
+		// 缩小时三角形滤波的半径就是缩小倍数，覆盖到对应的那几个输入像素；放大时半径 1，即双线性
+		double radius = Math.Max(1, scale);
+		int taps = (int)Math.Ceiling(radius) * 2 + 1;
+		var start = new int[target];
+		var count = new int[target];
+		var weights = new float[target * taps];
+		for (int i = 0; i < target; i++)
+		{
+			double center = (i + 0.5) * scale - 0.5;
+			int first = Math.Max(0, (int)Math.Floor(center - radius) + 1);
+			int last = Math.Min(source - 1, (int)Math.Ceiling(center + radius) - 1);
+			double total = 0;
+			for (int j = first; j <= last; j++)
+			{
+				total += Math.Max(0, 1 - Math.Abs(j - center) / radius);
+			}
+			start[i] = first;
+			count[i] = last - first + 1;
+			for (int j = first; j <= last; j++)
+			{
+				weights[i * taps + j - first] = (float)(Math.Max(0, 1 - Math.Abs(j - center) / radius) / total);
+			}
+		}
+		return (start, count, weights, taps);
+	}
+
+	/// <summary>
+	/// 换一个 width × height 的共用 GDI 位图（自上而下、32 位）。
 	/// </summary>
 	static void CreateFrame(int width, int height)
 	{
@@ -256,20 +413,14 @@ internal sealed class FlyingIcon
 		}
 		_frameDc = CreateCompatibleDC(IntPtr.Zero);
 		SelectObject(_frameDc, _frameBitmap);
-		_frameTarget = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
-		// 高质量缩放要设在 DrawingGroup 上：设在 DrawingVisual 上时画进离屏位图不起作用（实测和双线性一模一样）
-		RenderOptions.SetBitmapScalingMode(FrameDrawing, BitmapScalingMode.HighQuality);
-		using (var context = FrameVisual.RenderOpen())
-		{
-			context.DrawDrawing(FrameDrawing);
-		}
+		(_frameWidth, _frameHeight) = (width, height);
 	}
 
 	static void ReleaseFrame()
 	{
-		_frameTarget = null;
-		// 不再引用最后一个图标的位图
-		FrameDrawing.Children.Clear();
+		(_frameWidth, _frameHeight) = (0, 0);
+		_scaleBuffer = [];
+		_rowBuffer = [];
 		// 先删 DC，选在里面的位图才删得掉
 		if (_frameDc != IntPtr.Zero)
 		{
@@ -287,16 +438,55 @@ internal sealed class FlyingIcon
 	/// <summary>
 	/// 从 from 飞到 to（图像范围，物理像素）：沿向上拱起的弧线、先快后慢，中途略微放大。
 	/// fadeIn：起点看不到这个图标（分区里要滚动才看得到、分区卷起了），开头淡入；fadeOut：终点看不到，末尾淡出。
+	/// 不在界面线程上逐帧 await：每个图标的续体各自排队，一帧里的图标前后隔开好几毫秒才摆完，常常跨过一次合成，
+	/// 而且各按自己被轮到的时刻取位置，节奏忽快忽慢（实测启动 59 个图标：一帧的摆放首尾隔 p50 6.8 毫秒，八成的帧跨过了合成）；
+	/// 界面线程被建分区、排版、重画占住时所有图标一起停住。所以登记下来，由帧时钟线程每帧按同一个时刻一次摆完（AdvanceFlights）。
+	/// 只能在界面线程上调用，起飞前要先摆好（Place）。
 	/// </summary>
-	public async Task FlyAsync(RECT from, RECT to, bool fadeIn, bool fadeOut)
+	public Task FlyAsync(RECT from, RECT to, bool fadeIn, bool fadeOut)
 	{
-		var clock = Stopwatch.StartNew();
-		while (clock.Elapsed < FlightDuration)
+		if (!_placed)
 		{
-			double u = clock.Elapsed / FlightDuration;
-			double opacity = (fadeIn ? Math.Clamp(u / 0.3, 0, 1) : 1) * (fadeOut ? 1 - Math.Clamp((u - 0.6) / 0.4, 0, 1) : 1);
-			Place(Along(from, to, u), opacity);
-			await NextFrame();
+			throw new InvalidOperationException("飞行图标起飞前要先在界面线程上摆好");
+		}
+		// 飞完后的续体（关窗口、显示落地的图标）回到界面线程上排队执行，不在帧时钟线程上跑
+		var flight = new Flight(this, from, to, fadeIn, fadeOut, Stopwatch.GetTimestamp(), new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+		lock (FrameLock)
+		{
+			_flights.Add(flight);
+			StartFrameClock();
+		}
+		return flight.Done.Task;
+	}
+
+	/// <summary>
+	/// 在帧时钟线程上把每个正在飞的图标摆到 frameTime（这一帧 DWM 合成的时刻）对应的位置；飞完的不再摆，完成它的任务。
+	/// 按同一个时刻取位置，相邻两帧之间所有图标都正好推进一帧的时长，不受各自被轮到早晚的影响。在 FrameLock 里调用。
+	/// UpdateLayeredWindow 不用窗口所在的线程配合（实测界面线程阻塞着也照常更新），所以界面线程忙时动画照样走。
+	/// </summary>
+	static void AdvanceFlights(long frameTime)
+	{
+		for (int i = 0; i < _flights.Count;)
+		{
+			var flight = _flights[i];
+			double u = Math.Max(0, Stopwatch.GetElapsedTime(flight.Start, frameTime) / FlightDuration);
+			if (u >= 1)
+			{
+				_flights.RemoveAt(i);
+				flight.Done.SetResult();
+				continue;
+			}
+			try
+			{
+				double opacity = (flight.FadeIn ? Math.Clamp(u / 0.3, 0, 1) : 1) * (flight.FadeOut ? 1 - Math.Clamp((u - 0.6) / 0.4, 0, 1) : 1);
+				flight.Icon.PlaceCore(Along(flight.From, flight.To, u), opacity);
+				i++;
+			}
+			catch (Exception ex)
+			{
+				_flights.RemoveAt(i);
+				flight.Done.SetException(ex);
+			}
 		}
 	}
 
@@ -333,7 +523,19 @@ internal sealed class FlyingIcon
 	/// </summary>
 	public static Task NextFrame()
 	{
-		_nextFrame ??= new TaskCompletionSource();
+		lock (FrameLock)
+		{
+			_nextFrame ??= new TaskCompletionSource();
+			StartFrameClock();
+			return _nextFrame.Task;
+		}
+	}
+
+	/// <summary>
+	/// 帧时钟线程没在运行时启动它。在界面线程上、FrameLock 里调用。
+	/// </summary>
+	static void StartFrameClock()
+	{
 		if (!_frameClockRunning)
 		{
 			_frameClockRunning = true;
@@ -341,13 +543,12 @@ internal sealed class FlyingIcon
 			FrameDiagnostics.Begin(dispatcher);
 			new Thread(() => RunFrameClock(dispatcher)) { IsBackground = true, Name = "FrameClock" }.Start();
 		}
-		return _nextFrame.Task;
 	}
 
 	/// <summary>
-	/// 等帧的后台线程：每次 DWM 合成之后到界面线程上完成等这一帧的任务，一帧下来没人等就退出。
-	/// 在界面线程上同步完成、优先级低于重绘：很多图标一起飞、界面线程忙不过来时不会接着塞新的一帧，重绘和输入照样轮得到
-	/// （实测 50 个图标错开起飞时，排在重绘优先级的操作最多等约 20 毫秒；在后台线程上直接完成的话要等近 2 秒）。
+	/// 帧时钟线程：每次 DWM 合成之后先摆好正在飞的图标，再让界面线程完成等这一帧的任务；既没有飞行也没人等时退出。
+	/// 等帧的任务排到界面线程上完成、优先级低于重绘，排着还没执行时不再重复排：很多图标一起飞、界面线程忙不过来时不会接着塞新的一帧，
+	/// 重绘和输入照样轮得到（实测 50 个图标错开起飞时，排在重绘优先级的操作最多等约 20 毫秒；在后台线程上直接完成的话要等近 2 秒）。
 	/// </summary>
 	static void RunFrameClock(Dispatcher dispatcher)
 	{
@@ -362,11 +563,24 @@ internal sealed class FlyingIcon
 				flushes++;
 			}
 			lastFrame = Stopwatch.GetTimestamp();
-			long flushedAt = lastFrame;
-			// 用这个重载：程序退出、调度器关闭后它返回 null；泛型的 Invoke<T> 会抛 TaskCanceledException，后台线程上没人接住，进程就崩了（实测）
-			if (dispatcher.Invoke(DispatcherPriority.Input, new Func<bool>(() => CompleteFrame(flushedAt, flushes))) is not true)
+			lock (FrameLock)
 			{
-				return;
+				// 程序退出、调度器关闭后不再排任务（排了也不会执行）
+				if (dispatcher.HasShutdownStarted || (_flights.Count == 0 && _nextFrame == null && !_completionPosted))
+				{
+					_frameClockRunning = false;
+					FrameDiagnostics.End();
+					return;
+				}
+				long start = Stopwatch.GetTimestamp();
+				FrameDiagnostics.FrameStart(lastFrame, flushes, start);
+				AdvanceFlights(lastFrame);
+				FrameDiagnostics.FrameEnd(start);
+				if (_nextFrame != null && !_completionPosted)
+				{
+					_completionPosted = true;
+					dispatcher.BeginInvoke(DispatcherPriority.Input, CompleteFrame);
+				}
 			}
 		}
 	}
@@ -378,29 +592,26 @@ internal sealed class FlyingIcon
 	static void WaitForComposition(bool justReturned)
 	{
 		long start = Stopwatch.GetTimestamp();
-		if (DwmFlush() < 0 || (justReturned && Stopwatch.GetElapsedTime(start) < TimeSpan.FromMilliseconds(1)))
+		int result = DwmFlush();
+		FrameDiagnostics.Flushed();
+		if (result < 0 || (justReturned && Stopwatch.GetElapsedTime(start) < TimeSpan.FromMilliseconds(1)))
 		{
 			Thread.Sleep(MinFrameInterval);
 		}
 	}
 
 	/// <summary>
-	/// 在界面线程上完成等这一帧的任务；没人等时返回 false，让后台线程退出。
+	/// 在界面线程上完成等这一帧的任务（续体就地接着执行）。
 	/// </summary>
-	static bool CompleteFrame(long flushedAt, int flushes)
+	static void CompleteFrame()
 	{
-		var frame = _nextFrame;
-		if (frame == null)
+		TaskCompletionSource? frame;
+		lock (FrameLock)
 		{
-			_frameClockRunning = false;
-			FrameDiagnostics.End();
-			return false;
+			frame = _nextFrame;
+			_nextFrame = null;
+			_completionPosted = false;
 		}
-		_nextFrame = null;
-		long start = Stopwatch.GetTimestamp();
-		FrameDiagnostics.FrameStart(flushedAt, flushes, start);
-		frame.SetResult();
-		FrameDiagnostics.FrameEnd(start);
-		return true;
+		frame?.SetResult();
 	}
 }
