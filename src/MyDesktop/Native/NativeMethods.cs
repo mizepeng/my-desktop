@@ -213,6 +213,8 @@ internal static class NativeMethods
 	public const uint SFGAO_CANRENAME = 0x00000010;
 	public const uint SFGAO_CANDELETE = 0x00000020;
 	public const uint SFGAO_DROPTARGET = 0x00000100;
+	public const uint SFGAO_LINK = 0x00010000;
+	public const uint SFGAO_SHARE = 0x00020000;
 	public const uint SFGAO_STREAM = 0x00400000;
 	public const uint SFGAO_FOLDER = 0x20000000;
 	public const uint SFGAO_FILESYSTEM = 0x40000000;
@@ -555,7 +557,8 @@ internal static class NativeMethods
 	[DllImport("shell32.dll")]
 	public static extern int SHGetImageList(int imageList, ref Guid riid, out IntPtr result);
 
-	// 取系统标准角标（如快捷方式箭头）的角标序号
+	// 取系统标准角标（共享、快捷方式箭头）的角标序号
+	public const int IDO_SHGIOI_SHARE = 0x0FFFFFFF;
 	public const int IDO_SHGIOI_LINK = 0x0FFFFFFE;
 
 	[DllImport("shell32.dll", CharSet = CharSet.Unicode)]
@@ -564,12 +567,50 @@ internal static class NativeMethods
 	[DllImport("shlwapi.dll", CharSet = CharSet.Unicode)]
 	public static extern int StrRetToBuf(IntPtr strret, IntPtr pidl, StringBuilder buffer, uint maxLength);
 
+	[DllImport("shell32.dll", EntryPoint = "SHGetPathFromIDListW", CharSet = CharSet.Unicode)]
+	public static extern bool SHGetPathFromIDList(IntPtr pidl, StringBuilder path);
+
+	[DllImport("shell32.dll")]
+	public static extern int SHGetSpecialFolderLocation(IntPtr hwnd, int folder, out IntPtr pidl);
+
+	public const int CSIDL_DESKTOP = 0x0000;
+
+	public const int SHCNRF_ShellLevel = 0x0002;
+	public const int SHCNRF_NewDelivery = 0x8000;
+	public const int SHCNE_UPDATEDIR = 0x00001000;
+	public const int SHCNE_UPDATEITEM = 0x00002000;
+	public const int SHCNE_UPDATEIMAGE = 0x00008000;
+	public const int SHCNE_ASSOCCHANGED = 0x08000000;
+
+	[StructLayout(LayoutKind.Sequential)]
+	public struct SHChangeNotifyEntry
+	{
+		public IntPtr pidl;
+		public bool fRecursive;
+	}
+
+	[DllImport("shell32.dll")]
+	public static extern uint SHChangeNotifyRegister(IntPtr hwnd, int sources, int events, uint message, int entryCount, ref SHChangeNotifyEntry entry);
+
+	[DllImport("shell32.dll")]
+	public static extern bool SHChangeNotifyDeregister(uint id);
+
+	[DllImport("shell32.dll")]
+	public static extern IntPtr SHChangeNotification_Lock(IntPtr change, uint processId, out IntPtr pidls, out int eventId);
+
+	[DllImport("shell32.dll")]
+	public static extern bool SHChangeNotification_Unlock(IntPtr lockHandle);
+
 	#endregion
 
 	#region ole32
 
+	public const uint CLSCTX_INPROC_SERVER = 0x1;
 	public const uint CLSCTX_LOCAL_SERVER = 0x4;
 	public const uint REGCLS_MULTIPLEUSE = 0x1;
+
+	[DllImport("ole32.dll")]
+	public static extern int CoCreateInstance(ref Guid clsid, IntPtr outer, uint context, ref Guid iid, out IntPtr result);
 
 	[DllImport("ole32.dll")]
 	public static extern int CoRegisterClassObject(ref Guid clsid, [MarshalAs(UnmanagedType.IUnknown)] object classFactory, uint context, uint flags, out uint cookie);

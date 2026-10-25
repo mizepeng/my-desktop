@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
@@ -63,6 +64,10 @@ internal partial class SettingsWindow : Window
 	readonly FenceManager _manager;
 	readonly ObservableCollection<OrganizeRule> _rules;
 	bool _loading = true;
+	// 打开设置窗口时已经存在的、要重启才完全生效的改动；关闭时只为这次新增的提示重启
+	readonly List<string> _restartReasons;
+	// 关闭时用户选了现在重启
+	bool _restart;
 	// 正在录入搜索快捷键：这期间 Alt+空格等组合键不能弹出窗口的系统菜单
 	bool _capturingHotkey;
 
@@ -72,8 +77,10 @@ internal partial class SettingsWindow : Window
 		InitializeComponent();
 		_rules = new ObservableCollection<OrganizeRule>(manager.Settings.Rules);
 		RulesList.ItemsSource = _rules;
+		OverlaySettings.Bind(manager);
 		LoadValues();
 		BlockComboBoxWheel();
+		_restartReasons = manager.RestartReasons();
 	}
 
 	/// <summary>
@@ -82,7 +89,7 @@ internal partial class SettingsWindow : Window
 	void BlockComboBoxWheel()
 	{
 		foreach (var box in new[] { DoubleClickTargetBox, StartupVisibilityBox, StartupHideTargetBox, TabAlignmentBox,
-				BackgroundBox, RadiusChoiceBox, IconSizeBox, FenceFontBox, DesktopFontBox })
+				BackgroundBox, RadiusChoiceBox, IconSizeBox, FenceFontBox, DesktopFontBox, OverlaySettings.ModeBox })
 		{
 			box.PreviewMouseWheel += ComboBox_PreviewMouseWheel;
 		}
@@ -142,7 +149,7 @@ internal partial class SettingsWindow : Window
 		LoadFonts();
 		FenceFontSizeSlider.Value = Settings.FenceFontSize;
 		DesktopFontSizeSlider.Value = Settings.DesktopFontSize;
-		ShortcutArrowBox.IsChecked = Settings.ShowShortcutArrows;
+		OverlaySettings.LoadValues();
 		ShowIconNamesBox.IsChecked = Settings.ShowIconNames;
 		HardwareAccelerationBox.IsChecked = Settings.HardwareAcceleration;
 		FlightAnimationBox.IsChecked = Settings.FlightAnimation;
@@ -173,10 +180,32 @@ internal partial class SettingsWindow : Window
 		HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)?.AddHook(WndProc);
 	}
 
+	protected override void OnClosing(CancelEventArgs e)
+	{
+		base.OnClosing(e);
+		// 程序退出时也会关闭设置窗口，这时不问
+		if (e.Cancel || _manager.ShuttingDown)
+		{
+			return;
+		}
+		var reasons = _manager.RestartReasons().Except(_restartReasons).ToList();
+		if (reasons.Count > 0)
+		{
+			string message = "这次改的设置已经生效，但下面这些要重启 MyDesktop 软件才能完全清掉：\n\n"
+					+ string.Join("\n", reasons.Select(r => $"· {r}"))
+					+ "\n\n只是关掉再打开 MyDesktop，几秒钟就好，不会重启电脑。现在重启 MyDesktop 吗？";
+			_restart = MessageDialog.Show("重启 MyDesktop 软件", message, "现在重启 MyDesktop", "稍后") == 0;
+		}
+	}
+
 	protected override void OnClosed(EventArgs e)
 	{
 		SaveRules();
 		base.OnClosed(e);
+		if (_restart)
+		{
+			Dispatcher.BeginInvoke(App.Current.Restart);
+		}
 	}
 
 	IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -196,7 +225,7 @@ internal partial class SettingsWindow : Window
 		{
 			return;
 		}
-		var pages = new[] { GeneralPage, DesktopPage, FencesPage, AppearancePage, RulesPage, BackupPage, HelpPage, AboutPage };
+		var pages = new[] { GeneralPage, DesktopPage, FencesPage, AppearancePage, OverlaysPage, RulesPage, BackupPage, HelpPage, AboutPage };
 		for (int i = 0; i < pages.Length; i++)
 		{
 			pages[i].Visibility = i == NavList.SelectedIndex ? Visibility.Visible : Visibility.Collapsed;
@@ -295,8 +324,6 @@ internal partial class SettingsWindow : Window
 		bool shadowChanged = Settings.TextShadow != textShadow;
 		bool border = BorderBox.IsChecked == true;
 		bool borderChanged = Settings.DefaultBorder != border;
-		bool arrows = ShortcutArrowBox.IsChecked == true;
-		bool arrowsChanged = Settings.ShowShortcutArrows != arrows;
 		bool desktopMenu = DesktopMenuBox.IsChecked == true;
 		bool desktopMenuChanged = Settings.DesktopContextMenu != desktopMenu;
 		bool names = ShowIconNamesBox.IsChecked == true;
@@ -314,7 +341,6 @@ internal partial class SettingsWindow : Window
 		Settings.ShowHiddenFiles = showHidden;
 		Settings.TextShadow = textShadow;
 		Settings.DefaultBorder = border;
-		Settings.ShowShortcutArrows = arrows;
 		Settings.DesktopContextMenu = desktopMenu;
 		Settings.ShowIconNames = names;
 		Settings.HardwareAcceleration = hardware;
@@ -332,10 +358,6 @@ internal partial class SettingsWindow : Window
 		if (shadowChanged || borderChanged)
 		{
 			_manager.RefreshAllAppearance();
-		}
-		if (arrowsChanged)
-		{
-			_manager.ApplyShortcutArrows();
 		}
 		if (namesChanged)
 		{
@@ -755,7 +777,6 @@ internal partial class SettingsWindow : Window
 				}
 				break;
 			case "外观":
-				bool arrowsChanged = Settings.ShowShortcutArrows != defaults.ShowShortcutArrows;
 				Settings.DefaultColor = defaults.DefaultColor;
 				Settings.DefaultOpacity = defaults.DefaultOpacity;
 				Settings.DefaultBackground = defaults.DefaultBackground;
@@ -771,15 +792,18 @@ internal partial class SettingsWindow : Window
 				Settings.DesktopFontSize = defaults.DesktopFontSize;
 				Settings.ShowIconNames = defaults.ShowIconNames;
 				Settings.TextShadow = defaults.TextShadow;
-				Settings.ShowShortcutArrows = defaults.ShowShortcutArrows;
 				Settings.FlightAnimation = defaults.FlightAnimation;
 				_manager.ApplyFonts();
 				_manager.RefreshAllAppearance();
 				_manager.RefreshAllViewMode();
-				if (arrowsChanged)
-				{
-					_manager.ApplyShortcutArrows();
-				}
+				break;
+			case "角标":
+				Settings.OverlayMode = defaults.OverlayMode;
+				Settings.ShowShortcutArrows = defaults.ShowShortcutArrows;
+				Settings.ShowShareOverlay = defaults.ShowShareOverlay;
+				Settings.ShowOtherSystemOverlays = defaults.ShowOtherSystemOverlays;
+				Settings.CustomOverlayHandlers = defaults.CustomOverlayHandlers;
+				_manager.ApplyShortcutArrows();
 				break;
 		}
 		_manager.SaveSoon();
@@ -931,7 +955,9 @@ internal partial class SettingsWindow : Window
 	{
 		try
 		{
-			Process.Start(new ProcessStartInfo("explorer.exe", $"\"{folder}\"") { UseShellExecute = true })?.Dispose();
+			// 经资源管理器打开，遵守用户设置的文件夹默认打开方式（如 Files），也不继承 MyDesktop 的 Job 限制；
+			// 末尾补上分隔符，明确是目录
+			ExplorerShell.Open(Path.EndsInDirectorySeparator(folder) ? folder : folder + Path.DirectorySeparatorChar, folder);
 		}
 		catch (Exception ex)
 		{

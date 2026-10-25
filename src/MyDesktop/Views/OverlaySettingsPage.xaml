@@ -1,0 +1,46 @@
+<UserControl x:Class="MyDesktop.Views.OverlaySettingsPage"
+		x:ClassModifier="internal"
+		xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+	<!-- 设置窗口的「角标」页（页标题和「恢复默认」在 SettingsWindow 里），样式用设置窗口的 -->
+	<StackPanel>
+		<TextBlock Style="{DynamicResource Hint}" Margin="0,2,0,16" Text="图标上叠加的小标记：快捷方式箭头、共享，以及 TortoiseGit、网盘等软件的状态角标。一个图标只显示一个角标。这里的设置只影响 MyDesktop 显示的图标，不改系统设置。" />
+
+		<Border Style="{DynamicResource Card}">
+			<DockPanel>
+				<ComboBox x:Name="OverlayModeBox" Width="150" VerticalAlignment="Center" DockPanel.Dock="Right" SelectionChanged="OverlayModeBox_SelectionChanged" />
+				<StackPanel Margin="0,0,12,0">
+					<TextBlock Text="角标顺序" />
+					<TextBlock Style="{DynamicResource Hint}"
+							Text="跟随系统：和资源管理器一样，由 Windows 加载的角标处理程序按各自报告的优先级决定；Windows 的角标位置有限，按名称排在后面的处理程序分不到位置就不显示" />
+					<TextBlock Style="{DynamicResource Hint}" Margin="0,4,0,0"
+							Text="自定义顺序：由 MyDesktop 自己加载勾选的角标处理程序，按下面列表的顺序取第一个认领的角标" />
+				</StackPanel>
+			</DockPanel>
+		</Border>
+		<Border x:Name="ShortcutArrowCard" Style="{DynamicResource Card}">
+			<CheckBox x:Name="ShortcutArrowBox" Click="ShortcutArrowBox_Click">
+				<StackPanel>
+					<TextBlock Text="显示快捷方式小箭头" />
+					<TextBlock Style="{DynamicResource Hint}" Text="快捷方式图标左下角的箭头" />
+				</StackPanel>
+			</CheckBox>
+		</Border>
+		<Border x:Name="OverlayListCard" Style="{DynamicResource Card}">
+			<StackPanel>
+				<TextBlock Text="自定义顺序" />
+				<TextBlock Style="{DynamicResource Hint}"
+						Text="拖动左边的把手调整顺序，越靠前越优先，图标显示第一个认领它的角标。每项注明它在系统里的加载情况；处理程序自己没有提供角标、无法加载的不能勾选。取消勾选后角标立即不再显示，但已经载入的扩展要重启 MyDesktop 软件才会卸载（不用重启电脑）" />
+				<StackPanel Margin="0,8,0,0" Orientation="Horizontal">
+					<Button x:Name="OverlaySelectAllButton" Content="全选" Click="OverlaySelectAll_Click" />
+					<Button x:Name="OverlaySelectNoneButton" Margin="8,0,0,0" Content="全不选" Click="OverlaySelectNone_Click" />
+				</StackPanel>
+				<!-- 内置角标和全部处理程序，按 Settings.CustomOverlayHandlers 的顺序（见 BuildOverlayListAsync） -->
+				<StackPanel x:Name="OverlayHandlerPanel" Margin="0,8,0,0"
+						MouseMove="OverlayHandlerPanel_MouseMove"
+						MouseLeftButtonUp="OverlayHandlerPanel_MouseLeftButtonUp"
+						LostMouseCapture="OverlayHandlerPanel_LostMouseCapture" />
+			</StackPanel>
+		</Border>
+	</StackPanel>
+</UserControl>

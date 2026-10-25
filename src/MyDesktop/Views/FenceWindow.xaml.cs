@@ -2772,10 +2772,15 @@ internal partial class FenceWindow : Window
 	/// <summary>
 	/// 重新加载全部图标，加载完成前保留旧图标。
 	/// </summary>
-	public void ReloadIcons()
+	/// <param name="match">只重新加载路径符合条件的图标；为空时全部重新加载。</param>
+	public void ReloadIcons(Func<string, bool>? match = null)
 	{
 		foreach (var item in _items)
 		{
+			if (match != null && !match(item.FullPath))
+			{
+				continue;
+			}
 			item.IconPixelSize = 0;
 			RequestIcon(item);
 		}
@@ -3702,7 +3707,10 @@ internal partial class FenceWindow : Window
 	{
 		try
 		{
-			Process.Start(new ProcessStartInfo("explorer.exe", $"\"{CurrentFolder}\"") { UseShellExecute = true })?.Dispose();
+			// 经资源管理器打开，遵守用户设置的文件夹默认打开方式（如 Files），也不继承 MyDesktop 的 Job 限制；
+			// 末尾补上分隔符，明确是目录
+			var folder = CurrentFolder;
+			ExplorerShell.Open(Path.EndsInDirectorySeparator(folder) ? folder : folder + Path.DirectorySeparatorChar, folder);
 		}
 		catch (Exception ex)
 		{

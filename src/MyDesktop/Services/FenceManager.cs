@@ -35,6 +35,7 @@ internal sealed class FenceManager
 	readonly DispatcherTimer _unliftTimer;
 	readonly DispatcherTimer _iconReloadTimer;
 	readonly List<RegistryWatcher> _registryWatchers = [];
+	ShellChangeWatcher? _shellChanges;
 	readonly WinEventProc _foregroundCallback;
 	readonly WinEventProc _reorderCallback;
 	readonly IntPtr _rootWindow = GetDesktopWindow();
@@ -57,6 +58,8 @@ internal sealed class FenceManager
 	bool _iconsHidden;
 	bool _fencesHidden;
 	bool _shutdown;
+	// 启动时是否开着硬件加速：运行中关掉后，显卡驱动已经占用的内存要重启才还
+	readonly bool _startedWithHardware;
 	// 启动后第一次接管桌面图标之前：分区里的图标先不显示，接管那一刻从资源管理器桌面上的原处飞进分区
 	bool _flyInAtStartup;
 	// 正在切换标签的标签组（见 ActivateTabAsync）
@@ -65,7 +68,9 @@ internal sealed class FenceManager
 	public FenceManager(AppSettings settings)
 	{
 		Settings = settings;
+		_startedWithHardware = settings.HardwareAcceleration;
 		ShellIconLoader.ShowShortcutArrows = settings.ShowShortcutArrows;
+		ConfigureOverlays();
 		_dispatcher = Dispatcher.CurrentDispatcher;
 		_saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
 		_saveTimer.Tick += (_, _) => SaveNow();
@@ -228,6 +233,7 @@ internal sealed class FenceManager
 		ApplyMouseHookSettings();
 		Organizer.ApplyWatchSetting();
 		WatchElevationSettings();
+		WatchShellChanges();
 		DesktopMenu.Apply(Settings.DesktopContextMenu);
 		_watchdogTimer.Start();
 		// 启动这一阵子别的程序（比如刚装完点「完成」的安装程序）还在关闭、切换前台，稍后再校正一次层级
@@ -405,6 +411,7 @@ internal sealed class FenceManager
 		_unliftTimer.Stop();
 		_iconReloadTimer.Stop();
 		_registryWatchers.ForEach(w => w.Dispose());
+		_shellChanges?.Dispose();
 		foreach (var hook in new[] { _foregroundHook, _reorderHook })
 		{
 			if (hook != IntPtr.Zero)
@@ -1778,6 +1785,49 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
+	/// 角标状态变了而文件没变（git 提交、网盘同步完成）时，角标软件会发 Shell 变更通知，收到后重新加载相应的图标。
+	/// 注册失败只是角标不能及时更新，图标照常显示，所以记日志后继续。
+	/// </summary>
+	void WatchShellChanges()
+	{
+		try
+		{
+			_shellChanges = new ShellChangeWatcher();
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("注册 Shell 变更通知失败，角标不会随状态变化及时更新", ex);
+			return;
+		}
+		_shellChanges.Changed += OnShellChanged;
+	}
+
+	void OnShellChanged(IconChanges changes)
+	{
+		if (changes.All)
+		{
+			ReloadIcons();
+			return;
+		}
+		bool Match(string path)
+		{
+			if (changes.Items.Contains(path) || changes.Folders.Contains(path))
+			{
+				return true;
+			}
+			string? folder = Path.GetDirectoryName(path);
+			return !string.IsNullOrEmpty(folder) && changes.Folders.Contains(folder.TrimEnd('\\'));
+		}
+		// 只换图标图像，加载完成前保留旧图标，分区不重新排版
+		ShellIconLoader.Invalidate(Match);
+		foreach (var window in _windows)
+		{
+			window.ReloadIcons(Match);
+		}
+		_takeover?.ReloadIcons(Match);
+	}
+
+	/// <summary>
 	/// 快捷方式属性「兼容性」页的「以管理员身份运行此程序」记在这两个键里（当前用户 / 所有用户），
 	/// 改动不会触碰快捷方式文件，要单独监视才能及时更新图标上的管理员盾牌。
 	/// </summary>
@@ -1802,8 +1852,30 @@ internal sealed class FenceManager
 	/// </summary>
 	public void ApplyShortcutArrows()
 	{
-		ShellIconLoader.ShowShortcutArrows = Settings.ShowShortcutArrows;
+		ConfigureOverlays();
 		ReloadIcons();
+	}
+
+	/// <summary>
+	/// 设置里改了角标模式或自定义顺序后，按新设置重新加载全部图标。
+	/// </summary>
+	public void ApplyOverlayHandlers()
+	{
+		ConfigureOverlays();
+		ReloadIcons();
+	}
+
+	void ConfigureOverlays()
+	{
+		ShellIconLoader.ShowShortcutArrows = Settings.ShowShortcutArrows;
+		ShellIconLoader.ShowShareOverlay = Settings.ShowShareOverlay;
+		ShellIconLoader.ShowOtherSystemOverlays = Settings.ShowOtherSystemOverlays;
+		// 「系统角标」由它下面的三项决定，一项都不显示时整个跳过
+		bool system = Settings.ShowShortcutArrows || Settings.ShowShareOverlay || Settings.ShowOtherSystemOverlays;
+		var enabled = Settings.CustomOverlayHandlers
+				.Where(h => h.Id == IconOverlayHandlers.SystemId ? system : h.Enabled)
+				.Select(h => h.Id);
+		IconOverlayHandlers.Configure(Settings.OverlayMode == OverlayMode.Custom, enabled);
 	}
 
 	void ReloadIcons()
@@ -1814,6 +1886,25 @@ internal sealed class FenceManager
 			window.ReloadIcons();
 		}
 		_takeover?.ReloadIcons();
+	}
+
+	public bool ShuttingDown => _shutdown;
+
+	/// <summary>
+	/// 改过的设置里，要重启程序才完全生效的那些（设置都是改完立即生效的，这里是生效后还留在进程里、重启才清掉的东西）。
+	/// </summary>
+	public List<string> RestartReasons()
+	{
+		var reasons = new List<string>();
+		if (IconOverlayHandlers.HasUnusedLoaded())
+		{
+			reasons.Add("取消勾选的角标处理程序：角标已不再显示，但已经载入的扩展要重启 MyDesktop 才会卸载");
+		}
+		if (_startedWithHardware && !Settings.HardwareAcceleration)
+		{
+			reasons.Add("关掉了硬件加速：已改用 CPU 绘制，但显卡驱动已经占用的内存要重启 MyDesktop 才会释放");
+		}
+		return reasons;
 	}
 
 	public void ApplyCollapseDelay()

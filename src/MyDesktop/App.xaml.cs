@@ -61,6 +61,11 @@ public partial class App : Application
 	}
 
 	/// <summary>
+	/// 按当前配置重新启动（设置里有些改动要重启才完全生效）。
+	/// </summary>
+	internal void Restart() => RestartWithSettings(Manager!.Settings);
+
+	/// <summary>
 	/// 换成另一份配置并重新启动：先正常退出（保存当前配置、恢复桌面图标），再写入新配置，由新进程等本进程退出后接着启动。
 	/// </summary>
 	internal void RestartWithSettings(AppSettings settings)
@@ -80,7 +85,7 @@ public partial class App : Application
 		}
 		catch (Exception ex)
 		{
-			Log.Error("恢复配置后重新启动失败", ex);
+			Log.Error("重新启动失败", ex);
 		}
 		Shutdown();
 	}

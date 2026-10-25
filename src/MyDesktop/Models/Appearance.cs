@@ -39,6 +39,15 @@ public static class Appearance
 		};
 	}
 
+	public static string DisplayName(this OverlayMode mode)
+	{
+		return mode switch
+		{
+			OverlayMode.FollowSystem => "跟随系统",
+			OverlayMode.Custom => "自定义顺序",
+		};
+	}
+
 	public static string DisplayName(this IconSizeMode size)
 	{
 		return size switch

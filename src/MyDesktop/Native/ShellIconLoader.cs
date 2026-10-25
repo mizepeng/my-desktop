@@ -50,6 +50,9 @@ internal static class ShellIconLoader
 	static readonly ConcurrentDictionary<int, BitmapSource?> Shields = new();
 	static readonly ConcurrentDictionary<int, BitmapSource?> Overlays = new();
 	static readonly Lazy<int> LinkOverlay = new(() => SHGetIconOverlayIndex(null, IDO_SHGIOI_LINK));
+	static readonly Lazy<int> ShareOverlay = new(() => SHGetIconOverlayIndex(null, IDO_SHGIOI_SHARE));
+	// 缓存每被清空或作废一次加一
+	static int _generation;
 
 	static readonly Lazy<BitmapSource?> FolderIconSource = new(LoadFolderIcon);
 
@@ -85,6 +88,13 @@ internal static class ShellIconLoader
 	/// </summary>
 	public static bool ShowShortcutArrows { get; set; } = true;
 
+	/// <summary>
+	/// 自定义顺序时「系统角标」里是否显示共享角标、其他系统角标（设置项）。
+	/// </summary>
+	public static bool ShowShareOverlay { get; set; } = true;
+
+	public static bool ShowOtherSystemOverlays { get; set; } = true;
+
 	static ShellIconLoader()
 	{
 		for (int i = 0; i < WorkerCount; i++)
@@ -114,19 +124,44 @@ internal static class ShellIconLoader
 	/// <summary>
 	/// 缓存只按文件修改时间失效；文件没变而角标状态变了（如兼容性里的「以管理员身份运行」）时整体清空。
 	/// </summary>
-	public static void ClearCache() => Cache.Clear();
+	public static void ClearCache()
+	{
+		Interlocked.Increment(ref _generation);
+		Cache.Clear();
+	}
+
+	/// <summary>
+	/// 作废路径符合条件的缓存（角标状态变了而文件没变，如 git 提交、网盘同步完成），调用方随后重新请求这些图标。
+	/// </summary>
+	public static void Invalidate(Func<string, bool> match)
+	{
+		Interlocked.Increment(ref _generation);
+		foreach (var key in Cache.Keys)
+		{
+			// 键的最后一段是路径，见 Request
+			if (match(key.Split('|', 4)[3]))
+			{
+				Cache.TryRemove(key, out _);
+			}
+		}
+	}
 
 	static void Work()
 	{
 		foreach (var request in Queue.GetConsumingEnumerable())
 		{
 			BitmapSource? image = null;
+			bool stale = false;
 			try
 			{
 				if (!Cache.TryGetValue(request.Key, out image))
 				{
+					int generation = Volatile.Read(ref _generation);
 					image = Load(request.Path, request.Size);
-					if (image != null)
+					// 加载期间缓存被作废的话，这次的结果可能是作废前的状态：不进缓存也不交给回调，重新加载。
+					// 交给回调的话，可能比作废后重新请求的那次晚到，把新图标盖回旧的
+					stale = generation != Volatile.Read(ref _generation);
+					if (image != null && !stale)
 					{
 						if (Cache.Count > MaxCacheEntries)
 						{
@@ -139,6 +174,11 @@ internal static class ShellIconLoader
 			catch (Exception ex)
 			{
 				Log.Warn($"加载图标失败：{request.Path}", ex);
+			}
+			if (stale)
+			{
+				Queue.Add(request);
+				continue;
 			}
 			// 偶尔会取不到图标（实测回收站刚由空变满时），稍后重试，不让图标一直空着
 			if (image == null && request.Attempt < MaxRetries)
@@ -230,18 +270,18 @@ internal static class ShellIconLoader
 	/// </summary>
 	static BitmapSource StampOverlay(string path, BitmapSource image)
 	{
-		int overlay;
+		BitmapSource? badge;
 		try
 		{
 			using var items = ShellItemSet.Create([path]);
-			overlay = items?.GetOverlayIndex() ?? 0;
+			badge = IconOverlayHandlers.Custom ? CustomOverlay(path, items) : SystemOverlay(items);
 		}
 		catch (Exception ex)
 		{
 			Log.Warn($"读取图标角标失败：{path}", ex);
 			return image;
 		}
-		if (overlay <= 0 || (!ShowShortcutArrows && overlay == LinkOverlay.Value) || LoadOverlay(overlay) is not BitmapSource badge)
+		if (badge == null)
 		{
 			return image;
 		}
@@ -257,6 +297,60 @@ internal static class ShellIconLoader
 		result.Freeze();
 		return result;
 	}
+
+	/// <summary>
+	/// 跟随系统：用资源管理器给出的角标。
+	/// </summary>
+	static BitmapSource? SystemOverlay(ShellItemSet? items)
+	{
+		int overlay = items?.GetOverlayIndex() ?? 0;
+		if (overlay <= 0 || (!ShowShortcutArrows && overlay == LinkOverlay.Value))
+		{
+			return null;
+		}
+		return LoadOverlay(overlay);
+	}
+
+	/// <summary>
+	/// 自定义顺序：「系统角标」和勾选的处理程序按列表顺序判断。
+	/// </summary>
+	static BitmapSource? CustomOverlay(string path, ShellItemSet? items) => IconOverlayHandlers.Find(path, () => SystemEntryOverlay(path, items));
+
+	/// <summary>
+	/// 列表里「系统角标」那一项：Windows 内置的角标。共享、快捷方式箭头按项目属性自己判断（目录联接也带 SFGAO_LINK），
+	/// 不受系统给了哪个角标影响；其余的内置角标（实测有脱机文件的盒子、来历不明的 imageres.dll,-157 绿色对勾）没法事先列全，
+	/// 用系统给的角标，但要排除来自处理程序的：系统给的角标序号分不出来自哪个处理程序（和 SHGetIconOverlayIndex 的编号不是一套），
+	/// 只能问系统加载的处理程序有没有认领这个文件，有就不是内置角标。认不出来的记下来、照样显示，不静默丢掉。
+	/// 局限：一个文件同时有认不出来的内置角标和某个处理程序的角标、系统给了后者时，内置角标会漏掉（和资源管理器显示的一样）。
+	/// </summary>
+	static BitmapSource? SystemEntryOverlay(string path, ShellItemSet? items)
+	{
+		uint attributes = items?.GetAttributes(SFGAO_LINK | SFGAO_SHARE) ?? 0;
+		if ((attributes & SFGAO_LINK) != 0 && ShowShortcutArrows && LinkOverlay.Value > 0)
+		{
+			return LoadOverlay(LinkOverlay.Value);
+		}
+		if ((attributes & SFGAO_SHARE) != 0 && ShowShareOverlay && ShareOverlay.Value > 0)
+		{
+			return LoadOverlay(ShareOverlay.Value);
+		}
+		if (!ShowOtherSystemOverlays)
+		{
+			return null;
+		}
+		int overlay = items?.GetOverlayIndex() ?? 0;
+		if (overlay <= 0 || overlay == LinkOverlay.Value || overlay == ShareOverlay.Value || IconOverlayHandlers.IsClaimedBySystemHandler(path))
+		{
+			return null;
+		}
+		IconOverlayHandlers.ReportOtherOverlay(overlay, path);
+		return LoadOverlay(overlay);
+	}
+
+	/// <summary>
+	/// 系统角标序号对应的图像（设置页列出认不出来的系统角标时用）。
+	/// </summary>
+	public static BitmapSource? OverlayImage(int overlay) => LoadOverlay(overlay);
 
 	/// <summary>
 	/// 从系统超大图像列表取角标图像（缩小绘制不发糊），每种角标只取一次。

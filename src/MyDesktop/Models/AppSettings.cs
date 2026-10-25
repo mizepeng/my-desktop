@@ -14,6 +14,21 @@ public enum SortField
 	Custom,
 }
 
+/// <summary>
+/// 角标处理程序（ShellIconOverlayIdentifiers）的角标怎么取。
+/// </summary>
+public enum OverlayMode
+{
+	/// <summary>
+	/// 和资源管理器一样，用系统加载的处理程序、按它们报告的优先级取角标。
+	/// </summary>
+	FollowSystem,
+	/// <summary>
+	/// 由本程序加载勾选的处理程序，和「系统角标」（Windows 内置的角标）排成一个列表，按列表顺序取第一个认领的。
+	/// </summary>
+	Custom,
+}
+
 public enum IconSizeMode
 {
 	Small,
@@ -215,6 +230,23 @@ public sealed class AppSettings
 	/// 快捷方式图标左下角叠加系统的小箭头角标，与资源管理器一致。
 	/// </summary>
 	public bool ShowShortcutArrows { get; set; } = true;
+
+	public OverlayMode OverlayMode { get; set; } = OverlayMode.FollowSystem;
+
+	/// <summary>
+	/// 自定义顺序时「系统角标」里的共享角标（跟随系统时用系统的结果，不看这一项）。
+	/// </summary>
+	public bool ShowShareOverlay { get; set; } = true;
+
+	/// <summary>
+	/// 自定义顺序时「系统角标」里共享、快捷方式箭头以外的系统角标（如脱机文件；跟随系统时用系统的结果，不看这一项）。
+	/// </summary>
+	public bool ShowOtherSystemOverlays { get; set; } = true;
+
+	/// <summary>
+	/// 自定义顺序时的角标列表（「系统角标」和处理程序），顺序即优先级（越靠前越优先）。为空表示还没切到过自定义顺序，切过去时按系统的优先级生成。
+	/// </summary>
+	public List<OverlayHandlerSetting> CustomOverlayHandlers { get; set; } = [];
 
 	/// <summary>
 	/// 分区的图标视图里显示图标名称；关掉后只显示图标、格子变窄，鼠标停在图标上仍能看到名称。
@@ -539,4 +571,20 @@ public sealed class OrganizeRule
 			new() { Name = "其他", IsFallback = true },
 		];
 	}
+}
+
+/// <summary>
+/// 自定义顺序里的一个角标处理程序。
+/// </summary>
+public sealed class OverlayHandlerSetting
+{
+	/// <summary>
+	/// 处理程序为 ShellIconOverlayIdentifiers 子键默认值里的 CLSID，「系统角标」为 system。
+	/// </summary>
+	public string Id { get; set; } = "";
+
+	/// <summary>
+	/// 是否启用；「系统角标」不看这一项，由 ShowShortcutArrows、ShowShareOverlay、ShowOtherSystemOverlays 三项决定。
+	/// </summary>
+	public bool Enabled { get; set; }
 }

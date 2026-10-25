@@ -982,11 +982,11 @@ internal sealed class DesktopTakeover : IDisposable
 	/// </summary>
 	public void RefreshHitRects() => _dispatcher.InvokeAsync(UpdateHitRects, DispatcherPriority.Loaded);
 
-	public void ReloadIcons()
+	public void ReloadIcons(Func<string, bool>? match = null)
 	{
 		foreach (var layer in _layers)
 		{
-			layer.ReloadIcons();
+			layer.ReloadIcons(match);
 		}
 	}
 

@@ -340,10 +340,15 @@ internal partial class DesktopLayerWindow : Window
 		}
 	}
 
-	public void ReloadIcons()
+	/// <param name="match">只重新加载路径符合条件的图标；为空时全部重新加载。</param>
+	public void ReloadIcons(Func<string, bool>? match = null)
 	{
 		foreach (var item in _items)
 		{
+			if (match != null && !match(item.FullPath))
+			{
+				continue;
+			}
 			item.IconPixelSize = 0;
 			RequestIcon(item);
 		}
