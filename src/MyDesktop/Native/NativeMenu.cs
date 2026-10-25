@@ -75,6 +75,30 @@ internal sealed class NativeMenu : IDisposable
 	}
 
 	/// <summary>
+	/// 依次加入一组 <see cref="ExtraMenuItem"/>（和插进系统右键菜单的自定义项是同一套描述），子菜单递归加。
+	/// </summary>
+	public NativeMenu AddItems(IEnumerable<ExtraMenuItem> items)
+	{
+		foreach (var item in items)
+		{
+			if (ReferenceEquals(item, ExtraMenuItem.Separator))
+			{
+				AddSeparator();
+			}
+			else if (item.Children is { } children)
+			{
+				AddSubMenu(item.Text, sub => sub.AddItems(children), item.Enabled);
+			}
+			else
+			{
+				var bitmap = item.Swatch is { } color ? ColorSwatch(color) : IntPtr.Zero;
+				Add(item.Text, item.Action, item.Checked, item.Enabled, item.Radio, bitmap: bitmap);
+			}
+		}
+		return this;
+	}
+
+	/// <summary>
 	/// 生成一个纯色小方块位图作为菜单项图标，菜单释放时一并销毁。
 	/// </summary>
 	public IntPtr ColorSwatch(Color color)

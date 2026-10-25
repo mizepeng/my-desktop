@@ -330,6 +330,81 @@ internal interface IShellIconOverlay
 }
 
 /// <summary>
+/// COM 的 IServiceProvider（与 System.IServiceProvider 同名，这里换个名字），扩展通过站点用它查询文件夹视图等服务。
+/// </summary>
+[ComImport]
+[Guid("6D5140C1-7436-11CE-8034-00AA006009FA")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IOleServiceProvider
+{
+	[PreserveSig]
+	int QueryService(ref Guid service, ref Guid iid, out IntPtr result);
+}
+
+[ComImport]
+[Guid("FC4801A3-2BA9-11CF-A229-00AA003D7352")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IObjectWithSite
+{
+	[PreserveSig]
+	int SetSite([MarshalAs(UnmanagedType.IUnknown)] object? site);
+
+	[PreserveSig]
+	int GetSite(ref Guid iid, out IntPtr site);
+}
+
+/// <summary>
+/// 资源管理器的文件夹视图接口，右键菜单扩展从站点取它来得知当前文件夹和选中项。
+/// </summary>
+[ComImport]
+[Guid("CDE725B0-CCC9-4519-917E-325D72FAB4CE")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IFolderView
+{
+	[PreserveSig]
+	int GetCurrentViewMode(out uint mode);
+
+	[PreserveSig]
+	int SetCurrentViewMode(uint mode);
+
+	[PreserveSig]
+	int GetFolder(ref Guid iid, out IntPtr result);
+
+	[PreserveSig]
+	int Item(int index, out IntPtr pidl);
+
+	[PreserveSig]
+	int ItemCount(uint flags, out int count);
+
+	[PreserveSig]
+	int Items(uint flags, ref Guid iid, out IntPtr result);
+
+	[PreserveSig]
+	int GetSelectionMarkedItem(out int item);
+
+	[PreserveSig]
+	int GetFocusedItem(out int item);
+
+	[PreserveSig]
+	int GetItemPosition(IntPtr pidl, out POINT point);
+
+	[PreserveSig]
+	int GetSpacing(IntPtr point);
+
+	[PreserveSig]
+	int GetDefaultSpacing(IntPtr point);
+
+	[PreserveSig]
+	int GetAutoArrange();
+
+	[PreserveSig]
+	int SelectItem(int item, uint flags);
+
+	[PreserveSig]
+	int SelectAndPositionItems(uint count, IntPtr pidls, IntPtr points, uint flags);
+}
+
+/// <summary>
 /// OLE 放置目标。把拖到图标上的内容转给该项目自己的放置目标：拖到文件夹里、拖给程序打开、拖进回收站删除，与资源管理器一致。
 /// </summary>
 [ComImport]

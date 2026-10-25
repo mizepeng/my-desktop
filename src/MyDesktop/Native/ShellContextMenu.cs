@@ -65,7 +65,7 @@ internal static class ShellContextMenu
 	/// <param name="handleVerb">拦截指定动词（如 rename），返回 true 表示已自行处理。</param>
 	public static void Show(IntPtr hwnd, ShellItemSet items, POINT point, IReadOnlyList<ExtraMenuItem> extraItems, Func<string, bool> handleVerb)
 	{
-		Show(hwnd, items.GetUIObject(hwnd, typeof(IContextMenu).GUID), CMF_CANRENAME, point, extraItems, handleVerb);
+		Show(hwnd, items.GetUIObject(hwnd, typeof(IContextMenu).GUID), CMF_CANRENAME, null, point, extraItems, handleVerb);
 	}
 
 	/// <summary>
@@ -77,7 +77,20 @@ internal static class ShellContextMenu
 	/// <param name="extraItems">自定义项，插在「属性」前面。</param>
 	public static void ShowFolderBackground(IntPtr hwnd, string folder, POINT point, IReadOnlyList<ExtraMenuItem> extraItems)
 	{
-		Show(hwnd, GetFolderBackgroundMenu(hwnd, folder), CMF_NORMAL, point, extraItems, _ => false);
+		var menuPtr = GetFolderBackgroundMenu(hwnd, folder);
+		// 资源管理器的背景菜单以文件夹视图为站点，「授予访问权限」、PowerToys 的「新建+」等扩展从站点取当前文件夹，
+		// 没有站点时子菜单是空的、展不开（实测）。菜单用完前撤掉站点，免得扩展一直引用着它
+		var withSite = (IObjectWithSite)Marshal.GetObjectForIUnknown(menuPtr);
+		try
+		{
+			Marshal.ThrowExceptionForHR(withSite.SetSite(new FolderViewSite(folder)));
+			Show(hwnd, menuPtr, CMF_NORMAL, folder, point, extraItems, _ => false);
+		}
+		finally
+		{
+			withSite.SetSite(null);
+			Marshal.ReleaseComObject(withSite);
+		}
 	}
 
 	/// <summary>
@@ -121,7 +134,8 @@ internal static class ShellContextMenu
 
 	/// <param name="menuPtr">系统菜单的 IContextMenu 指针，用完后由本方法释放。</param>
 	/// <param name="baseFlags">QueryContextMenu 的标志，按住 Shift 时再加上扩展命令。</param>
-	static void Show(IntPtr hwnd, IntPtr menuPtr, uint baseFlags, POINT point, IReadOnlyList<ExtraMenuItem> extraItems, Func<string, bool> handleVerb)
+	/// <param name="directory">执行命令时传给 Shell 的工作目录，见 <see cref="Invoke"/>。</param>
+	static void Show(IntPtr hwnd, IntPtr menuPtr, uint baseFlags, string? directory, POINT point, IReadOnlyList<ExtraMenuItem> extraItems, Func<string, bool> handleVerb)
 	{
 		var contextMenu = (IContextMenu)Marshal.GetObjectForIUnknown(menuPtr);
 		var menu = CreatePopupMenu();
@@ -181,7 +195,7 @@ internal static class ShellContextMenu
 				uint offset = (uint)(command - FirstShellId);
 				if (!handleVerb(GetVerb(contextMenu, offset)))
 				{
-					Invoke(contextMenu, hwnd, offset, point);
+					Invoke(contextMenu, hwnd, offset, point, directory);
 				}
 			}
 		}
@@ -341,9 +355,15 @@ internal static class ShellContextMenu
 		}
 	}
 
-	static void Invoke(IContextMenu contextMenu, IntPtr hwnd, uint offset, POINT point)
+	/// <param name="directory">
+	/// 工作目录：文件夹背景菜单必须传这个文件夹，注册表里用 %V 取当前文件夹的命令（如「通过 Code 打开」）靠它，
+	/// 不传时执行失败（0x80070483，实测）；文件的菜单不需要。
+	/// </param>
+	static void Invoke(IContextMenu contextMenu, IntPtr hwnd, uint offset, POINT point, string? directory = null)
 	{
 		var modifiers = Keyboard.Modifiers;
+		var directoryA = directory == null ? IntPtr.Zero : Marshal.StringToHGlobalAnsi(directory);
+		var directoryW = directory == null ? IntPtr.Zero : Marshal.StringToHGlobalUni(directory);
 		var info = new CMINVOKECOMMANDINFOEX
 		{
 			cbSize = Marshal.SizeOf<CMINVOKECOMMANDINFOEX>(),
@@ -353,15 +373,164 @@ internal static class ShellContextMenu
 			hwnd = hwnd,
 			lpVerb = (IntPtr)offset,
 			lpVerbW = (IntPtr)offset,
+			lpDirectory = directoryA,
+			lpDirectoryW = directoryW,
 			nShow = SW_SHOWNORMAL,
 			ptInvoke = point,
 		};
-		int hr = contextMenu.InvokeCommand(ref info);
-		if (hr < 0)
+		try
 		{
-			Log.Warn($"执行菜单命令失败：0x{hr:X8}");
+			int hr = contextMenu.InvokeCommand(ref info);
+			if (hr < 0)
+			{
+				Log.Warn($"执行菜单命令失败：0x{hr:X8}");
+			}
+		}
+		finally
+		{
+			Marshal.FreeHGlobal(directoryA);
+			Marshal.FreeHGlobal(directoryW);
 		}
 	}
+}
+
+/// <summary>
+/// 文件夹背景菜单的站点，代替资源管理器的文件夹视图告诉扩展当前是哪个文件夹。
+/// 只实现扩展实际会调用的几个方法（实测「授予访问权限」用 Items 取选中项），其余返回 E_NOTIMPL。
+/// </summary>
+[ComVisible(true)]
+[ClassInterface(ClassInterfaceType.None)]
+internal sealed class FolderViewSite(string folder) : IOleServiceProvider, IFolderView
+{
+	const int S_OK = 0;
+	const int E_NOTIMPL = unchecked((int)0x80004001);
+	const int E_NOINTERFACE = unchecked((int)0x80004002);
+	const uint SVGIO_BACKGROUND = 0x0;
+	const uint SVGIO_SELECTION = 0x1;
+	const uint SVGIO_TYPE_MASK = 0xF;
+	static readonly Guid BHID_SFObject = new("3981E224-F559-11D3-8E3A-00C04F6837D5");
+
+	public int QueryService(ref Guid service, ref Guid iid, out IntPtr result)
+	{
+		// 扩展按 SID_SFolderView（与 IID_IFolderView 相同）取视图；浏览器（IShellBrowser）等其他服务不提供
+		if (iid == typeof(IFolderView).GUID)
+		{
+			result = Marshal.GetComInterfaceForObject(this, typeof(IFolderView));
+			return S_OK;
+		}
+		result = IntPtr.Zero;
+		return E_NOINTERFACE;
+	}
+
+	/// <summary>
+	/// 当前文件夹：IShellItem 一类直接创建，IShellFolder 一类从 IShellItem 绑定。
+	/// </summary>
+	public int GetFolder(ref Guid iid, out IntPtr result)
+	{
+		if (SHCreateItemFromParsingName(folder, IntPtr.Zero, ref iid, out result) == S_OK)
+		{
+			return S_OK;
+		}
+		var itemIid = typeof(IShellItem).GUID;
+		int hr = SHCreateItemFromParsingName(folder, IntPtr.Zero, ref itemIid, out var itemPtr);
+		if (hr != S_OK)
+		{
+			return hr;
+		}
+		var item = (IShellItem)Marshal.GetObjectForIUnknown(itemPtr);
+		try
+		{
+			var handler = BHID_SFObject;
+			item.BindToHandler(IntPtr.Zero, ref handler, ref iid, out result);
+			return S_OK;
+		}
+		catch (COMException ex)
+		{
+			result = IntPtr.Zero;
+			return ex.HResult;
+		}
+		finally
+		{
+			Marshal.ReleaseComObject(item);
+			Marshal.Release(itemPtr);
+		}
+	}
+
+	/// <summary>
+	/// 在空白处右键没有选中项，把当前文件夹本身当作操作对象：「授予访问权限」拿到空的选中项时会把子菜单清空（实测）。
+	/// </summary>
+	public int Items(uint flags, ref Guid iid, out IntPtr result)
+	{
+		result = IntPtr.Zero;
+		uint type = flags & SVGIO_TYPE_MASK;
+		if (type != SVGIO_SELECTION && type != SVGIO_BACKGROUND)
+		{
+			return E_NOTIMPL;
+		}
+		var itemIid = typeof(IShellItem).GUID;
+		int hr = SHCreateItemFromParsingName(folder, IntPtr.Zero, ref itemIid, out var itemPtr);
+		if (hr != S_OK)
+		{
+			return hr;
+		}
+		try
+		{
+			return SHCreateShellItemArrayFromShellItem(itemPtr, ref iid, out result);
+		}
+		finally
+		{
+			Marshal.Release(itemPtr);
+		}
+	}
+
+	public int ItemCount(uint flags, out int count)
+	{
+		uint type = flags & SVGIO_TYPE_MASK;
+		count = type == SVGIO_SELECTION || type == SVGIO_BACKGROUND ? 1 : 0;
+		return count == 1 ? S_OK : E_NOTIMPL;
+	}
+
+	public int GetCurrentViewMode(out uint mode)
+	{
+		mode = 0;
+		return E_NOTIMPL;
+	}
+
+	public int SetCurrentViewMode(uint mode) => E_NOTIMPL;
+
+	public int Item(int index, out IntPtr pidl)
+	{
+		pidl = IntPtr.Zero;
+		return E_NOTIMPL;
+	}
+
+	public int GetSelectionMarkedItem(out int item)
+	{
+		item = -1;
+		return E_NOTIMPL;
+	}
+
+	public int GetFocusedItem(out int item)
+	{
+		item = -1;
+		return E_NOTIMPL;
+	}
+
+	public int GetItemPosition(IntPtr pidl, out POINT point)
+	{
+		point = default;
+		return E_NOTIMPL;
+	}
+
+	public int GetSpacing(IntPtr point) => E_NOTIMPL;
+
+	public int GetDefaultSpacing(IntPtr point) => E_NOTIMPL;
+
+	public int GetAutoArrange() => E_NOTIMPL;
+
+	public int SelectItem(int item, uint flags) => E_NOTIMPL;
+
+	public int SelectAndPositionItems(uint count, IntPtr pidls, IntPtr points, uint flags) => E_NOTIMPL;
 }
 
 /// <summary>

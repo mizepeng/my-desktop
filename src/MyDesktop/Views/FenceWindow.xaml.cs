@@ -3040,7 +3040,7 @@ internal partial class FenceWindow : Window
 				}
 				else
 				{
-					ShowFenceMenu(point);
+					ShowBackgroundMenu(point);
 				}
 				e.Handled = true;
 				return;
@@ -3055,7 +3055,7 @@ internal partial class FenceWindow : Window
 		if (item == null)
 		{
 			ItemsList.UnselectAll();
-			ShowFenceMenu(point);
+			ShowBackgroundMenu(point);
 		}
 		else
 		{
@@ -3412,125 +3412,169 @@ internal partial class FenceWindow : Window
 
 	void ShowFenceMenu(POINT point)
 	{
-		bool folderExists = IsDesktopFence || Directory.Exists(CurrentFolder);
-		_menuOpen = true;
-		_buttonsTimer.Stop();
-		ShowTitleButtons(true);
+		BeginFenceMenu();
 		try
 		{
 			using var menu = new NativeMenu();
-			menu.Add("新建分区", () => _manager.CreateFence(near: this, editTitle: true));
-			menu.Add("新建文件夹映射分区…", () => _manager.CreatePortalFence(this));
-			menu.AddSeparator();
-			menu.Add("粘贴\tCtrl+V", PasteFromClipboard, enabled: folderExists && ItemOps.ClipboardHasFiles());
-			menu.Add("新建文件夹", NewFolder, enabled: folderExists);
-			menu.Add("刷新\tF5", RefreshByUser);
-			menu.AddSeparator();
-			menu.AddSubMenu("排序方式", sub =>
-			{
-				foreach (var field in Enum.GetValues<SortField>())
-				{
-					sub.Add(field.DisplayName(), () => SetSort(field, Model.SortDescending), isChecked: Model.SortBy == field, radio: true);
-				}
-				sub.AddSeparator();
-				bool custom = Model.SortBy == SortField.Custom;
-				sub.Add("递增", () => SetSort(Model.SortBy, false), isChecked: !Model.SortDescending, enabled: !custom, radio: true);
-				sub.Add("递减", () => SetSort(Model.SortBy, true), isChecked: Model.SortDescending, enabled: !custom, radio: true);
-			});
-			menu.AddSubMenu("查看", sub =>
-			{
-				foreach (var size in Enum.GetValues<IconSizeMode>())
-				{
-					sub.Add(size.DisplayName(), () => SetView(FenceView.Icons, size), isChecked: Model.View == FenceView.Icons && EffectiveIconSize == size, radio: true);
-				}
-				sub.Add("列表", () => SetView(FenceView.List, Model.IconSize), isChecked: Model.View == FenceView.List, radio: true);
-				sub.Add("详细信息", () => SetView(FenceView.Details, Model.IconSize), isChecked: Model.View == FenceView.Details, radio: true);
-				sub.AddSeparator();
-				// 上面选了图标大小就是单独设置，勾上这一项清掉，改回跟随设置里的默认图标大小
-				sub.Add("图标大小跟随默认外观", () => SetView(Model.View, null), isChecked: Model.IconSize == null);
-			});
-			menu.AddSubMenu("背景颜色", sub =>
-			{
-				foreach (var (name, hex) in Appearance.ColorPresets)
-				{
-					bool current = string.Equals(Model.Color, hex, StringComparison.OrdinalIgnoreCase);
-					sub.Add(name, () => SetColor(hex), isChecked: current, radio: true, bitmap: sub.ColorSwatch(Appearance.ParseColor(hex, Colors.Black)));
-				}
-				sub.AddSeparator();
-				sub.Add("自定义颜色…", PickCustomColor);
-				sub.Add("跟随默认外观", () => SetColor(null), isChecked: Model.Color == null, radio: true);
-			});
-			menu.AddSubMenu("不透明度", sub =>
-			{
-				foreach (var percent in Appearance.OpacityPresets)
-				{
-					bool current = Model.Opacity is double value && Math.Abs(value * 100 - percent) < 0.5;
-					sub.Add($"{percent}%", () => SetOpacity(percent / 100.0), isChecked: current, radio: true);
-				}
-				sub.AddSeparator();
-				sub.Add("跟随默认外观", () => SetOpacity(null), isChecked: Model.Opacity == null, radio: true);
-			});
-			menu.AddSubMenu("背景效果", sub =>
-			{
-				foreach (var effect in Enum.GetValues<BackgroundEffect>())
-				{
-					sub.Add(effect.DisplayName(), () => SetBackground(effect), isChecked: Model.Background == effect, radio: true);
-				}
-				sub.AddSeparator();
-				sub.Add("跟随默认外观", () => SetBackground(null), isChecked: Model.Background == null, radio: true);
-			});
-			menu.AddSubMenu("边框", sub =>
-			{
-				sub.Add("显示", () => SetBorder(true), isChecked: Model.Border == true, radio: true);
-				sub.Add("不显示", () => SetBorder(false), isChecked: Model.Border == false, radio: true);
-				sub.AddSeparator();
-				sub.Add("跟随默认外观", () => SetBorder(null), isChecked: Model.Border == null, radio: true);
-			});
-			menu.AddSeparator();
-			menu.Add("重命名分区", BeginTitleEdit);
-			var tabs = _manager.TabsOf(this);
-			if (tabs.Count > 1)
-			{
-				int index = tabs.IndexOf(this);
-				bool vertical = _titleEdge is RollEdge.Left or RollEdge.Right;
-				menu.AddSubMenu("标签页", sub =>
-				{
-					sub.Add(vertical ? "上移" : "左移", () => _manager.MoveTab(this, index - 1), enabled: !Model.Locked && index > 0);
-					sub.Add(vertical ? "下移" : "右移", () => _manager.MoveTab(this, index + 1), enabled: !Model.Locked && index < tabs.Count - 1);
-					sub.AddSeparator();
-					sub.Add("拆分为独立分区", () => _manager.DetachTab(this, null), enabled: !Model.Locked);
-				});
-			}
-			menu.Add(Model.RolledUp ? "展开分区" : "卷起分区", ToggleRollUp);
-			menu.AddSubMenu("卷起方向", sub =>
-			{
-				sub.Add("自动（按贴着的屏幕边）", () => SetRollDirection(null), isChecked: Model.RollDirection == null, radio: true);
-				sub.AddSeparator();
-				foreach (var edge in Enum.GetValues<RollEdge>())
-				{
-					sub.Add(edge.DisplayName(), () => SetRollDirection(edge), isChecked: Model.RollDirection == edge, radio: true);
-				}
-			});
-			menu.Add("锁定分区", ToggleLock, isChecked: Model.Locked);
-			if (Model.IsPortal)
-			{
-				menu.Add("在资源管理器中打开", OpenFolderInExplorer, enabled: folderExists);
-				menu.Add("复制文件夹路径", CopyFolderPath);
-				menu.Add("更换映射文件夹…", () => _manager.ChangePortalFolder(this));
-			}
-			menu.AddSeparator();
-			menu.Add("MyDesktop 设置…", _manager.ShowSettings);
-			menu.Add("删除分区…", () => _manager.DeleteFence(this));
+			menu.AddItems(FenceMenuItems(false));
 			menu.Show(_hwnd, point);
 		}
 		finally
 		{
-			_menuOpen = false;
-			if (!IsMouseOver)
-			{
-				RestartTimer(_buttonsTimer);
-			}
+			EndFenceMenu();
 		}
+	}
+
+	/// <summary>
+	/// 在分区空白处右键：映射分区和资源管理器一样弹出当前显示的文件夹（进了子文件夹就是子文件夹）的背景菜单，
+	/// 分区菜单的各项插在「属性」前面；桌面分区、映射的文件夹不存在时弹出分区菜单。
+	/// </summary>
+	void ShowBackgroundMenu(POINT point)
+	{
+		var folder = CurrentFolder;
+		if (IsDesktopFence || !Directory.Exists(folder))
+		{
+			ShowFenceMenu(point);
+			return;
+		}
+		BeginFenceMenu();
+		try
+		{
+			ShellContextMenu.ShowFolderBackground(_hwnd, folder, point, FenceMenuItems(true));
+		}
+		catch (Exception ex)
+		{
+			Log.Warn($"显示文件夹右键菜单失败：{folder}", ex);
+		}
+		finally
+		{
+			EndFenceMenu();
+			ScheduleRefresh();
+		}
+	}
+
+	void BeginFenceMenu()
+	{
+		_menuOpen = true;
+		_buttonsTimer.Stop();
+		ShowTitleButtons(true);
+	}
+
+	void EndFenceMenu()
+	{
+		_menuOpen = false;
+		if (!IsMouseOver)
+		{
+			RestartTimer(_buttonsTimer);
+		}
+	}
+
+	/// <summary>
+	/// 分区菜单的各项。
+	/// </summary>
+	/// <param name="inShellMenu">要插进系统的文件夹背景菜单：系统菜单里已有「粘贴」和「新建」→「文件夹」，不再重复。</param>
+	List<ExtraMenuItem> FenceMenuItems(bool inShellMenu)
+	{
+		bool folderExists = IsDesktopFence || Directory.Exists(CurrentFolder);
+		var separator = ExtraMenuItem.Separator;
+		var items = new List<ExtraMenuItem>
+		{
+			new("新建分区", () => _manager.CreateFence(near: this, editTitle: true)),
+			new("新建文件夹映射分区…", () => _manager.CreatePortalFence(this)),
+			separator,
+		};
+		if (!inShellMenu)
+		{
+			items.Add(new("粘贴\tCtrl+V", PasteFromClipboard, Enabled: folderExists && ItemOps.ClipboardHasFiles()));
+			items.Add(new("新建文件夹", NewFolder, Enabled: folderExists));
+		}
+		items.Add(new("刷新\tF5", RefreshByUser));
+		items.Add(separator);
+
+		bool custom = Model.SortBy == SortField.Custom;
+		var sort = Enum.GetValues<SortField>()
+				.Select(field => new ExtraMenuItem(field.DisplayName(), () => SetSort(field, Model.SortDescending), Checked: Model.SortBy == field, Radio: true))
+				.ToList();
+		sort.Add(separator);
+		sort.Add(new("递增", () => SetSort(Model.SortBy, false), Checked: !Model.SortDescending, Radio: true, Enabled: !custom));
+		sort.Add(new("递减", () => SetSort(Model.SortBy, true), Checked: Model.SortDescending, Radio: true, Enabled: !custom));
+		items.Add(new("排序方式", Children: sort));
+
+		var view = Enum.GetValues<IconSizeMode>()
+				.Select(size => new ExtraMenuItem(size.DisplayName(), () => SetView(FenceView.Icons, size), Checked: Model.View == FenceView.Icons && EffectiveIconSize == size, Radio: true))
+				.ToList();
+		view.Add(new("列表", () => SetView(FenceView.List, Model.IconSize), Checked: Model.View == FenceView.List, Radio: true));
+		view.Add(new("详细信息", () => SetView(FenceView.Details, Model.IconSize), Checked: Model.View == FenceView.Details, Radio: true));
+		view.Add(separator);
+		// 上面选了图标大小就是单独设置，勾上这一项清掉，改回跟随设置里的默认图标大小
+		view.Add(new("图标大小跟随默认外观", () => SetView(Model.View, null), Checked: Model.IconSize == null));
+		items.Add(new("查看", Children: view));
+
+		var colors = Appearance.ColorPresets
+				.Select(preset => new ExtraMenuItem(preset.Name, () => SetColor(preset.Hex), Swatch: Appearance.ParseColor(preset.Hex, Colors.Black),
+						Checked: string.Equals(Model.Color, preset.Hex, StringComparison.OrdinalIgnoreCase), Radio: true))
+				.ToList();
+		colors.Add(separator);
+		colors.Add(new("自定义颜色…", PickCustomColor));
+		colors.Add(new("跟随默认外观", () => SetColor(null), Checked: Model.Color == null, Radio: true));
+		items.Add(new("背景颜色", Children: colors));
+
+		var opacities = Appearance.OpacityPresets
+				.Select(percent => new ExtraMenuItem($"{percent}%", () => SetOpacity(percent / 100.0),
+						Checked: Model.Opacity is double value && Math.Abs(value * 100 - percent) < 0.5, Radio: true))
+				.ToList();
+		opacities.Add(separator);
+		opacities.Add(new("跟随默认外观", () => SetOpacity(null), Checked: Model.Opacity == null, Radio: true));
+		items.Add(new("不透明度", Children: opacities));
+
+		var effects = Enum.GetValues<BackgroundEffect>()
+				.Select(effect => new ExtraMenuItem(effect.DisplayName(), () => SetBackground(effect), Checked: Model.Background == effect, Radio: true))
+				.ToList();
+		effects.Add(separator);
+		effects.Add(new("跟随默认外观", () => SetBackground(null), Checked: Model.Background == null, Radio: true));
+		items.Add(new("背景效果", Children: effects));
+
+		items.Add(new("边框", Children:
+		[
+			new("显示", () => SetBorder(true), Checked: Model.Border == true, Radio: true),
+			new("不显示", () => SetBorder(false), Checked: Model.Border == false, Radio: true),
+			separator,
+			new("跟随默认外观", () => SetBorder(null), Checked: Model.Border == null, Radio: true),
+		]));
+		items.Add(separator);
+		items.Add(new("重命名分区", BeginTitleEdit));
+		var tabs = _manager.TabsOf(this);
+		if (tabs.Count > 1)
+		{
+			int index = tabs.IndexOf(this);
+			bool vertical = _titleEdge is RollEdge.Left or RollEdge.Right;
+			items.Add(new("标签页", Children:
+			[
+				new(vertical ? "上移" : "左移", () => _manager.MoveTab(this, index - 1), Enabled: !Model.Locked && index > 0),
+				new(vertical ? "下移" : "右移", () => _manager.MoveTab(this, index + 1), Enabled: !Model.Locked && index < tabs.Count - 1),
+				separator,
+				new("拆分为独立分区", () => _manager.DetachTab(this, null), Enabled: !Model.Locked),
+			]));
+		}
+		items.Add(new(Model.RolledUp ? "展开分区" : "卷起分区", ToggleRollUp));
+		var edges = new List<ExtraMenuItem>
+		{
+			new("自动（按贴着的屏幕边）", () => SetRollDirection(null), Checked: Model.RollDirection == null, Radio: true),
+			separator,
+		};
+		edges.AddRange(Enum.GetValues<RollEdge>().Select(edge => new ExtraMenuItem(edge.DisplayName(), () => SetRollDirection(edge), Checked: Model.RollDirection == edge, Radio: true)));
+		items.Add(new("卷起方向", Children: edges));
+		items.Add(new("锁定分区", ToggleLock, Checked: Model.Locked));
+		if (Model.IsPortal)
+		{
+			items.Add(new("在资源管理器中打开", OpenFolderInExplorer, Enabled: folderExists));
+			items.Add(new("复制文件夹路径", CopyFolderPath));
+			items.Add(new("更换映射文件夹…", () => _manager.ChangePortalFolder(this)));
+		}
+		items.Add(separator);
+		items.Add(new("MyDesktop 设置…", _manager.ShowSettings));
+		items.Add(new("删除分区…", () => _manager.DeleteFence(this)));
+		return items;
 	}
 
 	/// <param name="items">菜单作用的图标，可能包含其他分区和桌面上一起选中的。</param>

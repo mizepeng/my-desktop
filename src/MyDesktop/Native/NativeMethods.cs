@@ -547,6 +547,9 @@ internal static class NativeMethods
 	public static extern int SHCreateItemFromParsingName(string path, IntPtr bindContext, ref Guid riid, out IntPtr item);
 
 	[DllImport("shell32.dll")]
+	public static extern int SHCreateShellItemArrayFromShellItem(IntPtr item, ref Guid riid, out IntPtr array);
+
+	[DllImport("shell32.dll")]
 	public static extern int SHDoDragDrop(IntPtr hwnd, IntPtr dataObject, IntPtr dropSource, uint okEffects, out uint effect);
 
 	[DllImport("shell32.dll", CharSet = CharSet.Unicode)]
