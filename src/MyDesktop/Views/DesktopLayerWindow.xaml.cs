@@ -916,6 +916,10 @@ internal partial class DesktopLayerWindow : Window
 		else if (key == Key.F5)
 		{
 			_takeover.Items.Refresh();
+			// 手动刷新时连图标一起重新加载：缓存只按文件修改时间失效，角标状态变了而没收到 Shell 变更通知时靠这个更新
+			var paths = _items.Select(i => i.FullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+			ShellIconLoader.Invalidate(paths.Contains);
+			ReloadIcons(paths.Contains);
 		}
 		else if (key == Key.Escape)
 		{

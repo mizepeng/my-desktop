@@ -61,11 +61,68 @@ internal static class ShellContextMenu
 	/// <param name="hwnd">菜单宿主窗口，需在其窗口过程中调用 <see cref="TryHandleMenuMessage"/>。</param>
 	/// <param name="items">要弹出菜单的一组项目。</param>
 	/// <param name="point">屏幕坐标（物理像素）。</param>
-	/// <param name="extraItems">追加在菜单末尾的自定义项。</param>
+	/// <param name="extraItems">自定义项，插在「属性」前面（「属性」留在最后，和资源管理器一样）；没有「属性」时加在末尾。</param>
 	/// <param name="handleVerb">拦截指定动词（如 rename），返回 true 表示已自行处理。</param>
 	public static void Show(IntPtr hwnd, ShellItemSet items, POINT point, IReadOnlyList<ExtraMenuItem> extraItems, Func<string, bool> handleVerb)
 	{
-		var menuPtr = items.GetUIObject(hwnd, typeof(IContextMenu).GUID);
+		Show(hwnd, items.GetUIObject(hwnd, typeof(IContextMenu).GUID), CMF_CANRENAME, point, extraItems, handleVerb);
+	}
+
+	/// <summary>
+	/// 显示资源管理器在文件夹空白处右键时的系统菜单（新建、粘贴、撤销、属性以及第三方扩展项），命令作用于这个文件夹。
+	/// </summary>
+	/// <param name="hwnd">菜单宿主窗口，需在其窗口过程中调用 <see cref="TryHandleMenuMessage"/>。</param>
+	/// <param name="folder">文件夹路径。</param>
+	/// <param name="point">屏幕坐标（物理像素）。</param>
+	/// <param name="extraItems">自定义项，插在「属性」前面。</param>
+	public static void ShowFolderBackground(IntPtr hwnd, string folder, POINT point, IReadOnlyList<ExtraMenuItem> extraItems)
+	{
+		Show(hwnd, GetFolderBackgroundMenu(hwnd, folder), CMF_NORMAL, point, extraItems, _ => false);
+	}
+
+	/// <summary>
+	/// 取文件夹背景的 IContextMenu：和资源管理器一样，由文件夹自己的 IShellFolder.CreateViewObject 创建。
+	/// </summary>
+	static IntPtr GetFolderBackgroundMenu(IntPtr hwnd, string folder)
+	{
+		Marshal.ThrowExceptionForHR(SHParseDisplayName(folder, IntPtr.Zero, out var pidl, 0, out _));
+		try
+		{
+			Marshal.ThrowExceptionForHR(SHGetDesktopFolder(out var desktopPtr));
+			var desktop = (IShellFolder)Marshal.GetObjectForIUnknown(desktopPtr);
+			try
+			{
+				var folderIid = typeof(IShellFolder).GUID;
+				Marshal.ThrowExceptionForHR(desktop.BindToObject(pidl, IntPtr.Zero, ref folderIid, out var folderPtr));
+				var shellFolder = (IShellFolder)Marshal.GetObjectForIUnknown(folderPtr);
+				try
+				{
+					var menuIid = typeof(IContextMenu).GUID;
+					Marshal.ThrowExceptionForHR(shellFolder.CreateViewObject(hwnd, ref menuIid, out var menuPtr));
+					return menuPtr;
+				}
+				finally
+				{
+					Marshal.ReleaseComObject(shellFolder);
+					Marshal.Release(folderPtr);
+				}
+			}
+			finally
+			{
+				Marshal.ReleaseComObject(desktop);
+				Marshal.Release(desktopPtr);
+			}
+		}
+		finally
+		{
+			ILFree(pidl);
+		}
+	}
+
+	/// <param name="menuPtr">系统菜单的 IContextMenu 指针，用完后由本方法释放。</param>
+	/// <param name="baseFlags">QueryContextMenu 的标志，按住 Shift 时再加上扩展命令。</param>
+	static void Show(IntPtr hwnd, IntPtr menuPtr, uint baseFlags, POINT point, IReadOnlyList<ExtraMenuItem> extraItems, Func<string, bool> handleVerb)
+	{
 		var contextMenu = (IContextMenu)Marshal.GetObjectForIUnknown(menuPtr);
 		var menu = CreatePopupMenu();
 		var actions = new List<Action?>();
@@ -73,12 +130,28 @@ internal static class ShellContextMenu
 		try
 		{
 			bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
-			uint flags = CMF_NORMAL | CMF_CANRENAME | (shift ? CMF_EXTENDEDVERBS : 0);
+			uint flags = baseFlags | (shift ? CMF_EXTENDEDVERBS : 0);
 			Marshal.ThrowExceptionForHR(contextMenu.QueryContextMenu(menu, 0, FirstShellId, LastShellId, flags));
 			if (extraItems.Count > 0)
 			{
-				InsertMenu(menu, uint.MaxValue, MF_BYPOSITION | MF_SEPARATOR, UIntPtr.Zero, null);
-				AddExtras(menu, extraItems, actions, bitmaps);
+				int properties = FindProperties(contextMenu, menu);
+				if (properties < 0)
+				{
+					InsertMenu(menu, uint.MaxValue, MF_BYPOSITION | MF_SEPARATOR, UIntPtr.Zero, null);
+					int position = GetMenuItemCount(menu);
+					AddExtras(menu, extraItems, actions, bitmaps, ref position);
+				}
+				else
+				{
+					// 「属性」上面一般已经有一条分隔线，自定义项插在分隔线和「属性」之间，后面再补一条，「属性」仍在最后
+					int position = properties;
+					if (position > 0 && (GetMenuState(menu, (uint)position - 1, MF_BYPOSITION) & MF_SEPARATOR) == 0)
+					{
+						InsertMenu(menu, (uint)position++, MF_BYPOSITION | MF_SEPARATOR, UIntPtr.Zero, null);
+					}
+					AddExtras(menu, extraItems, actions, bitmaps, ref position);
+					InsertMenu(menu, (uint)position, MF_BYPOSITION | MF_SEPARATOR, UIntPtr.Zero, null);
+				}
 			}
 
 			int command;
@@ -123,15 +196,31 @@ internal static class ShellContextMenu
 	}
 
 	/// <summary>
-	/// 把自定义项依次加到 menu 末尾，子菜单递归加；菜单项的编号从 FirstExtraId 起按 actions 里的位置排。
+	/// 系统菜单里「属性」（动词 properties）的位置，没有时返回 -1。从下往上找：它一般就是最后一项，不用挨个问其他扩展的动词。
 	/// </summary>
-	static void AddExtras(IntPtr menu, IReadOnlyList<ExtraMenuItem> items, List<Action?> actions, List<IntPtr> bitmaps)
+	static int FindProperties(IContextMenu contextMenu, IntPtr menu)
+	{
+		for (int i = GetMenuItemCount(menu) - 1; i >= 0; i--)
+		{
+			uint id = GetMenuItemID(menu, i);
+			if (id >= FirstShellId && id <= LastShellId && string.Equals(GetVerb(contextMenu, id - FirstShellId), "properties", StringComparison.OrdinalIgnoreCase))
+			{
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	/// <summary>
+	/// 把自定义项从 position 起依次插入 menu，子菜单递归加；菜单项的编号从 FirstExtraId 起按 actions 里的位置排。
+	/// </summary>
+	static void AddExtras(IntPtr menu, IReadOnlyList<ExtraMenuItem> items, List<Action?> actions, List<IntPtr> bitmaps, ref int position)
 	{
 		foreach (var item in items)
 		{
 			if (ReferenceEquals(item, ExtraMenuItem.Separator))
 			{
-				InsertMenu(menu, uint.MaxValue, MF_BYPOSITION | MF_SEPARATOR, UIntPtr.Zero, null);
+				InsertMenu(menu, (uint)position++, MF_BYPOSITION | MF_SEPARATOR, UIntPtr.Zero, null);
 				continue;
 			}
 			var bitmap = item.Swatch is { } color ? NativeMenu.CreateSwatch(color) : IntPtr.Zero;
@@ -151,7 +240,8 @@ internal static class ShellContextMenu
 			if (item.Children != null)
 			{
 				var sub = CreatePopupMenu();
-				AddExtras(sub, item.Children, actions, bitmaps);
+				int subPosition = 0;
+				AddExtras(sub, item.Children, actions, bitmaps, ref subPosition);
 				info.fMask |= MIIM_SUBMENU;
 				info.hSubMenu = sub;
 			}
@@ -161,7 +251,7 @@ internal static class ShellContextMenu
 				info.fMask |= MIIM_ID;
 				info.wID = (uint)(FirstExtraId + actions.Count - 1);
 			}
-			InsertMenuItem(menu, (uint)GetMenuItemCount(menu), true, ref info);
+			InsertMenuItem(menu, (uint)position++, true, ref info);
 		}
 	}
 

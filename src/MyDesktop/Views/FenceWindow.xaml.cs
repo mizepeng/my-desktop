@@ -2499,6 +2499,18 @@ internal partial class FenceWindow : Window
 		_refreshTimer.Start();
 	}
 
+	/// <summary>
+	/// 手动刷新（菜单「刷新」、F5）：重新读取项目，并作废这些图标的缓存、重新加载。缓存只按文件修改时间失效，
+	/// 角标状态变了（如 git 提交）而没收到 Shell 变更通知时，手动刷新一下就能更新。
+	/// </summary>
+	void RefreshByUser()
+	{
+		RefreshItems();
+		var paths = _items.Select(i => i.FullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+		ShellIconLoader.Invalidate(paths.Contains);
+		ReloadIcons(paths.Contains);
+	}
+
 	public void RefreshItems()
 	{
 		if (_allowClose)
@@ -3412,7 +3424,7 @@ internal partial class FenceWindow : Window
 			menu.AddSeparator();
 			menu.Add("粘贴\tCtrl+V", PasteFromClipboard, enabled: folderExists && ItemOps.ClipboardHasFiles());
 			menu.Add("新建文件夹", NewFolder, enabled: folderExists);
-			menu.Add("刷新\tF5", RefreshItems);
+			menu.Add("刷新\tF5", RefreshByUser);
 			menu.AddSeparator();
 			menu.AddSubMenu("排序方式", sub =>
 			{
@@ -3950,7 +3962,7 @@ internal partial class FenceWindow : Window
 				}
 				break;
 			case Key.F5:
-				RefreshItems();
+				RefreshByUser();
 				break;
 			case Key.Escape:
 				// 和桌面上一样，按 Esc 取消选中

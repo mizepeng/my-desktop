@@ -462,6 +462,13 @@ internal static class NativeMethods
 	[DllImport("user32.dll")]
 	public static extern int GetMenuItemCount(IntPtr menu);
 
+	// 分隔线、子菜单都返回 0xFFFFFFFF；判断分隔线用 GetMenuState
+	[DllImport("user32.dll")]
+	public static extern uint GetMenuItemID(IntPtr menu, int position);
+
+	[DllImport("user32.dll")]
+	public static extern uint GetMenuState(IntPtr menu, uint item, uint flags);
+
 	[DllImport("user32.dll")]
 	public static extern uint GetMenuDefaultItem(IntPtr menu, uint byPosition, uint flags);
 
