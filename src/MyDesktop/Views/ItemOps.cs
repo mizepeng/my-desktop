@@ -440,13 +440,27 @@ internal static class ItemOps
 	{
 		var list = items.ToList();
 		var paths = list.Where(i => !i.IsVirtual).Select(i => i.FullPath).ToList();
-		if (paths.Count > 0)
-		{
-			ShellFileOps.Delete(hwnd, paths, !permanent);
-		}
 		// 此电脑、控制面板这类系统图标交给它们自己的「删除」命令，效果是从桌面移除图标，与在资源管理器里删除一致。
 		// 用户文件夹等解析名是真实路径的系统图标不经键盘删除（可以用右键菜单），以免误伤整个文件夹
 		var shellItems = list.Where(i => i.IsVirtual && i.CanDelete && i.FullPath.StartsWith("::", StringComparison.Ordinal)).ToList();
+		bool mixed = paths.Count > 0 && shellItems.Count > 0;
+		if (mixed)
+		{
+			// 系统的文件删除确认框只统计真实文件；混选时先确认完整范围，再分别执行两类操作
+			var fileAction = permanent ? "被永久删除，无法从回收站恢复" : "被移入回收站";
+			var message = $"确定删除这 {paths.Count + shellItems.Count} 项吗？\n\n"
+					+ $"• {paths.Count} 个文件或文件夹将{fileAction}。\n"
+					+ $"• {shellItems.Count} 个系统图标仅从桌面移除，系统功能不受影响。";
+			if (MessageDialog.Show("删除多个项目", message, "删除", "取消") != 0)
+			{
+				return;
+			}
+		}
+		if (paths.Count > 0 && !ShellFileOps.Delete(hwnd, paths, !permanent, confirmed: mixed))
+		{
+			// 用户取消或文件删除失败后，不能继续移除一起选中的系统图标
+			return;
+		}
 		if (shellItems.Count == 0)
 		{
 			return;

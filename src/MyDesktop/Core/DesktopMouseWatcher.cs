@@ -141,9 +141,8 @@ internal sealed class DesktopMouseWatcher : IDisposable
 	public event Action<POINT>? RightBandFinished;
 
 	/// <summary>
-	/// 要由本程序来激活桌面，在界面线程上触发：左键是本程序的窗口在前台、桌面又在最上层时在桌面空白处按下（这次按下已被扣下），
-	/// 让系统随点击激活的话，桌面会被提到分区之上闪一下，见 DesktopHost.Lift；右键是桌面不在前台时在桌面空白处按下（不扣），
-	/// 见 DesktopNeedsActivationForMenu。
+	/// 要由本程序来激活桌面，在界面线程上触发：在桌面空白处按下左键或右键、桌面不在前台时主动激活（菜单开着时除外）。
+	/// 左键按下时若本程序在前台、桌面又在最上层，还要扣下这次按下，避免系统激活桌面时把它提到分区之上闪一下，见 DesktopHost.Lift。
 	/// </summary>
 	public event Action? DesktopActivationNeeded;
 
@@ -448,6 +447,10 @@ internal sealed class DesktopMouseWatcher : IDisposable
 						_leftSwallowed = true;
 						_uiDispatcher.BeginInvoke(() => DesktopActivationNeeded?.Invoke());
 					}
+					else if (_takeoverEnabled && _leftDown && DesktopNeedsActivation())
+					{
+						_uiDispatcher.BeginInvoke(() => DesktopActivationNeeded?.Invoke());
+					}
 					else if (_takeoverEnabled && _leftDown && IsOwnMenuOverRaisableDesktop())
 					{
 						_uiDispatcher.BeginInvoke(() => FencesLiftNeeded?.Invoke());
@@ -482,8 +485,8 @@ internal sealed class DesktopMouseWatcher : IDisposable
 					_rightDown = true;
 					_rightStart = info.pt;
 					_uiDispatcher.BeginInvoke(() => BlankPressed?.Invoke(false));
-					// 桌面不在前台时由本程序赶在菜单弹出前激活桌面（见 DesktopNeedsActivationForMenu）
-					if (DesktopNeedsActivationForMenu())
+					// 桌面不在前台时由本程序赶在菜单弹出前激活桌面（见 DesktopNeedsActivation）
+					if (DesktopNeedsActivation())
 					{
 						_uiDispatcher.BeginInvoke(() => DesktopActivationNeeded?.Invoke());
 					}
@@ -652,11 +655,11 @@ internal sealed class DesktopMouseWatcher : IDisposable
 	}
 
 	/// <summary>
-	/// 在桌面空白处按下右键时，桌面不在前台就要由本程序先激活它：这次点击不会让桌面成为前台（实测前台变成「无」），
-	/// 资源管理器在没有前台的情况下弹出菜单，等鼠标移进菜单时桌面才被激活，这次激活把刚弹出的菜单关掉了；第二次桌面已在前台，才正常。
+	/// 在桌面空白处按下鼠标时，桌面不在前台就要由本程序先激活它：点击、连续框选可能让前台变成「无」（实测），
+	/// 键盘钩子因此不再接管 Delete 等快捷键；右键菜单也会在鼠标移入、桌面才被激活时关闭。
 	/// 本程序自己的菜单开着时不管（这次点击是去关掉它的）。只读窗口属性、不发消息，可以在钩子回调里调用。
 	/// </summary>
-	static bool DesktopNeedsActivationForMenu()
+	static bool DesktopNeedsActivation()
 	{
 		var foreground = GetForegroundWindow();
 		if (DesktopHost.IsDesktopSurface(foreground))

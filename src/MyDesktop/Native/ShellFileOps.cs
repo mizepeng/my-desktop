@@ -38,9 +38,17 @@ internal static class ShellFileOps
 		return Run(owner, FO_COPY, sources, targetFolder, TransferFlags(false, false));
 	}
 
-	public static bool Delete(IntPtr owner, IEnumerable<string> paths, bool toRecycleBin)
+	/// <param name="confirmed">
+	/// 调用方已确认完整删除范围时跳过常规确认；删除到回收站时仍保留无法回收的永久删除警告。
+	/// </param>
+	public static bool Delete(IntPtr owner, IEnumerable<string> paths, bool toRecycleBin, bool confirmed = false)
 	{
-		return Run(owner, FO_DELETE, paths, null, toRecycleBin ? (ushort)(FOF_ALLOWUNDO | FOF_WANTNUKEWARNING) : (ushort)0);
+		ushort flags = toRecycleBin ? (ushort)(FOF_ALLOWUNDO | FOF_WANTNUKEWARNING) : (ushort)0;
+		if (confirmed)
+		{
+			flags |= FOF_NOCONFIRMATION;
+		}
+		return Run(owner, FO_DELETE, paths, null, flags);
 	}
 
 	public static bool Rename(IntPtr owner, string from, string to)

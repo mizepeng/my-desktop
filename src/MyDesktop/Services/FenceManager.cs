@@ -1719,7 +1719,10 @@ internal sealed class FenceManager
 		{
 			DesktopHost.Lift(_windows.Select(w => w.Handle));
 		}
-		ForceForegroundWindow(DesktopHost.FindDesktopWindow());
+		if (!ForceForegroundWindow(DesktopHost.FindDesktopWindow()))
+		{
+			Log.Warn("激活桌面失败，桌面快捷键和右键菜单可能无法响应");
+		}
 		if (lift)
 		{
 			_unliftTimer.Stop();
