@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
 using System.Windows.Threading;
+using Microsoft.Win32;
 using MyDesktop.Core;
 using MyDesktop.Models;
 using MyDesktop.Services;
@@ -47,7 +48,8 @@ public partial class App : Application
 		}
 		RegisterExceptionHandlers();
 		SystemTheme.ApplyToMenus();
-		Log.Info($"启动 {typeof(App).Assembly.GetName().Version}，数据目录：{AppPaths.DataDir}，管理员权限：{(Environment.IsPrivilegedProcess ? "是" : "否")}");
+		Log.Info($"启动 {typeof(App).Assembly.GetName().Version}，数据目录：{AppPaths.DataDir}，管理员权限：{(Environment.IsPrivilegedProcess ? "是" : "否")}，"
+				+ $".NET 运行时：{Environment.Version}，Windows：{WindowsVersion()}");
 		var settings = SettingsStore.Load(out bool firstRun);
 		FenceManager.ApplyRenderMode(settings.HardwareAcceleration);
 		Manager = new FenceManager(settings);
@@ -225,6 +227,19 @@ public partial class App : Application
 				}
 			}
 		}
+	}
+
+	/// <summary>
+	/// 带内部版本号的 Windows 版本，如 10.0.19045.6093：Environment.OSVersion 没有最后一段（UBR），要从注册表读。
+	/// 读不到 UBR 时照实写明，不编一个数字。
+	/// </summary>
+	static string WindowsVersion()
+	{
+		var os = Environment.OSVersion.Version;
+		using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+		return key?.GetValue("UBR") is int ubr
+				? $"{os.Major}.{os.Minor}.{os.Build}.{ubr}"
+				: $"{os.Major}.{os.Minor}.{os.Build}（读不到 UBR）";
 	}
 
 	void RegisterExceptionHandlers()

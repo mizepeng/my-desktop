@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
+using System.Windows.Threading;
 using MyDesktop.Native;
 using static MyDesktop.Native.NativeMethods;
 
@@ -22,6 +23,12 @@ internal sealed class TrayIcon : IDisposable
 	const uint IconId = 1;
 	const int HotkeyId = 1;
 
+	/// <summary>
+	/// 添加图标失败后隔多久重试、最多重试几次：登录后任务栏还没就绪时会失败，之后不一定再收到 TaskbarCreated。
+	/// </summary>
+	static readonly TimeSpan AddRetryInterval = TimeSpan.FromSeconds(3);
+	const int AddRetryLimit = 20;
+
 	readonly HwndSource _window;
 	readonly int _taskbarCreatedMessage;
 	readonly int _commandMessage;
@@ -30,6 +37,8 @@ internal sealed class TrayIcon : IDisposable
 	IntPtr _icon;
 	// 用户点击最近一条通知时要做的事，下一条通知会替换它
 	Action? _balloonClicked;
+	readonly DispatcherTimer _addRetryTimer;
+	int _addRetries;
 
 	public event Action? LeftClick;
 	public event Action<POINT>? RightClick;
@@ -81,6 +90,8 @@ internal sealed class TrayIcon : IDisposable
 		ChangeWindowMessageFilterEx(Handle, _commandMessage, MSGFLT_ALLOW, IntPtr.Zero);
 		ChangeWindowMessageFilterEx(Handle, _stateMessage, MSGFLT_ALLOW, IntPtr.Zero);
 		_icon = LoadAppIcon();
+		_addRetryTimer = new DispatcherTimer { Interval = AddRetryInterval };
+		_addRetryTimer.Tick += (_, _) => RetryAdd();
 		Add();
 		AddClipboardFormatListener(Handle);
 	}
@@ -109,6 +120,7 @@ internal sealed class TrayIcon : IDisposable
 
 	public void Dispose()
 	{
+		_addRetryTimer.Stop();
 		UnregisterHotKey(Handle, HotkeyId);
 		RemoveClipboardFormatListener(Handle);
 		var data = CreateData(0);
@@ -121,10 +133,46 @@ internal sealed class TrayIcon : IDisposable
 		_window.Dispose();
 	}
 
+	/// <summary>
+	/// 添加托盘图标（启动时、资源管理器重建任务栏后），失败时隔 AddRetryInterval 重试，最多 AddRetryLimit 次。
+	/// </summary>
 	void Add()
 	{
+		_addRetryTimer.Stop();
+		_addRetries = 0;
+		if (TryAdd())
+		{
+			return;
+		}
+		Log.Warn($"添加托盘图标失败，{AddRetryInterval.TotalSeconds:0} 秒后重试（任务栏可能还没就绪）");
+		_addRetryTimer.Start();
+	}
+
+	void RetryAdd()
+	{
+		_addRetries++;
+		if (TryAdd())
+		{
+			_addRetryTimer.Stop();
+			Log.Info($"第 {_addRetries} 次重试添加托盘图标成功");
+			return;
+		}
+		if (_addRetries >= AddRetryLimit)
+		{
+			_addRetryTimer.Stop();
+			Log.Error($"添加托盘图标失败，已重试 {AddRetryLimit} 次，放弃；资源管理器重建任务栏时会再试");
+		}
+	}
+
+	bool TryAdd()
+	{
 		var data = CreateData(NIF_MESSAGE | NIF_ICON | NIF_TIP);
-		Shell_NotifyIcon(NIM_ADD, ref data);
+		if (Shell_NotifyIcon(NIM_ADD, ref data))
+		{
+			return true;
+		}
+		// 上一次添加可能其实成功了、只是返回失败（比如任务栏忙时超时），这时再添加会失败，改一下能成功就说明图标已经在了
+		return Shell_NotifyIcon(NIM_MODIFY, ref data);
 	}
 
 	NOTIFYICONDATA CreateData(uint flags)

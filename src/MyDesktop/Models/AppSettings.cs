@@ -162,9 +162,32 @@ public sealed class AppSettings
 	public bool ExpandOnHover { get; set; } = true;
 
 	/// <summary>
-	/// 单击图标就打开，不用双击；按住 Ctrl、Shift 单击仍是多选。开着时不再「单击已选中图标的名称开始改名」，改名用 F2 或右键菜单。
+	/// 单击分区里的图标就打开，不用双击；按住 Ctrl、Shift 单击仍是多选。开着时不再「单击已选中图标的名称开始改名」，改名用 F2 或右键菜单。
 	/// </summary>
-	public bool SingleClickOpen { get; set; }
+	public bool FenceSingleClickOpen { get; set; }
+
+	/// <summary>
+	/// 单击桌面上散放的图标就打开，其余同 FenceSingleClickOpen。
+	/// </summary>
+	public bool DesktopSingleClickOpen { get; set; }
+
+	/// <summary>
+	/// 1.7.2 及以前分区和桌面共用的「单击打开图标」开关：只读不写，读到时两个开关都取它的值。
+	/// </summary>
+	[JsonPropertyName("SingleClickOpen")]
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+	public bool? LegacySingleClickOpen
+	{
+		get => null;
+		set
+		{
+			if (value is bool open)
+			{
+				FenceSingleClickOpen = open;
+				DesktopSingleClickOpen = open;
+			}
+		}
+	}
 
 	/// <summary>
 	/// 鼠标移开后多久收起悬停展开的分区（毫秒）；收起前鼠标还在分区上时按这个间隔再看，所以不能为 0。
@@ -249,7 +272,7 @@ public sealed class AppSettings
 	public List<OverlayHandlerSetting> CustomOverlayHandlers { get; set; } = [];
 
 	/// <summary>
-	/// 分区的图标视图里显示图标名称；关掉后只显示图标、格子变窄，鼠标停在图标上仍能看到名称。
+	/// 分区的图标视图里显示图标名称；关掉后只显示图标、格子变窄，鼠标停在图标上仍能看到名称。各分区可以单独设置（FenceSettings.ShowIconNames）。
 	/// </summary>
 	public bool ShowIconNames { get; set; } = true;
 
@@ -338,6 +361,11 @@ public sealed class AppSettings
 	/// 已提示过「以管理员身份运行时右键菜单会缺项」；只提示一次，之后仍以管理员身份运行也不再提示。
 	/// </summary>
 	public bool ElevatedNoticeShown { get; set; }
+
+	/// <summary>
+	/// 上次提示「.NET 运行时版本过旧」的日期；同一天最多提示一次，运行时升级后不再提示。
+	/// </summary>
+	public DateTime? RuntimeNoticeDate { get; set; }
 
 	/// <summary>
 	/// 各分区现在的位置与尺寸所属的显示器组合（见 FenceManager.CurrentDisplayKey）；为空时是旧版本配置，按当前组合看待。
@@ -472,6 +500,11 @@ public sealed class FenceSettings
 	public bool? Border { get; set; }
 
 	public IconSizeMode? IconSize { get; set; }
+
+	/// <summary>
+	/// 图标视图里显示图标名称；为空时跟随全局的 AppSettings.ShowIconNames。
+	/// </summary>
+	public bool? ShowIconNames { get; set; }
 
 	public FenceView View { get; set; } = FenceView.Icons;
 

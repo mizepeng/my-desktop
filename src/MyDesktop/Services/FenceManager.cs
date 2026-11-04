@@ -27,6 +27,14 @@ internal sealed class FenceManager
 
 	static readonly HashSet<string> GeneratedFiles = new(StringComparer.OrdinalIgnoreCase) { "desktop.ini", "Thumbs.db" };
 
+	/// <summary>
+	/// 建议的最低 .NET 运行时版本，低于它时启动后在通知区提示更新（NotifyIfRuntimeOutdated）。
+	/// 要和 installer/MyDesktop.iss 的 RuntimeVersion 同步修改，下载链接也是安装包用的那一个。
+	/// </summary>
+	static readonly Version MinimumRuntime = new(10, 0, 14);
+
+	const string RuntimeDownloadUrl = "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/10.0.14/windowsdesktop-runtime-10.0.14-win-x64.exe";
+
 	readonly List<FenceWindow> _windows = [];
 	readonly Dispatcher _dispatcher;
 	readonly DispatcherTimer _saveTimer;
@@ -168,6 +176,7 @@ internal sealed class FenceManager
 		Wallpaper.BlurRadius = Settings.BlurRadius;
 		NotifyIfUpgraded(firstRun);
 		NotifyIfElevated();
+		NotifyIfRuntimeOutdated();
 		// 旧版本的登录计划任务迁回 Run 项，不耽误接管桌面
 		_dispatcher.InvokeAsync(AutoStart.MigrateTask, DispatcherPriority.Background);
 
@@ -2021,7 +2030,7 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 清除各分区单独设置的颜色、不透明度、背景效果、边框和图标大小，统一跟随默认外观。
+	/// 清除各分区单独设置的颜色、不透明度、背景效果、边框、图标大小和图标名称，统一跟随默认外观。
 	/// </summary>
 	public void ResetAllAppearance()
 	{
@@ -2032,6 +2041,7 @@ internal sealed class FenceManager
 			model.Background = null;
 			model.Border = null;
 			model.IconSize = null;
+			model.ShowIconNames = null;
 		}
 		RefreshAllAppearance();
 		RefreshAllViewMode();
@@ -2118,6 +2128,62 @@ internal sealed class FenceManager
 		}
 	}
 
+	/// <summary>
+	/// 托盘菜单「重置分区位置」：把跑出屏幕、压在任务栏下面的分区拉回所在显示器的工作区，拉回后压住别的分区时滑到最近的空位。
+	/// 同组的标签位置相同，各自算出的结果也相同。
+	/// </summary>
+	public void ResetFencePositions()
+	{
+		int count = 0;
+		foreach (var window in _windows)
+		{
+			var layout = window.GetLayoutBounds();
+			if (PullIntoWorkArea(layout) is not RECT pulled)
+			{
+				continue;
+			}
+			var target = FindFreeSpot(window, pulled) ?? pulled;
+			window.Model.X += target.Left - layout.Left;
+			window.Model.Y += target.Top - layout.Top;
+			window.ApplyBounds();
+			count++;
+		}
+		Log.Info($"重置分区位置：拉回 {count} 个分区");
+		if (count > 0)
+		{
+			SaveSoon();
+			_takeover?.RelayoutSoon();
+		}
+	}
+
+	/// <summary>
+	/// rect（物理像素，卷起的分区传收起的那一条）四个角都在某个显示器的工作区里时返回 null；否则返回收进最近的显示器工作区后的范围，
+	/// 大小不变，比工作区还大时靠左上对齐。跑出屏幕、压在任务栏下面的分区据此拉回来，跨在两个显示器上的不算。
+	/// </summary>
+	public static RECT? PullIntoWorkArea(RECT rect)
+	{
+		if (InWorkArea(rect.Left, rect.Top) && InWorkArea(rect.Right - 1, rect.Top)
+				&& InWorkArea(rect.Left, rect.Bottom - 1) && InWorkArea(rect.Right - 1, rect.Bottom - 1))
+		{
+			return null;
+		}
+		var (work, _) = GetMonitorWorkArea(MonitorFromRect(ref rect, MONITOR_DEFAULTTONEAREST));
+		int left = Math.Clamp(rect.Left, work.Left, Math.Max(work.Left, work.Right - rect.Width));
+		int top = Math.Clamp(rect.Top, work.Top, Math.Max(work.Top, work.Bottom - rect.Height));
+		return new RECT(left, top, left + rect.Width, top + rect.Height);
+	}
+
+	static bool InWorkArea(int x, int y)
+	{
+		var monitor = MonitorFromPoint(new POINT(x, y), MONITOR_DEFAULTTONULL);
+		if (monitor == IntPtr.Zero)
+		{
+			return false;
+		}
+		var (work, _) = GetMonitorWorkArea(monitor);
+		return x >= work.Left && x < work.Right && y >= work.Top && y < work.Bottom;
+	}
+
 	public void SaveSoon()
 	{
 		_saveTimer.Stop();
@@ -2181,6 +2247,7 @@ internal sealed class FenceManager
 			}
 		}, enabled: Settings.DoubleClickToHide);
 		menu.Add("锁定所有分区", () => SetAllLocked(!allLocked), isChecked: allLocked, enabled: _windows.Count > 0);
+		menu.Add("重置分区位置", ResetFencePositions, enabled: _windows.Count > 0);
 		menu.AddSeparator();
 		menu.Add("设置…", ShowSettings, isDefault: true);
 		menu.Add("开机自动启动", () => SetAutoStart(!autoStart), isChecked: autoStart);
@@ -2307,6 +2374,44 @@ internal sealed class FenceManager
 		SaveSoon();
 		_dispatcher.InvokeAsync(() => _tray?.ShowBalloon("MyDesktop 正以管理员身份运行", "图标右键菜单会缺少火绒、WinRAR 等部分软件的菜单项。以普通权限启动即可恢复。"),
 				DispatcherPriority.Background);
+	}
+
+	/// <summary>
+	/// 运行本程序的 .NET 运行时低于安装包要求的最低版本时（装过旧版运行时、安装包更新运行时又失败了），在通知区提示，
+	/// 点击通知用默认浏览器下载新版运行时。同一天最多提示一次（RuntimeNoticeDate）。
+	/// </summary>
+	void NotifyIfRuntimeOutdated()
+	{
+		var current = Environment.Version;
+		if (current >= MinimumRuntime)
+		{
+			return;
+		}
+		Log.Warn($".NET 运行时 {current} 低于最低版本 {MinimumRuntime}");
+		var today = DateTime.Today;
+		if (Settings.RuntimeNoticeDate?.Date == today)
+		{
+			return;
+		}
+		Settings.RuntimeNoticeDate = today;
+		SaveSoon();
+		_dispatcher.InvokeAsync(() => _tray?.ShowBalloon(".NET 运行时版本过旧",
+				$"MyDesktop 正在用 .NET 桌面运行时 {current.ToString(3)}，建议更新到 {MinimumRuntime.ToString(3)} 或更新版本。点击此处下载。",
+				OpenRuntimeDownload), DispatcherPriority.Background);
+	}
+
+	static void OpenRuntimeDownload()
+	{
+		try
+		{
+			// 经资源管理器打开，下载用的浏览器不继承 MyDesktop 的 Job 限制
+			ExplorerShell.Open(RuntimeDownloadUrl, AppPaths.DataDir);
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("打开 .NET 运行时下载链接失败", ex);
+			MessageDialog.Show(".NET 运行时版本过旧", $"没能打开浏览器，请手动打开下面的链接下载：\n\n{RuntimeDownloadUrl}", "确定");
+		}
 	}
 
 	/// <summary>

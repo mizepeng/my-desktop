@@ -1,5 +1,5 @@
 ; MyDesktop 安装程序（Inno Setup 6）：安装程序本体与桌面右键菜单扩展包，信任扩展包的签名证书，
-; 电脑上没有 .NET 10 桌面运行时时自动下载安装。发行版用 installer\Build-Installer.ps1 生成：
+; 电脑上没有不低于 RuntimeVersion（见下）的 .NET 10 桌面运行时时自动下载安装（和已有的旧版并存，不卸载旧版）。发行版用 installer\Build-Installer.ps1 生成：
 ; 它先发布程序、再用 ISCC 编译本脚本，最后给安装包签名（程序的自动更新只接受签过名的安装包）。
 ; 签名证书的公钥 MyDesktop.cer 随仓库放在本目录；更换签名证书后按 src\MyDesktop\ShellExtension\Pack-DesktopMenu.ps1 开头的命令重新导出覆盖它。
 
@@ -17,10 +17,14 @@
 #define AppVersion Str(VerMajor) + "." + Str(VerMinor) + "." + Str(VerRev)
 ; 卸载时按指纹删除导入的证书；.cer 是 DER 格式，文件本身的 SHA-1 就是证书指纹
 #define CertThumbprint GetSHA1OfFile(AddBackslash(SourcePath) + "MyDesktop.cer")
-; 运行时固定版本并校验 SHA-256，只在电脑上没有任何 10.x 版本时下载
-#define RuntimeFile "windowsdesktop-runtime-10.0.12-win-x64.exe"
-#define RuntimeUrl "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/10.0.12/" + RuntimeFile
-#define RuntimeSha256 "55a67d8476cde95a9cc43a95803b4f54446e7c9251ed22aa6421d4908174ae84"
+; 运行时固定版本并校验 SHA-256：电脑上已装的 10.x 都比 RuntimeVersion 旧（或一个都没有）时下载安装。
+; 升级版本时三项一起改：SHA-256 取自官方发布信息 https://builds.dotnet.microsoft.com/dotnet/release-metadata/10.0/releases.json
+; （那里给的是 SHA-512，下载后核对 SHA-512 一致、签名有效，再自己算 SHA-256）
+; 程序里也写了一份最低版本和下载链接（src\MyDesktop\Services\FenceManager.cs 的 MinimumRuntime、RuntimeDownloadUrl），低于它时启动后提示更新，要同步修改
+#define RuntimeVersion "10.0.14"
+#define RuntimeFile "windowsdesktop-runtime-" + RuntimeVersion + "-win-x64.exe"
+#define RuntimeUrl "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/" + RuntimeVersion + "/" + RuntimeFile
+#define RuntimeSha256 "91c2795a7b1e2480caa83fce9514dc2e2d21e277d9a297311faba6040bad7330"
 
 [Setup]
 AppId={{26C2B19F-E49A-4CA1-B523-E8932B5A74F6}
@@ -101,22 +105,58 @@ begin
 	Result := ExpandConstant('{param:autoupdate|0}') = '1';
 end;
 
-// 是否已装 .NET 10 桌面运行时，任意 10.x 版本都能运行本程序
-function IsRuntimeInstalled: Boolean;
+// 把 10.0.14 这样的版本号拆成三段数字；带预览版后缀（如 10.0.0-rc.2.25502.107）或格式不对时返回 False
+function ParseRuntimeVersion(Name: String; var Major, Minor, Patch: Integer): Boolean;
 var
-	FindRec: TFindRec;
+	P: Integer;
 begin
 	Result := False;
-	if FindFirst(ExpandConstant('{commonpf64}\dotnet\shared\Microsoft.WindowsDesktop.App\10.*'), FindRec) then
+	if Pos('-', Name) > 0 then
+		Exit;
+	P := Pos('.', Name);
+	if P = 0 then
+		Exit;
+	Major := StrToIntDef(Copy(Name, 1, P - 1), -1);
+	Delete(Name, 1, P);
+	P := Pos('.', Name);
+	if P = 0 then
+		Exit;
+	Minor := StrToIntDef(Copy(Name, 1, P - 1), -1);
+	Delete(Name, 1, P);
+	Patch := StrToIntDef(Name, -1);
+	Result := (Major >= 0) and (Minor >= 0) and (Patch >= 0);
+end;
+
+// 是否已装 .NET 10 桌面运行时（预览版不算）；RequireMin 为 True 时要不低于 RuntimeVersion。
+// 版本号逐段按数字比较，按字符串比较时 10.0.9 会比 10.0.14 大
+function FindRuntime(RequireMin: Boolean): Boolean;
+var
+	FindRec: TFindRec;
+	Major, Minor, Patch, MinMajor, MinMinor, MinPatch: Integer;
+begin
+	Result := False;
+	if not ParseRuntimeVersion('{#RuntimeVersion}', MinMajor, MinMinor, MinPatch) then
+		RaiseException('RuntimeVersion 格式不对：{#RuntimeVersion}');
+	if FindFirst(ExpandConstant('{commonpf64}\dotnet\shared\Microsoft.WindowsDesktop.App\*'), FindRec) then
 	begin
 		try
 			repeat
-				Result := (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0;
+				if ((FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0)
+						and ParseRuntimeVersion(FindRec.Name, Major, Minor, Patch)
+						and (Major = MinMajor)
+						and (not RequireMin or (Minor > MinMinor) or ((Minor = MinMinor) and (Patch >= MinPatch))) then
+					Result := True;
 			until Result or not FindNext(FindRec);
 		finally
 			FindClose(FindRec);
 		end;
 	end;
+end;
+
+// 已装不低于 RuntimeVersion 的运行时就不用下载；只有更旧的 10.x 时也下载安装，和旧版并存，免得用户一直停在很旧的补丁版
+function IsRuntimeInstalled: Boolean;
+begin
+	Result := FindRuntime(True);
 end;
 
 procedure InitializeWizard;
@@ -125,7 +165,7 @@ begin
 	DownloadPage.ShowBaseNameInsteadOfUrl := True;
 end;
 
-// 下载并静默安装运行时；失败时提示并停在「准备安装」页，可以再点「安装」重试
+// 下载并静默安装运行时；失败时提示，电脑上一个 10.x 都没有时停在「准备安装」页，可以再点「安装」重试（见 NextButtonClick）
 function InstallRuntime: Boolean;
 var
 	ResultCode: Integer;
@@ -163,7 +203,18 @@ function NextButtonClick(CurPageID: Integer): Boolean;
 begin
 	Result := True;
 	if (CurPageID = wpReady) and not IsRuntimeInstalled then
+	begin
 		Result := InstallRuntime;
+		// 已有旧版 10.x 时运行时没装上也照样安装 MyDesktop，不然连不上微软下载服务器的用户自动更新一直失败；
+		// 程序启动后发现运行时过旧会在通知区提示下载（FenceManager.NotifyIfRuntimeOutdated）。静默安装时不弹窗
+		if not Result and FindRuntime(False) then
+		begin
+			Log('运行时 {#RuntimeVersion} 没有装上，电脑上已有旧版 10.x，继续安装');
+			SuppressibleMsgBox('.NET 桌面运行时没有更新成功，将继续安装 MyDesktop，暂时使用电脑上已有的旧版运行时。' + #13#10#13#10
+					+ 'MyDesktop 启动后会在通知区提示下载新版运行时。', mbInformation, MB_OK, IDOK);
+			Result := True;
+		end;
+	end;
 end;
 
 // 覆盖安装或升级前，用新版程序让正在运行的 MyDesktop 正常退出并恢复桌面图标，不论它是从哪里启动的

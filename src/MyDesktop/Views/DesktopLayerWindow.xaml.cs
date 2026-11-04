@@ -609,7 +609,7 @@ internal partial class DesktopLayerWindow : Window
 		if (e.ClickCount >= 2)
 		{
 			// 单击打开时第一下抬起时已经打开过，双击的第二下不再打开
-			if (!_takeover.Settings.SingleClickOpen)
+			if (!_takeover.Settings.DesktopSingleClickOpen)
 			{
 				_takeover.Open(ItemsList.SelectedItems.Contains(item) ? _takeover.AllSelectedItems() : [item], _hwnd);
 			}
@@ -665,7 +665,7 @@ internal partial class DesktopLayerWindow : Window
 			ItemsList.UnselectAll();
 			ItemsList.SelectedItem = _pressedItem;
 		}
-		if (_takeover.Settings.SingleClickOpen)
+		if (_takeover.Settings.DesktopSingleClickOpen)
 		{
 			// 单击打开（B 站评论建议）：没有拖动、抬起时还在按下的图标上就打开它；按住 Ctrl、Shift 是多选，不打开
 			if (_pressedItem != null && Keyboard.Modifiers == ModifierKeys.None)

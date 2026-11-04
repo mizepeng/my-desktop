@@ -139,7 +139,7 @@
 				<!-- 桌面 -->
 				<StackPanel x:Name="DesktopPage" Visibility="Collapsed">
 					<TextBlock Style="{StaticResource PageTitle}" Text="桌面" />
-					<TextBlock Style="{StaticResource Hint}" Text="在桌面空白处的操作。" />
+					<TextBlock Style="{StaticResource Hint}" Text="在桌面空白处和桌面图标上的操作。" />
 
 					<TextBlock Style="{StaticResource SectionTitle}" Text="鼠标操作" />
 					<Border Style="{StaticResource Card}">
@@ -178,6 +178,14 @@
 							</StackPanel>
 						</CheckBox>
 					</Border>
+					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="DesktopSingleClickOpenBox" Click="Setting_Changed">
+							<StackPanel>
+								<TextBlock Text="单击打开桌面图标" />
+								<TextBlock Style="{StaticResource Hint}" Text="只管没放进分区的桌面图标，分区里的在「分区」页单独设置；按住 Ctrl 或 Shift 单击仍是多选，改名用 F2 或右键菜单" />
+							</StackPanel>
+						</CheckBox>
+					</Border>
 
 					<TextBlock Style="{StaticResource SectionTitle}" Text="右键菜单" />
 					<Border Style="{StaticResource Card}">
@@ -203,10 +211,10 @@
 
 					<TextBlock Style="{StaticResource SectionTitle}" Text="图标" />
 					<Border Style="{StaticResource Card}">
-						<CheckBox x:Name="SingleClickOpenBox" Click="Setting_Changed">
+						<CheckBox x:Name="FenceSingleClickOpenBox" Click="Setting_Changed">
 							<StackPanel>
-								<TextBlock Text="单击打开图标" />
-								<TextBlock Style="{StaticResource Hint}" Text="分区和桌面上的图标都适用；按住 Ctrl 或 Shift 单击仍是多选，改名用 F2 或右键菜单" />
+								<TextBlock Text="单击打开分区里的图标" />
+								<TextBlock Style="{StaticResource Hint}" Text="桌面上没放进分区的图标在「桌面」页单独设置；按住 Ctrl 或 Shift 单击仍是多选，改名用 F2 或右键菜单" />
 							</StackPanel>
 						</CheckBox>
 					</Border>
@@ -324,7 +332,7 @@
 				<!-- 外观 -->
 				<StackPanel x:Name="AppearancePage" Visibility="Collapsed">
 					<TextBlock Style="{StaticResource PageTitle}" Text="外观" />
-					<TextBlock Style="{StaticResource Hint}" Text="以下是所有分区的默认外观。单个分区可以在它的右键菜单里单独设置颜色、不透明度、背景效果、边框和图标大小。" />
+					<TextBlock Style="{StaticResource Hint}" Text="以下是所有分区的默认外观。单个分区可以在它的右键菜单里单独设置颜色、不透明度、背景效果、边框、图标大小和是否显示图标名称。" />
 
 					<TextBlock Style="{StaticResource SectionTitle}" Text="背景颜色" />
 					<Border Style="{StaticResource Card}">
@@ -426,7 +434,7 @@
 						<CheckBox x:Name="ShowIconNamesBox" Click="Setting_Changed">
 							<StackPanel>
 								<TextBlock Text="显示图标名称" />
-								<TextBlock Style="{StaticResource Hint}" Text="分区的图标视图里在图标下面显示名称；关掉后只显示图标、排得更紧凑，鼠标停在图标上仍能看到名称" />
+								<TextBlock Style="{StaticResource Hint}" Text="分区的图标视图里在图标下面显示名称；关掉后只显示图标、排得更紧凑，鼠标停在图标上仍能看到名称。单个分区可以在它的右键菜单「图标名称」里单独设置" />
 							</StackPanel>
 						</CheckBox>
 					</Border>
@@ -453,7 +461,7 @@
 							<Button VerticalAlignment="Center" Content="全部重置" DockPanel.Dock="Right" Click="ResetAppearance_Click" />
 							<StackPanel Margin="0,0,12,0">
 								<TextBlock Text="所有分区改用默认外观" />
-								<TextBlock Style="{StaticResource Hint}" Text="清除各分区单独设置的颜色、不透明度、背景效果、边框和图标大小" />
+								<TextBlock Style="{StaticResource Hint}" Text="清除各分区单独设置的颜色、不透明度、背景效果、边框、图标大小和图标名称" />
 							</StackPanel>
 						</DockPanel>
 					</Border>
@@ -506,18 +514,33 @@
 										</Grid.ColumnDefinitions>
 										<TextBox Margin="0,0,8,0" VerticalContentAlignment="Center" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" LostFocus="Rule_LostFocus" />
 										<TextBox x:Name="ExtensionsBox" Grid.Column="1" VerticalContentAlignment="Center" Text="{Binding Extensions, UpdateSourceTrigger=PropertyChanged}" LostFocus="Rule_LostFocus" />
+										<!-- 扩展名为空时在输入框里显示的格式提示，不接收鼠标，点它就是点输入框 -->
+										<TextBlock x:Name="ExtensionsPlaceholder"
+												Grid.Column="1"
+												Margin="12,0"
+												VerticalAlignment="Center"
+												IsHitTestVisible="False"
+												Opacity="0.5"
+												Text="扩展名，用分号分隔，例如 .jpg; .png"
+												Visibility="Collapsed" />
 										<TextBlock x:Name="ExtensionsHint" Grid.Column="1" Margin="4,0" VerticalAlignment="Center" Opacity="0.7" Visibility="Collapsed" />
 										<Button Grid.Column="2" Margin="8,0,0,0" Content="&#xE74D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" ToolTip="删除规则" Click="DeleteRule_Click" />
 									</Grid>
 								</Border>
 								<DataTemplate.Triggers>
+									<!-- 放在最前面，下面文件夹、兜底规则的触发器会把提示再藏起来 -->
+									<Trigger SourceName="ExtensionsBox" Property="Text" Value="">
+										<Setter TargetName="ExtensionsPlaceholder" Property="Visibility" Value="Visible" />
+									</Trigger>
 									<DataTrigger Binding="{Binding MatchFolders}" Value="True">
 										<Setter TargetName="ExtensionsBox" Property="Visibility" Value="Collapsed" />
+										<Setter TargetName="ExtensionsPlaceholder" Property="Visibility" Value="Collapsed" />
 										<Setter TargetName="ExtensionsHint" Property="Visibility" Value="Visible" />
 										<Setter TargetName="ExtensionsHint" Property="Text" Value="桌面上的所有文件夹" />
 									</DataTrigger>
 									<DataTrigger Binding="{Binding IsFallback}" Value="True">
 										<Setter TargetName="ExtensionsBox" Property="Visibility" Value="Collapsed" />
+										<Setter TargetName="ExtensionsPlaceholder" Property="Visibility" Value="Collapsed" />
 										<Setter TargetName="ExtensionsHint" Property="Visibility" Value="Visible" />
 										<Setter TargetName="ExtensionsHint" Property="Text" Value="其他规则都没有匹配到的项目" />
 									</DataTrigger>
@@ -527,6 +550,11 @@
 					</ItemsControl>
 					<WrapPanel Margin="0,8,0,0">
 						<Button Margin="0,0,8,0" Content="添加规则" Click="AddRule_Click" />
+						<Button x:Name="AddFallbackRuleButton"
+								Margin="0,0,8,0"
+								Content="添加兜底规则"
+								ToolTip="收纳其他规则都没有匹配到的项目，固定排在最后"
+								Click="AddFallbackRule_Click" />
 						<Button Margin="0,0,8,0" Content="恢复默认规则" Click="ResetRules_Click" />
 						<Button Content="立即整理桌面…" Click="Organize_Click" />
 					</WrapPanel>

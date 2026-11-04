@@ -51,7 +51,7 @@ internal partial class SettingsWindow : Window
 			"右键文件弹出系统右键菜单",
 			"想突出重要的文件，右键选「高亮」给它铺上一种颜色，分区和桌面上的图标都可以",
 			"F2 重命名，Delete 删除到回收站",
-			"想单击就打开图标，可以在「分区」页打开「单击打开图标」",
+			"想单击就打开图标，分区里的在「分区」页、桌面上的在「桌面」页分别打开「单击打开」",
 		]),
 		new("桌面与搜索",
 		[
@@ -77,6 +77,8 @@ internal partial class SettingsWindow : Window
 		InitializeComponent();
 		_rules = new ObservableCollection<OrganizeRule>(manager.Settings.Rules);
 		RulesList.ItemsSource = _rules;
+		_rules.CollectionChanged += (_, _) => UpdateAddFallbackButton();
+		UpdateAddFallbackButton();
 		OverlaySettings.Bind(manager);
 		LoadValues();
 		BlockComboBoxWheel();
@@ -137,7 +139,8 @@ internal partial class SettingsWindow : Window
 		DrawToCreateBox.IsChecked = Settings.DrawToCreate;
 		DesktopMenuBox.IsChecked = Settings.DesktopContextMenu;
 		ExpandOnHoverBox.IsChecked = Settings.ExpandOnHover;
-		SingleClickOpenBox.IsChecked = Settings.SingleClickOpen;
+		FenceSingleClickOpenBox.IsChecked = Settings.FenceSingleClickOpen;
+		DesktopSingleClickOpenBox.IsChecked = Settings.DesktopSingleClickOpen;
 		SnapBox.IsChecked = Settings.SnapToEdges;
 		SnapGridBox.IsChecked = Settings.SnapToGrid;
 		ShowHiddenBox.IsChecked = Settings.ShowHiddenFiles;
@@ -334,7 +337,8 @@ internal partial class SettingsWindow : Window
 		Settings.DoubleClickToHide = DoubleClickBox.IsChecked == true;
 		Settings.DrawToCreate = DrawToCreateBox.IsChecked == true;
 		Settings.ExpandOnHover = ExpandOnHoverBox.IsChecked == true;
-		Settings.SingleClickOpen = SingleClickOpenBox.IsChecked == true;
+		Settings.FenceSingleClickOpen = FenceSingleClickOpenBox.IsChecked == true;
+		Settings.DesktopSingleClickOpen = DesktopSingleClickOpenBox.IsChecked == true;
 		Settings.SnapToEdges = SnapBox.IsChecked == true;
 		Settings.SnapToGrid = SnapGridBox.IsChecked == true;
 		Settings.AutoOrganize = AutoOrganizeBox.IsChecked == true;
@@ -714,7 +718,7 @@ internal partial class SettingsWindow : Window
 
 	void ResetAppearance_Click(object sender, RoutedEventArgs e)
 	{
-		if (MessageDialog.Show("重置外观", "所有分区单独设置的颜色、不透明度、背景效果、边框和图标大小都将清除，改用默认外观。", "全部重置", "取消") == 0)
+		if (MessageDialog.Show("重置外观", "所有分区单独设置的颜色、不透明度、背景效果、边框、图标大小和图标名称都将清除，改用默认外观。", "全部重置", "取消") == 0)
 		{
 			_manager.ResetAllAppearance();
 		}
@@ -748,6 +752,7 @@ internal partial class SettingsWindow : Window
 				Settings.StartupVisibility = defaults.StartupVisibility;
 				Settings.StartupHideTarget = defaults.StartupHideTarget;
 				Settings.DrawToCreate = defaults.DrawToCreate;
+				Settings.DesktopSingleClickOpen = defaults.DesktopSingleClickOpen;
 				if (Settings.DesktopContextMenu != defaults.DesktopContextMenu)
 				{
 					Settings.DesktopContextMenu = defaults.DesktopContextMenu;
@@ -759,7 +764,7 @@ internal partial class SettingsWindow : Window
 			case "分区":
 				bool hiddenChanged = Settings.ShowHiddenFiles != defaults.ShowHiddenFiles;
 				Settings.ExpandOnHover = defaults.ExpandOnHover;
-				Settings.SingleClickOpen = defaults.SingleClickOpen;
+				Settings.FenceSingleClickOpen = defaults.FenceSingleClickOpen;
 				Settings.CollapseDelay = defaults.CollapseDelay;
 				Settings.TabsFillWidth = defaults.TabsFillWidth;
 				Settings.TabAlignment = defaults.TabAlignment;
@@ -824,7 +829,8 @@ internal partial class SettingsWindow : Window
 
 	void AddRule_Click(object sender, RoutedEventArgs e)
 	{
-		var rule = new OrganizeRule { Name = "新规则", Extensions = ".ext" };
+		// 扩展名留空，由输入框里的提示文字说明格式；预填示例会被当成能匹配所有文件
+		var rule = new OrganizeRule { Name = "新规则" };
 		// 新规则放在兜底规则之前，否则永远匹配不到
 		int fallbackIndex = _rules.ToList().FindIndex(r => r.IsFallback);
 		if (fallbackIndex >= 0)
@@ -836,6 +842,28 @@ internal partial class SettingsWindow : Window
 			_rules.Add(rule);
 		}
 		SaveRules();
+	}
+
+	/// <summary>
+	/// 兜底规则删掉后单独补回来，放在最后：它收纳其他规则都没匹配到的项目，排在前面会挡住后面的规则。
+	/// </summary>
+	void AddFallbackRule_Click(object sender, RoutedEventArgs e)
+	{
+		if (_rules.Any(r => r.IsFallback))
+		{
+			return;
+		}
+		var fallback = OrganizeRule.CreateDefaults().Single(r => r.IsFallback);
+		_rules.Add(fallback);
+		SaveRules();
+	}
+
+	/// <summary>
+	/// 列表里没有兜底规则时才显示「添加兜底规则」。
+	/// </summary>
+	void UpdateAddFallbackButton()
+	{
+		AddFallbackRuleButton.Visibility = _rules.Any(r => r.IsFallback) ? Visibility.Collapsed : Visibility.Visible;
 	}
 
 	void DeleteRule_Click(object sender, RoutedEventArgs e)

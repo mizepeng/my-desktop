@@ -257,6 +257,11 @@ internal partial class FenceWindow : Window
 
 	IconSizeMode EffectiveIconSize => Model.IconSize ?? Settings.DefaultIconSize;
 
+	/// <summary>
+	/// 图标视图里是否显示名称：分区单独设置过的用自己的，否则跟随全局设置。
+	/// </summary>
+	bool ShowIconNames => Model.ShowIconNames ?? Settings.ShowIconNames;
+
 	double IconDip => Model.View == FenceView.Icons ? EffectiveIconSize.ToDip() : Appearance.ListIconDip;
 
 	public IReadOnlyList<FenceItem> Items => _items;
@@ -899,7 +904,8 @@ internal partial class FenceWindow : Window
 	}
 
 	/// <summary>
-	/// 保存拖动结果。分区之间不重叠：松手时压住了别的分区，滑到最近的空位，所在屏幕上放不下时滑回拖动前的位置；
+	/// 保存拖动结果。移动（不是调整大小）后跑出屏幕或压在任务栏下面时，先收进所在显示器的工作区（FenceManager.PullIntoWorkArea）；
+	/// 分区之间不重叠：松手时压住了别的分区，滑到最近的空位，所在屏幕上放不下时滑回拖动前的位置；
 	/// 只单击标题栏、没有移动时不动，原本就重叠的旧布局等下次拖动时再处理。滑动途中又开始拖动时返回 false。
 	/// </summary>
 	async Task<bool> SaveAndAvoidOverlap()
@@ -911,7 +917,9 @@ internal partial class FenceWindow : Window
 			return true;
 		}
 		var layout = GetLayoutBounds();
-		var target = _manager.FindFreeSpot(this, layout) is RECT spot
+		bool moved = bounds.Width == _dragRectStart.Width && bounds.Height == _dragRectStart.Height;
+		var wanted = moved && FenceManager.PullIntoWorkArea(layout) is RECT pulled ? pulled : layout;
+		var target = _manager.FindFreeSpot(this, wanted) is RECT spot
 				? new RECT(bounds.Left + spot.Left - layout.Left, bounds.Top + spot.Top - layout.Top, bounds.Right + spot.Left - layout.Left, bounds.Bottom + spot.Top - layout.Top)
 				: _dragRectStart;
 		if (target.Equals(bounds))
@@ -1897,8 +1905,8 @@ internal partial class FenceWindow : Window
 		double iconDip = EffectiveIconSize.ToDip();
 		Resources["IconSize"] = iconDip;
 		// 不显示名称时格子只留出图标和一点边距
-		Resources["CellWidth"] = Settings.ShowIconNames ? iconDip + 44 : iconDip + 16;
-		Resources["IconNameVisibility"] = Settings.ShowIconNames ? Visibility.Visible : Visibility.Collapsed;
+		Resources["CellWidth"] = ShowIconNames ? iconDip + 44 : iconDip + 16;
+		Resources["IconNameVisibility"] = ShowIconNames ? Visibility.Visible : Visibility.Collapsed;
 		// 详细信息视图和不显示名称的图标视图不展开名称
 		if (!CanExpandNames && _expandedName != null)
 		{
@@ -1928,7 +1936,7 @@ internal partial class FenceWindow : Window
 	/// </summary>
 	bool CanExpandNames => Model.View switch
 	{
-		FenceView.Icons => Settings.ShowIconNames,
+		FenceView.Icons => ShowIconNames,
 		FenceView.List => true,
 		FenceView.Details => false,
 	};
@@ -2909,7 +2917,7 @@ internal partial class FenceWindow : Window
 		if (e.ClickCount >= 2)
 		{
 			// 单击打开时第一下抬起时已经打开过，双击的第二下不再打开
-			if (!Settings.SingleClickOpen)
+			if (!Settings.FenceSingleClickOpen)
 			{
 				if (ItemsList.SelectedItems.Contains(item))
 				{
@@ -2990,7 +2998,7 @@ internal partial class FenceWindow : Window
 			ItemsList.UnselectAll();
 			ItemsList.SelectedItem = _pressedItem;
 		}
-		if (Settings.SingleClickOpen)
+		if (Settings.FenceSingleClickOpen)
 		{
 			// 单击打开（B 站评论建议）：没有拖动、抬起时还在按下的图标上就打开它；按住 Ctrl、Shift 是多选，不打开
 			if (_pressedItem != null && Keyboard.Modifiers == ModifierKeys.None)
@@ -3541,6 +3549,14 @@ internal partial class FenceWindow : Window
 			separator,
 			new("跟随默认外观", () => SetBorder(null), Checked: Model.Border == null, Radio: true),
 		]));
+		// 只在图标视图里起作用；列表、详细信息视图总是显示名称
+		items.Add(new("图标名称", Children:
+		[
+			new("显示", () => SetShowIconNames(true), Checked: Model.ShowIconNames == true, Radio: true),
+			new("不显示", () => SetShowIconNames(false), Checked: Model.ShowIconNames == false, Radio: true),
+			separator,
+			new("跟随默认外观", () => SetShowIconNames(null), Checked: Model.ShowIconNames == null, Radio: true),
+		]));
 		items.Add(separator);
 		items.Add(new("重命名分区", BeginTitleEdit));
 		var tabs = _manager.TabsOf(this);
@@ -3672,6 +3688,13 @@ internal partial class FenceWindow : Window
 	{
 		Model.Border = border;
 		ApplyAppearance();
+		_manager.SaveSoon();
+	}
+
+	void SetShowIconNames(bool? show)
+	{
+		Model.ShowIconNames = show;
+		ApplyViewMode();
 		_manager.SaveSoon();
 	}
 
