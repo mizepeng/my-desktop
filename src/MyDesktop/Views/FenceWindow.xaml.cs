@@ -4207,7 +4207,7 @@ internal partial class FenceWindow : Window
 		bool fromDesktop = _dropFromDesktop;
 		bool reorder = IsReorderDrag();
 		int insertIndex = _insertIndex;
-		// 从别处拖进自定义顺序的分区：放在松手的位置（见 InsertsAtDrop）
+		// 从别处拖进来：放在松手的位置（见 InsertsAtDrop）
 		int dropIndex = !reorder && InsertsAtDrop(effect) ? insertIndex : -1;
 		_dropPreview.Drop(e, effect);
 		EndDragInside(false);
@@ -4228,7 +4228,7 @@ internal partial class FenceWindow : Window
 		{
 			// 桌面上的图标拖进桌面分区只改归属，文件不动；先排好位置，图标出现时就在松手处
 			e.Effects = DragDropEffects.None;
-			InsertIntoCustomOrder(keys, dropIndex);
+			PlaceDropped(keys, dropIndex);
 			_manager.AssignToFence(this, keys);
 			return;
 		}
@@ -4284,25 +4284,82 @@ internal partial class FenceWindow : Window
 	}
 
 	/// <summary>
-	/// 从别处拖进来、分区又是自定义顺序时，按松手的位置插入（和在分区里拖动调整顺序一样显示插入标记），
-	/// 不用先放进来再拖一次。按名称、日期等排序的分区位置由排序决定，进入映射分区的子文件夹后也不记顺序。
+	/// 从别处拖进来时按松手的位置插入（和在分区里拖动调整顺序一样显示插入标记），不用先放进来再拖一次。
+	/// 按名称、日期等排序的分区也一样，松手的位置和按排序本该在的位置不同时切成自定义排序（见 ApplyDropOrder）。
+	/// 进入映射分区的子文件夹后不记顺序，不显示插入标记。
 	/// </summary>
-	bool InsertsAtDrop(DragDropEffects effect) => effect != DragDropEffects.None && Model.SortBy == SortField.Custom && _subFolder == null;
+	bool InsertsAtDrop(DragDropEffects effect) => effect != DragDropEffects.None && _subFolder == null;
 
 	/// <summary>
-	/// 把新放进来的项目（桌面项目的键或文件的完整路径）按插入序号写进自定义顺序；序号为负时不插入、照旧排在最后。
+	/// 把新放进来的项目（桌面项目的键或文件的完整路径）按插入序号排进分区（见 ApplyDropOrder）；序号为负时不插入，
+	/// 自定义排序时照旧排在最后。
 	/// </summary>
-	void InsertIntoCustomOrder(IEnumerable<string> keys, int insertIndex)
+	void PlaceDropped(IEnumerable<string> keys, int insertIndex)
 	{
 		if (insertIndex < 0)
 		{
 			return;
 		}
-		var incoming = keys.Select(OrderKey).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+		var paths = keys.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+		var incoming = paths.Select(OrderKey).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 		var order = _items.Select(OrderKey).Where(k => !incoming.Contains(k, StringComparer.OrdinalIgnoreCase)).ToList();
 		order.InsertRange(Math.Clamp(insertIndex, 0, order.Count), incoming);
+		// 按名称等排序时要知道放进来的项目按排序会排在哪里，先按它们现在的信息建出项目
+		var dropped = Model.SortBy == SortField.Custom ? [] : paths.Select(DroppedItem).OfType<FenceItem>().ToList();
+		ApplyDropOrder(order, dropped);
+	}
+
+	/// <summary>
+	/// 刚放进来、还没显示在分区里的项目：桌面上的项目按桌面视图建（显示名与桌面上的一致），刚移动或复制过来的文件按文件建；
+	/// 已经不在了的返回 null，它不会显示在分区里，也就不影响排序。
+	/// </summary>
+	FenceItem? DroppedItem(string key)
+	{
+		if (IsDesktopFence && _manager.DesktopItems?.Find(key) is DesktopEntry entry)
+		{
+			return FenceItem.Create(entry);
+		}
+		if (Directory.Exists(key))
+		{
+			return FenceItem.Create(new DirectoryInfo(key));
+		}
+		return File.Exists(key) ? FenceItem.Create(new FileInfo(key)) : null;
+	}
+
+	/// <summary>
+	/// 记下拖放（调整顺序或从别处拖进来）后的顺序 order（由分区当前显示的顺序加上松手的位置得来）。
+	/// 按名称、类型、大小、修改日期排序时，order 和按排序本该得到的顺序一样就什么都不改、维持原排序；
+	/// 不一样就切成自定义排序，用 order 覆盖掉自定义顺序里可能残留的旧记录，其他图标不跳位置。
+	/// dropped 是从别处拖进来、还没显示在分区里的项目，自定义排序时不用。返回是否改了顺序。
+	/// </summary>
+	bool ApplyDropOrder(List<string> order, IReadOnlyCollection<FenceItem> dropped)
+	{
+		if (Model.SortBy != SortField.Custom)
+		{
+			if (KeepsSort(order, dropped))
+			{
+				return false;
+			}
+			Model.SortBy = SortField.Custom;
+			UpdateDetailsHeader();
+		}
 		Model.CustomOrder = order;
 		_manager.SaveSoon();
+		return true;
+	}
+
+	/// <summary>
+	/// 分区现有的项目加上放进来的项目按当前排序排好，是不是正好就是 order。
+	/// 放进来的项目里没能建出来的（已经不在了）不会显示，比较时从 order 里去掉。
+	/// </summary>
+	bool KeepsSort(List<string> order, IReadOnlyCollection<FenceItem> dropped)
+	{
+		var droppedKeys = dropped.Select(OrderKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+		var sorted = _items.Where(i => !droppedKeys.Contains(OrderKey(i))).Concat(dropped).ToList();
+		Sort(sorted);
+		var keys = sorted.Select(OrderKey).ToList();
+		var shown = keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+		return keys.SequenceEqual(order.Where(shown.Contains), StringComparer.OrdinalIgnoreCase);
 	}
 
 	void TrackReorder(DragEventArgs e, DragDropEffects effect)
@@ -4419,10 +4476,10 @@ internal partial class FenceWindow : Window
 		var dragged = order.Where(moving.Contains).ToList();
 		order.RemoveAll(moving.Contains);
 		order.InsertRange(Math.Clamp(target, 0, order.Count), dragged);
-		Model.SortBy = SortField.Custom;
-		Model.CustomOrder = order;
-		RefreshItems();
-		_manager.SaveSoon();
+		if (ApplyDropOrder(order, []))
+		{
+			RefreshItems();
+		}
 	}
 
 	/// <summary>
@@ -4473,7 +4530,7 @@ internal partial class FenceWindow : Window
 			_manager.AssignToFence(this, expected);
 		}
 		var created = ItemOps.Transfer(_hwnd, paths, folder, effect);
-		InsertIntoCustomOrder(created, insertIndex);
+		PlaceDropped(created, insertIndex);
 		if (IsDesktopFence && effect == DragDropEffects.Link)
 		{
 			_manager.AssignToFence(this, created);
