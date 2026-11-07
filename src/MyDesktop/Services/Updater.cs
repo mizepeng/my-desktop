@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Net;
 using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -23,6 +24,8 @@ internal sealed class Updater
 	const string LatestReleaseApi = "https://api.github.com/repos/mizepeng/my-desktop/releases/latest";
 	const string ReleasesApi = "https://api.github.com/repos/mizepeng/my-desktop/releases?per_page=30";
 	const string ReleasesPage = "https://github.com/mizepeng/my-desktop/releases/latest";
+	const string TagPathPrefix = "/mizepeng/my-desktop/releases/tag/";
+	const string DownloadBase = "https://github.com/mizepeng/my-desktop/releases/download/";
 	const string InstallerPrefix = "MyDesktop-Setup-";
 	const int CERT_E_UNTRUSTEDROOT = unchecked((int)0x800B0109);
 	const int ERROR_CANCELLED = 1223;
@@ -46,7 +49,10 @@ internal sealed class Updater
 	bool _busy;
 	bool _prompting;
 
-	sealed record Release(Version Version, string Tag, string Notes, string AssetName, string AssetUrl, long AssetSize);
+	/// <summary>
+	/// 一个发行版。Notes 为 null 表示这次取不到发行说明（接口被限流、走了备用路径），不同于发行说明本身为空。
+	/// </summary>
+	sealed record Release(Version Version, string Tag, string? Notes, string AssetName, string AssetUrl, long AssetSize);
 
 	public Updater(FenceManager manager)
 	{
@@ -147,13 +153,29 @@ internal sealed class Updater
 		try
 		{
 			var message = $"MyDesktop {release.Version.ToString(3)} 已发布，当前版本 {CurrentVersion.ToString(3)}。";
-			if (release.Notes.Length > 0)
+			if (release.Notes == null)
+			{
+				message += "\n\nGitHub 接口暂时访问受限，取不到这次的更新内容，可以点「查看更新内容」到发行版页面查看。";
+			}
+			else if (release.Notes.Length > 0)
 			{
 				message += $"\n\n{release.Notes}";
 			}
 			// 最后一个按钮响应 Esc，放「稍后」
 			// 不用模态：对话框开着时设置、托盘菜单照常能用
-			int choice = MessageDialog.ShowModeless("发现新版本", message, "立即更新", "跳过此版本", "稍后");
+			// 取不到发行说明时多一个「查看更新内容」：打开发行版页面后重新弹出对话框，让用户看完再决定
+			int choice;
+			while (true)
+			{
+				choice = release.Notes == null
+						? MessageDialog.ShowModeless("发现新版本", message, "立即更新", "跳过此版本", "查看更新内容", "稍后")
+						: MessageDialog.ShowModeless("发现新版本", message, "立即更新", "跳过此版本", "稍后");
+				if (release.Notes != null || choice != 2)
+				{
+					break;
+				}
+				OpenPage($"https://github.com{TagPathPrefix}{release.Tag}");
+			}
 			if (choice == 1)
 			{
 				_manager.Settings.SkippedVersion = release.Tag;
@@ -173,6 +195,11 @@ internal sealed class Updater
 	static async Task<Release?> FetchLatestAsync()
 	{
 		using var response = await Http.GetAsync(LatestReleaseApi);
+		if (IsRateLimited(response))
+		{
+			Log.Warn($"GitHub 接口被限流（{DescribeRateLimit(response)}），改走备用路径：从发行版页面的跳转地址取最新版本");
+			return await FetchLatestFromPageAsync();
+		}
 		response.EnsureSuccessStatusCode();
 		using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
 		var root = json.RootElement;
@@ -196,6 +223,57 @@ internal sealed class Updater
 			}
 		}
 		return null;
+	}
+
+	/// <summary>
+	/// 备用路径：GitHub 匿名接口同一 IP 每小时只有 60 次，公司网、校园网等共用出口的用户容易碰到限流，这时不走 api.github.com：
+	/// 版本号取自发行版页面 /releases/latest 跳转到的 /releases/tag/vX.Y.Z，安装包地址按发布时的固定命名拼出来，
+	/// 再用 HEAD 请求确认安装包存在并取得大小。发行说明取不到（Notes 为 null），更新对话框里提示到发行版页面查看；
+	/// 下载后照常核对签名证书，安全校验不因走备用路径放松。任何一步对不上都抛异常，按检查更新失败处理。
+	/// </summary>
+	static async Task<Release> FetchLatestFromPageAsync()
+	{
+		using var pageRequest = new HttpRequestMessage(HttpMethod.Head, ReleasesPage);
+		using var page = await Http.SendAsync(pageRequest);
+		page.EnsureSuccessStatusCode();
+		// HttpClient 自动跟随跳转，RequestUri 是最终到达的地址
+		var final = page.RequestMessage?.RequestUri;
+		var path = final?.AbsolutePath ?? string.Empty;
+		var tag = path.StartsWith(TagPathPrefix, StringComparison.OrdinalIgnoreCase) ? Uri.UnescapeDataString(path[TagPathPrefix.Length..]) : string.Empty;
+		if (!Version.TryParse(tag.TrimStart('v', 'V'), out var parsed))
+		{
+			throw new InvalidOperationException($"发行版页面跳转到了意料之外的地址：{final}");
+		}
+		var version = Normalize(parsed);
+		var name = $"{InstallerPrefix}{version.ToString(3)}.exe";
+		var url = $"{DownloadBase}{tag}/{name}";
+		using var assetRequest = new HttpRequestMessage(HttpMethod.Head, url);
+		using var asset = await Http.SendAsync(assetRequest);
+		if (!asset.IsSuccessStatusCode)
+		{
+			throw new InvalidOperationException($"{tag} 的安装包 {name} 不存在或无法访问（{(int)asset.StatusCode} {asset.ReasonPhrase}）");
+		}
+		long size = asset.Content.Headers.ContentLength ?? throw new InvalidOperationException($"取不到 {tag} 安装包的大小");
+		Log.Info($"备用路径取到最新版本 {tag}，安装包 {url}（{size} 字节），发行说明需到发行版页面查看");
+		return new Release(version, tag, null, name, url, size);
+	}
+
+	/// <summary>
+	/// 匿名接口额度用完时 GitHub 返回 403（rate limit exceeded）或 429。
+	/// </summary>
+	static bool IsRateLimited(HttpResponseMessage response) => response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests;
+
+	/// <summary>
+	/// 日志里写明限流的状态码和额度恢复时间（取自 X-RateLimit-Reset）。
+	/// </summary>
+	static string DescribeRateLimit(HttpResponseMessage response)
+	{
+		var text = $"{(int)response.StatusCode} {response.ReasonPhrase}";
+		if (response.Headers.TryGetValues("X-RateLimit-Reset", out var values) && long.TryParse(values.FirstOrDefault(), out var reset))
+		{
+			text += $"，额度在 {DateTimeOffset.FromUnixTimeSeconds(reset).LocalDateTime:HH:mm} 恢复";
+		}
+		return text;
 	}
 
 	/// <summary>
@@ -392,14 +470,19 @@ internal sealed class Updater
 	{
 		if (MessageDialog.Show(title, $"{message}\n\n可以到发行版页面手动下载最新版本。", "打开发行版页面", "关闭") == 0)
 		{
-			try
-			{
-				Process.Start(new ProcessStartInfo(ReleasesPage) { UseShellExecute = true })?.Dispose();
-			}
-			catch (Exception ex)
-			{
-				Log.Warn("打开发行版页面失败", ex);
-			}
+			OpenPage(ReleasesPage);
+		}
+	}
+
+	static void OpenPage(string url)
+	{
+		try
+		{
+			Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("打开发行版页面失败", ex);
 		}
 	}
 
