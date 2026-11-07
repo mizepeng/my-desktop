@@ -18,12 +18,38 @@ internal static class DesktopHost
 	static IntPtr _workerHost;
 
 	/// <summary>
+	/// Windows 10（内部版本号 22000 以下）。Win10 上桌面图标视图会在 Progman 和资源管理器的顶层 WorkerW 之间搬家，
+	/// Win11 上 WorkerW 是 Progman 的子窗口、图标视图一直在 Progman 里；只针对 Win10 的处理都按它判断，Win11 的行为不变。
+	/// </summary>
+	public static readonly bool IsWindows10 = Environment.OSVersion.Version.Build < 22000;
+
+	/// <summary>
+	/// 上次 FindDesktopWindow 返回的窗口，Win10 上用来发现图标视图换了宿主（见 DesktopDiagnostics）。界面线程和钩子线程都会读写。
+	/// </summary>
+	static IntPtr _lastHost;
+
+	/// <summary>
 	/// 查找承载桌面图标视图（SHELLDLL_DefView）的顶层窗口。通常是 Progman；
 	/// 用过动态壁纸等软件后，图标视图可能被移到某个 WorkerW 中（Win10 换壁纸的淡入动画、幻灯片放映也会这样），直到资源管理器重启。
 	/// 这时要枚举全部顶层窗口才找得到，而本方法在资源管理器的每个界面事件、每次层级调整里都要调用，
 	/// 每次都枚举会让 CPU 一直居高不下（用户反馈 Win10 上持续占用、卡顿），所以记住找到的 WorkerW，它还承载着图标视图就直接用。
 	/// </summary>
 	public static IntPtr FindDesktopWindow()
+	{
+		var host = LocateDesktopWindow();
+		// 查 Win10 点「显示桌面」后背景变黑用：图标视图换宿主时记下桌面窗口结构，并检测之后背景是否变成纯黑
+		if (IsWindows10 && host != IntPtr.Zero)
+		{
+			var previous = Interlocked.Exchange(ref _lastHost, host);
+			if (previous != IntPtr.Zero && previous != host)
+			{
+				DesktopDiagnostics.OnHostChanged(previous, host);
+			}
+		}
+		return host;
+	}
+
+	static IntPtr LocateDesktopWindow()
 	{
 		var progman = FindWindowEx(IntPtr.Zero, IntPtr.Zero, "Progman", null);
 		if (progman != IntPtr.Zero && FindWindowEx(progman, IntPtr.Zero, "SHELLDLL_DefView", null) != IntPtr.Zero)
@@ -1124,10 +1150,43 @@ internal static class DesktopHost
 			"SysListView32" => GetClassName(GetParent(hwnd)) == "SHELLDLL_DefView",
 			"SHELLDLL_DefView" => true,
 			"Progman" => true,
-			"WorkerW" => FindWindowEx(hwnd, IntPtr.Zero, "SHELLDLL_DefView", null) != IntPtr.Zero,
+			"WorkerW" => FindWindowEx(hwnd, IntPtr.Zero, "SHELLDLL_DefView", null) != IntPtr.Zero || (IsWindows10 && IsExplorerDesktopWorker(hwnd)),
 			_ => false,
 		};
 	}
+
+	/// <summary>
+	/// Win10 上资源管理器桌面那一组顶层 WorkerW（画壁纸的那个不装图标视图）：可见、顶层、铺满整个虚拟屏幕、和 Progman 同一进程。
+	/// 资源管理器还有别的顶层 WorkerW（多半隐藏），铺满虚拟屏幕这一条把它们排除在外。
+	/// 图标视图在 WorkerW 里时，前台可能落在这些窗口或 Progman 上，它们都算桌面；只认装着图标视图的 WorkerW 的话，
+	/// 每次点桌面都被当成「桌面不在前台」去激活、又判为失败（用户日志：Win10 上反复「激活桌面失败」，右键菜单点了没反应）。
+	/// 只读窗口属性、不发消息，可以在钩子回调里调用。
+	/// </summary>
+	static bool IsExplorerDesktopWorker(IntPtr hwnd)
+	{
+		if (!IsWindowVisible(hwnd) || GetAncestor(hwnd, GA_PARENT) != GetDesktopWindow())
+		{
+			return false;
+		}
+		var rect = GetWindowRect(hwnd);
+		if (rect.Width < GetSystemMetrics(SM_CXVIRTUALSCREEN) || rect.Height < GetSystemMetrics(SM_CYVIRTUALSCREEN))
+		{
+			return false;
+		}
+		var progman = FindWindowEx(IntPtr.Zero, IntPtr.Zero, "Progman", null);
+		if (progman == IntPtr.Zero || GetWindowThreadProcessId(progman, out uint explorer) == 0)
+		{
+			return false;
+		}
+		return GetWindowThreadProcessId(hwnd, out uint process) != 0 && process == explorer;
+	}
+
+	/// <summary>
+	/// 由本程序激活桌面后，前台窗口是否算已经到了桌面：Win11 上必须正好是目标窗口（行为不变）；
+	/// Win10 上资源管理器可能把前台交给 Progman 或同组的 WorkerW，只要是桌面表面就算成功。
+	/// </summary>
+	public static bool IsDesktopActivated(IntPtr foreground, IntPtr target)
+			=> foreground == target || (IsWindows10 && foreground != IntPtr.Zero && IsDesktopSurface(foreground));
 
 	/// <summary>
 	/// 只隐藏图标控件本身，不改动系统「显示桌面图标」设置，Explorer 重启后自动恢复。

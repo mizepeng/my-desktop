@@ -206,7 +206,7 @@ internal sealed class WallpaperBlur
 	/// Wallpaper Engine、Lively 等动态壁纸把自己的窗口挂在桌面最底层播放：挂在 Progman 或资源管理器的 WorkerW 下面
 	/// （新版系统 WorkerW 本身也挂在 Progman 下面）。这些地方平时只有资源管理器自己的窗口，出现别的程序的可见窗口就是动态壁纸。
 	/// </summary>
-	static bool HasLiveWallpaper()
+	internal static bool HasLiveWallpaper()
 	{
 		var progman = FindWindowEx(IntPtr.Zero, IntPtr.Zero, "Progman", null);
 		if (progman == IntPtr.Zero || GetWindowThreadProcessId(progman, out uint explorer) == 0)
@@ -251,11 +251,24 @@ internal sealed class WallpaperBlur
 			uint color = wallpaper.GetBackgroundColor();
 			var background = Color.FromRgb((byte)color, (byte)(color >> 8), (byte)(color >> 16));
 			var found = new List<(RECT Rect, string Path)>();
+			COMException? skipped = null;
 			uint count = wallpaper.GetMonitorDevicePathCount();
 			for (uint i = 0; i < count; i++)
 			{
 				var id = wallpaper.GetMonitorDevicePathAt(i);
-				var rect = wallpaper.GetMonitorRECT(id);
+				RECT rect;
+				try
+				{
+					rect = wallpaper.GetMonitorRECT(id);
+				}
+				catch (COMException ex) when (DesktopHost.IsWindows10)
+				{
+					// Win10 上列表里没接上（或刚断开）的显示器 GetMonitorRECT 直接返回 E_FAIL，而不是空范围（用户日志 0x80004005），
+					// 以前整次读取因此失败、毛玻璃退回半透明。只跳过这一个显示器，其余照常（读完后再核对显示器个数）
+					Log.Info($"跳过读不出范围的显示器（0x{ex.HResult:X8}）：{id}");
+					skipped = ex;
+					continue;
+				}
 				// 列表里还有没接上的显示器，它们的范围是空的
 				if (rect.Width <= 0 || rect.Height <= 0)
 				{
@@ -263,6 +276,11 @@ internal sealed class WallpaperBlur
 				}
 				var path = wallpaper.GetWallpaper(id) ?? string.Empty;
 				found.Add((rect, File.Exists(path) ? path : string.Empty));
+			}
+			// 跳过的若是接着的显示器（读到的比实际接着的少），拼出来的图缺一块，照以前整次失败、退回半透明
+			if (skipped != null && found.Count < GetSystemMetrics(SM_CMONITORS))
+			{
+				throw new InvalidOperationException($"读到 {found.Count} 个显示器的范围，实际接着 {GetSystemMetrics(SM_CMONITORS)} 个", skipped);
 			}
 			var span = found.Count == 0 ? default : found.Select(m => m.Rect).Aggregate(Union);
 			return found.Select(m => new MonitorWallpaper(m.Rect, span, m.Path, position, background)).ToList();
