@@ -158,6 +158,11 @@ internal static class NativeMethods
 	public const uint GW_HWNDNEXT = 2;
 	public const uint GW_HWNDPREV = 3;
 	public const uint GW_OWNER = 4;
+	public const int SM_CXVIRTUALSCREEN = 78;
+	public const int SM_CYVIRTUALSCREEN = 79;
+	public const int SM_CMONITORS = 80;
+
+	public const uint GA_PARENT = 1;
 	public const uint GA_ROOT = 2;
 
 	public const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
@@ -521,6 +526,17 @@ internal static class NativeMethods
 	[DllImport("gdi32.dll")]
 	public static extern bool DeleteDC(IntPtr hdc);
 
+	[DllImport("user32.dll")]
+	public static extern IntPtr GetDC(IntPtr hwnd);
+
+	[DllImport("user32.dll")]
+	public static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
+
+	public const uint CLR_INVALID = 0xFFFFFFFF;
+
+	[DllImport("gdi32.dll")]
+	public static extern uint GetPixel(IntPtr hdc, int x, int y);
+
 	#endregion
 
 	#region shell32 / shlwapi
@@ -715,23 +731,29 @@ internal static class NativeMethods
 	/// 把窗口切到前台以接收键盘输入。前台属于其他程序（如资源管理器的桌面）时系统会拒绝切换，
 	/// 先注入一个没有任何作用的按键弹起事件，让本进程成为最近的输入来源，系统才允许切换。
 	/// </summary>
-	public static bool ForceForegroundWindow(IntPtr hwnd)
+	public static bool ForceForegroundWindow(IntPtr hwnd) => ForceForegroundWindow(hwnd, foreground => foreground == hwnd);
+
+	/// <summary>
+	/// 同 <see cref="ForceForegroundWindow(IntPtr)"/>，但由 <paramref name="reached"/> 判断前台窗口是否已经算到位：
+	/// 激活桌面时资源管理器可能把前台交给同属桌面的另一个窗口（见 DesktopHost.IsDesktopActivated）。
+	/// </summary>
+	public static bool ForceForegroundWindow(IntPtr hwnd, Func<IntPtr, bool> reached)
 	{
 		// 用户触发命令的那次按键弹起事件可能稍后才送达资源管理器，使它重新成为最近的输入接收者，失败时稍等再试
 		for (int attempt = 0; attempt < 5; attempt++)
 		{
-			if (GetForegroundWindow() == hwnd)
+			if (reached(GetForegroundWindow()))
 			{
 				return true;
 			}
 			keybd_event(VK_NONAME, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-			if (SetForegroundWindow(hwnd) && GetForegroundWindow() == hwnd)
+			if (SetForegroundWindow(hwnd) && reached(GetForegroundWindow()))
 			{
 				return true;
 			}
 			Thread.Sleep(30);
 		}
-		return GetForegroundWindow() == hwnd;
+		return reached(GetForegroundWindow());
 	}
 
 	public static POINT GetCursorPos()

@@ -251,7 +251,17 @@ public partial class App : Application
 		};
 		AppDomain.CurrentDomain.UnhandledException += (_, e) =>
 		{
-			Log.Error("未处理的异常，程序即将退出", e.ExceptionObject as Exception);
+			var exception = e.ExceptionObject as Exception;
+			// 进程退出时 C++/CLI 混合模块（多半是加载进本进程的第三方 Shell 扩展）反初始化找不到 VC 运行库：本程序没有 C++/CLI，
+			// 这时已在正常退出，不影响使用，记成警告，免得排查时当成崩溃（用户日志：升级时旧进程退出报 __std_type_info_destroy_list）
+			if (exception is DllNotFoundException && exception.StackTrace?.Contains("ModuleUninitializer") == true)
+			{
+				Log.Warn("进程退出时第三方 C++/CLI 模块反初始化失败，不影响使用", exception);
+			}
+			else
+			{
+				Log.Error("未处理的异常，程序即将退出", exception);
+			}
 			// 进程即将崩溃，尽量把被隐藏的桌面图标恢复出来
 			if (!DesktopHost.IconsHiddenBySystem())
 			{
