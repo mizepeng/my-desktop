@@ -62,6 +62,14 @@ internal sealed class TrayIcon : IDisposable
 	/// </summary>
 	public event Action? HotkeyPressed;
 
+	/// <summary>
+	/// 只在 Win10 上触发：会话解锁、登录或睡眠唤醒（参数是原因），查 Win10 桌面背景变黑用（见 DesktopDiagnostics）。
+	/// </summary>
+	public event Action<string>? SessionResumed;
+
+	// 是否注册了会话通知（只在 Win10 上注册），退出时要注销
+	bool _sessionNotification;
+
 	public IntPtr Handle => _window.Handle;
 
 	/// <summary>
@@ -94,6 +102,14 @@ internal sealed class TrayIcon : IDisposable
 		_addRetryTimer.Tick += (_, _) => RetryAdd();
 		Add();
 		AddClipboardFormatListener(Handle);
+		if (DesktopHost.IsWindows10)
+		{
+			_sessionNotification = WTSRegisterSessionNotification(Handle, NOTIFY_FOR_THIS_SESSION);
+			if (!_sessionNotification)
+			{
+				Log.Warn($"注册会话通知失败（错误码 {Marshal.GetLastWin32Error()}），解锁后不会检测桌面背景");
+			}
+		}
 	}
 
 	/// <summary>
@@ -123,6 +139,10 @@ internal sealed class TrayIcon : IDisposable
 		_addRetryTimer.Stop();
 		UnregisterHotKey(Handle, HotkeyId);
 		RemoveClipboardFormatListener(Handle);
+		if (_sessionNotification)
+		{
+			WTSUnRegisterSessionNotification(Handle);
+		}
 		var data = CreateData(0);
 		Shell_NotifyIcon(NIM_DELETE, ref data);
 		if (_icon != IntPtr.Zero)
@@ -239,6 +259,14 @@ internal sealed class TrayIcon : IDisposable
 		{
 			HotkeyPressed?.Invoke();
 			handled = true;
+		}
+		else if (DesktopHost.IsWindows10 && msg == WM_WTSSESSION_CHANGE && (int)wParam is WTS_SESSION_UNLOCK or WTS_SESSION_LOGON)
+		{
+			SessionResumed?.Invoke((int)wParam == WTS_SESSION_UNLOCK ? "会话解锁" : "会话登录");
+		}
+		else if (DesktopHost.IsWindows10 && msg == WM_POWERBROADCAST && (int)wParam is PBT_APMRESUMESUSPEND or PBT_APMRESUMEAUTOMATIC)
+		{
+			SessionResumed?.Invoke("睡眠唤醒");
 		}
 		else if (msg == WM_SETTINGCHANGE)
 		{
