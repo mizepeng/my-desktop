@@ -164,6 +164,14 @@ internal sealed class FenceManager
 		_tray.ThemeChanged += SystemTheme.ApplyToMenus;
 		_tray.ClipboardChanged += () => _dispatcher.InvokeAsync(UpdateCutState, DispatcherPriority.Background);
 		_tray.WallpaperChanged += Wallpaper.Refresh;
+		// 查 Win10 桌面背景变黑：解锁、唤醒、显示器和壁纸变化后检测一轮，并定时看桌面窗口布局有没有变
+		if (DesktopHost.IsWindows10)
+		{
+			_tray.SessionResumed += DesktopDiagnostics.Trigger;
+			_tray.DisplayChanged += () => DesktopDiagnostics.Trigger("显示器变化");
+			_tray.WallpaperChanged += () => DesktopDiagnostics.Trigger("壁纸变化");
+			DesktopDiagnostics.Start();
+		}
 		_tray.HotkeyPressed += ToggleSearch;
 		if (!ApplySearchHotkey())
 		{
@@ -453,6 +461,10 @@ internal sealed class FenceManager
 			window.CloseForReal();
 		}
 		_tray?.Dispose();
+		if (DesktopHost.IsWindows10)
+		{
+			DesktopDiagnostics.Stop();
+		}
 	}
 
 	#region 分区增删改
@@ -2654,6 +2666,10 @@ internal sealed class FenceManager
 		{
 			DesktopHost.TraceZOrder("前台换成 {0}", hwnd);
 			KeepFencesAboveDesktop();
+			if (DesktopHost.IsWindows10)
+			{
+				DesktopDiagnostics.OnForegroundChanged(hwnd);
+			}
 			// Explorer 调整层级可能晚于前台切换，稍后再校正一次
 			_zOrderTimer.Stop();
 			_zOrderTimer.Start();

@@ -532,6 +532,34 @@ internal static class NativeMethods
 	[DllImport("user32.dll")]
 	public static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
 
+	public const uint RDW_INVALIDATE = 0x0001;
+	public const uint RDW_ERASE = 0x0004;
+	public const uint RDW_ALLCHILDREN = 0x0080;
+	public const uint RDW_FRAME = 0x0400;
+
+	[DllImport("user32.dll")]
+	public static extern bool RedrawWindow(IntPtr hwnd, IntPtr updateRect, IntPtr updateRegion, uint flags);
+
+	public const uint SPI_SETDESKWALLPAPER = 0x0014;
+	public const uint SPIF_SENDCHANGE = 0x0002;
+
+	[DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+	public static extern bool SystemParametersInfo(uint action, uint param, string value, uint winIni);
+
+	public const int WM_WTSSESSION_CHANGE = 0x02B1;
+	public const int WTS_SESSION_LOGON = 5;
+	public const int WTS_SESSION_UNLOCK = 8;
+	public const int NOTIFY_FOR_THIS_SESSION = 0;
+	public const int WM_POWERBROADCAST = 0x0218;
+	public const int PBT_APMRESUMESUSPEND = 0x0007;
+	public const int PBT_APMRESUMEAUTOMATIC = 0x0012;
+
+	[DllImport("wtsapi32.dll", SetLastError = true)]
+	public static extern bool WTSRegisterSessionNotification(IntPtr hwnd, int flags);
+
+	[DllImport("wtsapi32.dll")]
+	public static extern bool WTSUnRegisterSessionNotification(IntPtr hwnd);
+
 	public const uint CLR_INVALID = 0xFFFFFFFF;
 
 	[DllImport("gdi32.dll")]
