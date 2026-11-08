@@ -37,6 +37,7 @@ internal static class DesktopMenuServer
 	const uint ECS_RADIOCHECK = 0x10;
 	const uint ECF_DEFAULT = 0x0;
 	const uint ECF_HASSUBCOMMANDS = 0x1;
+	const uint ECF_ISSEPARATOR = 0x8;
 	const uint ECF_SEPARATORBEFORE = 0x20;
 
 	public static void Run()
@@ -168,12 +169,47 @@ internal static class DesktopMenuServer
 
 	/// <summary>
 	/// 桌面右键菜单里的「MyDesktop」子菜单，只在桌面空白处右键、且 MyDesktop 正在运行时显示。
+	/// 实现 IObjectWithSite：新版 Windows 11 询问状态时不传选中项，只能从站点取文件夹视图判断是不是桌面。
 	/// </summary>
 	[ComVisible(true)]
 	[ClassInterface(ClassInterfaceType.None)]
-	sealed class RootCommand() : MenuCommand("MyDesktop")
+	sealed class RootCommand() : MenuCommand("MyDesktop"), IObjectWithSite
 	{
 		const uint SIGDN_FILESYSPATH = 0x80058000;
+		const int E_FAIL = unchecked((int)0x80004005);
+
+		// 站点判断失败时只记一次日志，避免每次右键都写
+		static int _siteFailureLogged;
+
+		object? _site;
+
+		// 新版右键菜单（询问状态时不传选中项）不显示扩展的第二级子菜单、也不认 ECF_SEPARATORBEFORE，
+		// 「双击桌面隐藏」的选项直接展开在本菜单里，分隔线改用单独的分隔项
+		bool _flatten;
+
+		public int SetSite(object? site)
+		{
+			_site = site;
+			return 0;
+		}
+
+		public int GetSite(ref Guid iid, out IntPtr site)
+		{
+			site = IntPtr.Zero;
+			if (_site == null)
+			{
+				return E_FAIL;
+			}
+			var unknown = Marshal.GetIUnknownForObject(_site);
+			try
+			{
+				return Marshal.QueryInterface(unknown, in iid, out site);
+			}
+			finally
+			{
+				Marshal.Release(unknown);
+			}
+		}
 
 		public override int GetIcon(IntPtr items, out IntPtr icon)
 		{
@@ -192,7 +228,8 @@ internal static class DesktopMenuServer
 			// 扩展注册在「目录背景」上，文件夹空白处右键也会询问，这里只放行桌面。
 			// 设置里关掉桌面右键菜单后立即隐藏：后台注销扩展包要好几秒，已经启动的本服务进程也可能还在被资源管理器调用；
 			// 主程序一时没应答时照常显示
-			bool shown = IsDesktop(items) && FindMainWindow() != IntPtr.Zero && !(TryQueryState(out _, out _, out bool desktopMenu) && !desktopMenu);
+			_flatten = items == IntPtr.Zero;
+			bool shown = (items == IntPtr.Zero ? IsDesktopSite() : IsDesktop(items)) && FindMainWindow() != IntPtr.Zero && !(TryQueryState(out _, out _, out bool desktopMenu) && !desktopMenu);
 			state = shown ? ECS_ENABLED : ECS_HIDDEN;
 			return 0;
 		}
@@ -207,22 +244,37 @@ internal static class DesktopMenuServer
 		{
 			// 子菜单生成时取一次主程序状态，用来勾选「双击桌面隐藏」的当前选项
 			bool known = TryQueryState(out var target, out bool doubleClickEnabled, out _);
-			return Enumerate(
+			HideTarget? current = known ? target : null;
+			IExplorerCommand[] actions =
 			[
 				new ActionCommand("新建分区", AppCommand.NewFence, false),
 				new ActionCommand("新建文件夹映射分区…", AppCommand.NewPortalFence, false),
 				new ActionCommand("一键整理桌面…", AppCommand.Organize, false),
-				new DoubleClickMenu(known ? target : null, doubleClickEnabled),
-				new ActionCommand("设置…", AppCommand.ShowSettings, true),
+			];
+			if (!_flatten)
+			{
+				return Enumerate(
+				[
+					.. actions,
+					new DoubleClickMenu(current, doubleClickEnabled),
+					new ActionCommand("设置…", AppCommand.ShowSettings, true),
+				], out enumerator);
+			}
+			// 新版右键菜单也不认 ECF_SEPARATORBEFORE，改用单独的分隔项
+			var choices = Enum.GetValues<HideTarget>()
+					.Select(t => (IExplorerCommand)new ChoiceCommand(t, t == current, $"双击桌面隐藏：{t.DisplayName()}", doubleClickEnabled));
+			return Enumerate(
+			[
+				.. actions,
+				new SeparatorCommand(),
+				.. choices,
+				new SeparatorCommand(),
+				new ActionCommand("设置…", AppCommand.ShowSettings, false),
 			], out enumerator);
 		}
 
 		static bool IsDesktop(IntPtr items)
 		{
-			if (items == IntPtr.Zero)
-			{
-				return false;
-			}
 			var array = (IShellItemArray)Marshal.GetObjectForIUnknown(items);
 			try
 			{
@@ -252,6 +304,83 @@ internal static class DesktopMenuServer
 				Marshal.ReleaseComObject(array);
 			}
 		}
+
+		/// <summary>
+		/// Windows 11 26300 起，询问状态时不再传选中项（items 为 null），桌面和文件夹空白处都一样；
+		/// 改从站点按 SID_SFolderView 取文件夹视图，看当前文件夹是不是桌面。
+		/// </summary>
+		bool IsDesktopSite()
+		{
+			string? path = null;
+			try
+			{
+				path = GetSiteFolderPath();
+			}
+			catch (COMException ex)
+			{
+				LogSiteFailure($"0x{ex.HResult:X8}");
+				return false;
+			}
+			if (path == null)
+			{
+				LogSiteFailure(_site == null ? "没有站点" : "站点不提供文件夹视图");
+				return false;
+			}
+			return PathUtil.AreEqual(path, AppPaths.Desktop);
+		}
+
+		string? GetSiteFolderPath()
+		{
+			if (_site is not IOleServiceProvider provider)
+			{
+				return null;
+			}
+			var service = typeof(IFolderView).GUID;
+			var iid = typeof(IFolderView).GUID;
+			if (provider.QueryService(ref service, ref iid, out var viewPtr) != 0 || viewPtr == IntPtr.Zero)
+			{
+				return null;
+			}
+			var view = (IFolderView)Marshal.GetObjectForIUnknown(viewPtr);
+			Marshal.Release(viewPtr);
+			try
+			{
+				var itemIid = typeof(IShellItem).GUID;
+				int hr = view.GetFolder(ref itemIid, out var itemPtr);
+				if (hr != 0)
+				{
+					Marshal.ThrowExceptionForHR(hr);
+				}
+				var item = (IShellItem)Marshal.GetObjectForIUnknown(itemPtr);
+				Marshal.Release(itemPtr);
+				try
+				{
+					item.GetDisplayName(SIGDN_FILESYSPATH, out var path);
+					return path;
+				}
+				catch (COMException)
+				{
+					// 没有文件系统路径的虚拟文件夹（此电脑、库等），不是桌面
+					return string.Empty;
+				}
+				finally
+				{
+					Marshal.ReleaseComObject(item);
+				}
+			}
+			finally
+			{
+				Marshal.ReleaseComObject(view);
+			}
+		}
+
+		static void LogSiteFailure(string reason)
+		{
+			if (Interlocked.Exchange(ref _siteFailureLogged, 1) == 0)
+			{
+				Log.Warn($"桌面右键菜单：没有传入选中项，也无法从站点取得当前文件夹（{reason}），菜单不显示");
+			}
+		}
 	}
 
 	/// <summary>
@@ -270,6 +399,20 @@ internal static class DesktopMenuServer
 		public override int GetFlags(out uint flags)
 		{
 			flags = separatorBefore ? ECF_SEPARATORBEFORE : ECF_DEFAULT;
+			return 0;
+		}
+	}
+
+	/// <summary>
+	/// 单独的分隔项，供不认 ECF_SEPARATORBEFORE 的新版右键菜单使用。
+	/// </summary>
+	[ComVisible(true)]
+	[ClassInterface(ClassInterfaceType.None)]
+	sealed class SeparatorCommand() : MenuCommand(string.Empty)
+	{
+		public override int GetFlags(out uint flags)
+		{
+			flags = ECF_ISSEPARATOR;
 			return 0;
 		}
 	}
@@ -295,21 +438,22 @@ internal static class DesktopMenuServer
 
 		public override int EnumSubCommands(out IntPtr enumerator)
 		{
-			var choices = Enum.GetValues<HideTarget>().Select(t => (IExplorerCommand)new ChoiceCommand(t, t == current)).ToArray();
+			var choices = Enum.GetValues<HideTarget>().Select(t => (IExplorerCommand)new ChoiceCommand(t, t == current, t.DisplayName(), true)).ToArray();
 			return Enumerate(choices, out enumerator);
 		}
 	}
 
 	[ComVisible(true)]
 	[ClassInterface(ClassInterfaceType.None)]
-	sealed class ChoiceCommand(HideTarget target, bool selected) : MenuCommand(target.DisplayName())
+	sealed class ChoiceCommand(HideTarget target, bool selected, string title, bool enabled) : MenuCommand(title)
 	{
 		/// <summary>
 		/// Explorer 把带单选标记的项一律画成选中，所以只给当前选项加标记。
+		/// 展开在 MyDesktop 菜单里时，没有启用双击隐藏就置灰。
 		/// </summary>
 		public override int GetState(IntPtr items, bool okToBeSlow, out uint state)
 		{
-			state = selected ? ECS_RADIOCHECK | ECS_CHECKED : ECS_ENABLED;
+			state = (selected ? ECS_RADIOCHECK | ECS_CHECKED : ECS_ENABLED) | (enabled ? ECS_ENABLED : ECS_DISABLED);
 			return 0;
 		}
 
