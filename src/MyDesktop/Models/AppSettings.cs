@@ -250,6 +250,17 @@ public sealed class AppSettings
 	public bool TextShadow { get; set; } = true;
 
 	/// <summary>
+	/// 默认显示缩略图的扩展名：图片和视频。PDF、Office 文档等的首页预览缩小后像白纸、看不出类型，默认显示类型图标。
+	/// </summary>
+	public const string DefaultThumbnailExtensions = "jpg jpeg png gif bmp webp heic tif tiff ico mp4 mkv mov avi wmv flv webm m4v";
+
+	/// <summary>
+	/// 显示缩略图（内容预览）的扩展名，空格或逗号分隔、带不带点都行，按 OrganizeRule.ParseExtensions 解析；
+	/// 其他文件显示类型图标，文件夹始终显示图标。为空表示所有文件都显示图标。
+	/// </summary>
+	public string ThumbnailExtensions { get; set; } = DefaultThumbnailExtensions;
+
+	/// <summary>
 	/// 快捷方式图标左下角叠加系统的小箭头角标，与资源管理器一致。
 	/// </summary>
 	public bool ShowShortcutArrows { get; set; } = true;

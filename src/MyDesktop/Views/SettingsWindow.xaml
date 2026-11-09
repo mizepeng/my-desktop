@@ -439,6 +439,16 @@
 						</CheckBox>
 					</Border>
 					<Border Style="{StaticResource Card}">
+						<StackPanel>
+							<TextBlock Text="显示缩略图的扩展名" />
+							<TextBlock Style="{StaticResource Hint}" Text="列表里的扩展名显示内容预览，其他文件显示类型图标，文件夹始终显示图标。用空格或逗号分隔，不区分大小写，带不带点都行；清空则所有文件都显示图标" />
+							<DockPanel Margin="0,8,0,0">
+								<Button Margin="8,0,0,0" VerticalAlignment="Center" Content="恢复默认" DockPanel.Dock="Right" Click="ResetThumbnailExtensions_Click" />
+								<TextBox x:Name="ThumbnailExtensionsBox" VerticalContentAlignment="Center" KeyDown="ThumbnailExtensionsBox_KeyDown" LostFocus="ThumbnailExtensionsBox_LostFocus" />
+							</DockPanel>
+						</StackPanel>
+					</Border>
+					<Border Style="{StaticResource Card}">
 						<CheckBox x:Name="TextShadowBox" Click="Setting_Changed">
 							<StackPanel>
 								<TextBlock Text="文字阴影" />
