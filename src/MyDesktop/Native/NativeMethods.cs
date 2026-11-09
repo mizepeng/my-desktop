@@ -170,6 +170,7 @@ internal static class NativeMethods
 	public const uint EVENT_OBJECT_CREATE = 0x8000;
 	public const uint EVENT_OBJECT_DESTROY = 0x8001;
 	public const uint EVENT_OBJECT_SHOW = 0x8002;
+	public const uint EVENT_OBJECT_HIDE = 0x8003;
 	public const uint EVENT_OBJECT_REORDER = 0x8004;
 	public const uint EVENT_OBJECT_FOCUS = 0x8005;
 	public const uint WINEVENT_OUTOFCONTEXT = 0x0000;
@@ -267,6 +268,12 @@ internal static class NativeMethods
 	public static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint colorKey, byte alpha, uint flags);
 
 	public const uint LWA_ALPHA = 0x2;
+
+	/// <summary>
+	/// 用 UpdateLayeredWindow 逐像素透明的分层窗口没有整体透明度，这时返回 false。
+	/// </summary>
+	[DllImport("user32.dll")]
+	public static extern bool GetLayeredWindowAttributes(IntPtr hwnd, out uint colorKey, out byte alpha, out uint flags);
 
 	[DllImport("user32.dll", SetLastError = true)]
 	public static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int cx, int cy, uint flags);
@@ -531,20 +538,6 @@ internal static class NativeMethods
 
 	[DllImport("user32.dll")]
 	public static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
-
-	public const uint RDW_INVALIDATE = 0x0001;
-	public const uint RDW_ERASE = 0x0004;
-	public const uint RDW_ALLCHILDREN = 0x0080;
-	public const uint RDW_FRAME = 0x0400;
-
-	[DllImport("user32.dll")]
-	public static extern bool RedrawWindow(IntPtr hwnd, IntPtr updateRect, IntPtr updateRegion, uint flags);
-
-	public const uint SPI_SETDESKWALLPAPER = 0x0014;
-	public const uint SPIF_SENDCHANGE = 0x0002;
-
-	[DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-	public static extern bool SystemParametersInfo(uint action, uint param, string value, uint winIni);
 
 	public const int WM_WTSSESSION_CHANGE = 0x02B1;
 	public const int WTS_SESSION_LOGON = 5;
