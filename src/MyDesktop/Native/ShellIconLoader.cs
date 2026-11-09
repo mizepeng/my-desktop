@@ -95,6 +95,12 @@ internal static class ShellIconLoader
 
 	public static bool ShowOtherSystemOverlays { get; set; } = true;
 
+	/// <summary>
+	/// 显示缩略图的扩展名（带点，不区分大小写；设置项），其他文件只取类型图标。
+	/// 整体替换、不原地修改（后台线程在读），改了之后要清空缓存重新加载图标。
+	/// </summary>
+	public static IReadOnlySet<string> ThumbnailExtensions { get; set; } = new HashSet<string>();
+
 	static ShellIconLoader()
 	{
 		for (int i = 0; i < WorkerCount; i++)
@@ -202,9 +208,10 @@ internal static class ShellIconLoader
 		var factory = (IShellItemImageFactory)Marshal.GetObjectForIUnknown(ptr);
 		try
 		{
-			// 优先取缩略图（图片、视频等），取不到再退回普通图标。文件夹只取图标：装着文件的文件夹的缩略图是系统自带的黄色文件夹
-			// （露出里面的内容），不随用户换的图标主题变，和空文件夹、分区标签上的文件夹图标对不上
-			uint flags = Directory.Exists(path) ? SIIGBF_ICONONLY : SIIGBF_RESIZETOFIT;
+			// 扩展名在「显示缩略图的扩展名」里的优先取缩略图（图片、视频等），取不到再退回普通图标；其他文件只取类型图标（PDF、Word 的首页预览缩小后像白纸，看不出类型）。
+			// 文件夹始终只取图标：装着文件的文件夹的缩略图是系统自带的黄色文件夹（露出里面的内容），不随用户换的图标主题变，和空文件夹、分区标签上的文件夹图标对不上
+			bool thumbnail = ThumbnailExtensions.Contains(Path.GetExtension(path)) && !Directory.Exists(path);
+			uint flags = thumbnail ? SIIGBF_RESIZETOFIT : SIIGBF_ICONONLY;
 			if (factory.GetImage(new SIZE(size, size), flags, out var bitmap) != 0 || bitmap == IntPtr.Zero)
 			{
 				if (factory.GetImage(new SIZE(size, size), SIIGBF_ICONONLY, out bitmap) != 0 || bitmap == IntPtr.Zero)

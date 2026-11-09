@@ -78,6 +78,7 @@ internal sealed class FenceManager
 		Settings = settings;
 		_startedWithHardware = settings.HardwareAcceleration;
 		ShellIconLoader.ShowShortcutArrows = settings.ShowShortcutArrows;
+		ShellIconLoader.ThumbnailExtensions = OrganizeRule.ParseExtensions(settings.ThumbnailExtensions);
 		ConfigureOverlays();
 		_dispatcher = Dispatcher.CurrentDispatcher;
 		_saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
@@ -1934,6 +1935,15 @@ internal sealed class FenceManager
 	public void ApplyOverlayHandlers()
 	{
 		ConfigureOverlays();
+		ReloadIcons();
+	}
+
+	/// <summary>
+	/// 设置里改了「显示缩略图的扩展名」后，按新设置重新加载全部图标。
+	/// </summary>
+	public void ApplyThumbnails()
+	{
+		ShellIconLoader.ThumbnailExtensions = OrganizeRule.ParseExtensions(Settings.ThumbnailExtensions);
 		ReloadIcons();
 	}
 

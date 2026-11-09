@@ -154,6 +154,7 @@ internal partial class SettingsWindow : Window
 		DesktopFontSizeSlider.Value = Settings.DesktopFontSize;
 		OverlaySettings.LoadValues();
 		ShowIconNamesBox.IsChecked = Settings.ShowIconNames;
+		ThumbnailExtensionsBox.Text = Settings.ThumbnailExtensions;
 		HardwareAccelerationBox.IsChecked = Settings.HardwareAcceleration;
 		FlightAnimationBox.IsChecked = Settings.FlightAnimation;
 		AutoUpdateBox.IsChecked = Settings.AutoCheckUpdates;
@@ -370,6 +371,40 @@ internal partial class SettingsWindow : Window
 		if (hardwareChanged)
 		{
 			FenceManager.ApplyRenderMode(hardware);
+		}
+		_manager.SaveSoon();
+	}
+
+	void ThumbnailExtensionsBox_KeyDown(object sender, KeyEventArgs e)
+	{
+		if (e.Key == Key.Enter)
+		{
+			ApplyThumbnailExtensions(ThumbnailExtensionsBox.Text);
+		}
+	}
+
+	void ThumbnailExtensionsBox_LostFocus(object sender, RoutedEventArgs e) => ApplyThumbnailExtensions(ThumbnailExtensionsBox.Text);
+
+	void ResetThumbnailExtensions_Click(object sender, RoutedEventArgs e)
+	{
+		ThumbnailExtensionsBox.Text = AppSettings.DefaultThumbnailExtensions;
+		ApplyThumbnailExtensions(AppSettings.DefaultThumbnailExtensions);
+	}
+
+	/// <summary>
+	/// 扩展名集合变了才重新加载图标；只改了分隔符、大小写或点时只保存文字。
+	/// </summary>
+	void ApplyThumbnailExtensions(string text)
+	{
+		if (_loading || text == Settings.ThumbnailExtensions)
+		{
+			return;
+		}
+		bool changed = !OrganizeRule.ParseExtensions(text).SetEquals(OrganizeRule.ParseExtensions(Settings.ThumbnailExtensions));
+		Settings.ThumbnailExtensions = text;
+		if (changed)
+		{
+			_manager.ApplyThumbnails();
 		}
 		_manager.SaveSoon();
 	}
@@ -798,9 +833,15 @@ internal partial class SettingsWindow : Window
 				Settings.ShowIconNames = defaults.ShowIconNames;
 				Settings.TextShadow = defaults.TextShadow;
 				Settings.FlightAnimation = defaults.FlightAnimation;
+				bool thumbnailsReset = !OrganizeRule.ParseExtensions(Settings.ThumbnailExtensions).SetEquals(OrganizeRule.ParseExtensions(defaults.ThumbnailExtensions));
+				Settings.ThumbnailExtensions = defaults.ThumbnailExtensions;
 				_manager.ApplyFonts();
 				_manager.RefreshAllAppearance();
 				_manager.RefreshAllViewMode();
+				if (thumbnailsReset)
+				{
+					_manager.ApplyThumbnails();
+				}
 				break;
 			case "角标":
 				Settings.OverlayMode = defaults.OverlayMode;
