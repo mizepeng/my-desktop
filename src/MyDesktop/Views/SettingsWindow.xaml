@@ -74,6 +74,7 @@
 				<ListBoxItem Content="整理规则" />
 				<ListBoxItem Content="备份" />
 				<ListBoxItem Content="使用说明" />
+				<ListBoxItem x:Name="ThanksNavItem" Content="致谢" />
 				<ListBoxItem Content="关于" />
 			</ListBox>
 		</DockPanel>
@@ -636,6 +637,37 @@
 					</ItemsControl>
 				</StackPanel>
 
+				<!-- 致谢：名单来自打包进程序的 THANKS.md（见 Core/ThanksList） -->
+				<StackPanel x:Name="ThanksPage" Visibility="Collapsed">
+					<TextBlock Style="{StaticResource PageTitle}" Text="致谢" />
+					<TextBlock Style="{StaticResource Hint}" Text="MyDesktop 能有今天的样子，离不开下面这些用户：他们报告问题后耐心地发日志、一遍遍帮忙测试，或者提出了被采纳的好建议。谢谢你们！" />
+					<TextBlock x:Name="ThanksError"
+							Margin="0,12,0,0"
+							Style="{StaticResource Hint}"
+							Foreground="{DynamicResource SystemFillColorCautionBrush}"
+							Visibility="Collapsed" />
+					<ItemsControl x:Name="ThanksItems" Margin="0,16,0,0">
+						<ItemsControl.ItemsPanel>
+							<ItemsPanelTemplate>
+								<UniformGrid Columns="2" />
+							</ItemsPanelTemplate>
+						</ItemsControl.ItemsPanel>
+						<ItemsControl.ItemTemplate>
+							<DataTemplate>
+								<Border Margin="0,0,4,4" Style="{StaticResource Card}">
+									<StackPanel>
+										<DockPanel>
+											<TextBlock Margin="8,0,0,0" VerticalAlignment="Center" DockPanel.Dock="Right" Style="{StaticResource Hint}" Text="{Binding Source}" />
+											<TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+										</DockPanel>
+										<TextBlock Style="{StaticResource Hint}" Text="{Binding Summary}" />
+									</StackPanel>
+								</Border>
+							</DataTemplate>
+						</ItemsControl.ItemTemplate>
+					</ItemsControl>
+				</StackPanel>
+
 				<!-- 关于 -->
 				<StackPanel x:Name="AboutPage" Visibility="Collapsed">
 					<TextBlock Style="{StaticResource PageTitle}" Text="关于" />
@@ -645,6 +677,9 @@
 							<StackPanel Margin="16,0,0,0" VerticalAlignment="Center">
 								<TextBlock FontSize="18" FontWeight="SemiBold" Text="MyDesktop 桌面分区" />
 								<TextBlock x:Name="VersionText" Style="{StaticResource Hint}" />
+								<TextBlock Margin="0,4,0,0" FontSize="12">
+									<Hyperlink Click="ThanksLink_Click"><Run x:Name="ThanksLinkText" /></Hyperlink>
+								</TextBlock>
 							</StackPanel>
 						</StackPanel>
 					</Border>
