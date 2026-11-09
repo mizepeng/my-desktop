@@ -172,6 +172,7 @@ internal partial class SettingsWindow : Window
 		VersionText.Text = $"版本 {version?.ToString(3)}";
 		DataDirText.Text = AppPaths.DataDir;
 		HelpList.ItemsSource = Help;
+		LoadThanks();
 		UpdateSliderTexts();
 		// 快捷键被其他程序占用时，打开设置就能看到提示
 		ApplyHotkey();
@@ -229,7 +230,7 @@ internal partial class SettingsWindow : Window
 		{
 			return;
 		}
-		var pages = new[] { GeneralPage, DesktopPage, FencesPage, AppearancePage, OverlaysPage, RulesPage, BackupPage, HelpPage, AboutPage };
+		var pages = new[] { GeneralPage, DesktopPage, FencesPage, AppearancePage, OverlaysPage, RulesPage, BackupPage, HelpPage, ThanksPage, AboutPage };
 		for (int i = 0; i < pages.Length; i++)
 		{
 			pages[i].Visibility = i == NavList.SelectedIndex ? Visibility.Visible : Visibility.Collapsed;
@@ -1007,6 +1008,28 @@ internal partial class SettingsWindow : Window
 	void OpenDataDir_Click(object sender, RoutedEventArgs e) => OpenInExplorer(AppPaths.DataDir);
 
 	void CheckUpdate_Click(object sender, RoutedEventArgs e) => _ = _manager.Updater.CheckAsync(true);
+
+	/// <summary>
+	/// 填充「致谢」页和关于页的「感谢 N 位用户」链接；名单读不出来时记日志，两处都显示读取失败，不显示空名单。
+	/// </summary>
+	void LoadThanks()
+	{
+		try
+		{
+			var people = ThanksList.Load();
+			ThanksItems.ItemsSource = people;
+			ThanksLinkText.Text = $"感谢 {people.Count} 位用户的帮助 →";
+		}
+		catch (Exception ex)
+		{
+			Log.Error("读取致谢名单失败", ex);
+			ThanksError.Text = $"致谢名单读取失败：{ex.Message}";
+			ThanksError.Visibility = Visibility.Visible;
+			ThanksLinkText.Text = "致谢名单读取失败 →";
+		}
+	}
+
+	void ThanksLink_Click(object sender, RoutedEventArgs e) => ThanksNavItem.IsSelected = true;
 
 	void Feedback_Click(object sender, RoutedEventArgs e)
 	{
