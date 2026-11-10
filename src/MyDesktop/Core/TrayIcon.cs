@@ -69,6 +69,8 @@ internal sealed class TrayIcon : IDisposable
 
 	// 是否注册了会话通知（只在 Win10 上注册），退出时要注销
 	bool _sessionNotification;
+	// 显示器开关的电源设置通知（只在 Win10 上注册，查黑屏用），退出时要注销
+	IntPtr _displayStateNotification;
 
 	public IntPtr Handle => _window.Handle;
 
@@ -109,6 +111,12 @@ internal sealed class TrayIcon : IDisposable
 			{
 				Log.Warn($"注册会话通知失败（错误码 {Marshal.GetLastWin32Error()}），解锁后不会检测桌面背景");
 			}
+			var displayState = GUID_CONSOLE_DISPLAY_STATE;
+			_displayStateNotification = RegisterPowerSettingNotification(Handle, ref displayState, DEVICE_NOTIFY_WINDOW_HANDLE);
+			if (_displayStateNotification == IntPtr.Zero)
+			{
+				Log.Warn($"注册显示器开关通知失败（错误码 {Marshal.GetLastWin32Error()}）");
+			}
 		}
 	}
 
@@ -142,6 +150,11 @@ internal sealed class TrayIcon : IDisposable
 		if (_sessionNotification)
 		{
 			WTSUnRegisterSessionNotification(Handle);
+		}
+		if (_displayStateNotification != IntPtr.Zero)
+		{
+			UnregisterPowerSettingNotification(_displayStateNotification);
+			_displayStateNotification = IntPtr.Zero;
 		}
 		var data = CreateData(0);
 		Shell_NotifyIcon(NIM_DELETE, ref data);
@@ -213,6 +226,11 @@ internal sealed class TrayIcon : IDisposable
 
 	IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
 	{
+		// 查 Win10 桌面背景变黑：显示器、设置、会话、电源等系统消息先记一条日志，不影响下面的处理
+		if (DesktopHost.IsWindows10)
+		{
+			DesktopDiagnostics.OnTrayMessage(msg, wParam, lParam);
+		}
 		if (msg == WM_TRAYICON)
 		{
 			switch ((int)lParam)

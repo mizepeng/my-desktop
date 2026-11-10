@@ -546,6 +546,32 @@ internal static class NativeMethods
 	public const int WM_POWERBROADCAST = 0x0218;
 	public const int PBT_APMRESUMESUSPEND = 0x0007;
 	public const int PBT_APMRESUMEAUTOMATIC = 0x0012;
+	public const int PBT_APMSUSPEND = 0x0004;
+	public const int PBT_APMPOWERSTATUSCHANGE = 0x000A;
+	public const int PBT_POWERSETTINGCHANGE = 0x8013;
+	public const int WM_DWMCOMPOSITIONCHANGED = 0x031E;
+	public const int WM_THEMECHANGED = 0x031A;
+	public const int WM_DPICHANGED = 0x02E0;
+	public const int SM_REMOTESESSION = 0x1000;
+	public const int GCLP_HBRBACKGROUND = -10;
+	public const int DEVICE_NOTIFY_WINDOW_HANDLE = 0;
+
+	/// <summary>
+	/// 显示器开关状态（关闭、打开、变暗）的电源设置通知。
+	/// </summary>
+	public static readonly Guid GUID_CONSOLE_DISPLAY_STATE = new("6FE69556-704A-47A0-8F24-C28D936FDA47");
+
+	[DllImport("user32.dll", SetLastError = true)]
+	public static extern IntPtr RegisterPowerSettingNotification(IntPtr recipient, ref Guid powerSetting, int flags);
+
+	[DllImport("user32.dll")]
+	public static extern bool UnregisterPowerSettingNotification(IntPtr handle);
+
+	/// <summary>
+	/// 读别的进程的窗口的类信息也只是查表，不发消息。
+	/// </summary>
+	[DllImport("user32.dll", EntryPoint = "GetClassLongPtrW")]
+	public static extern IntPtr GetClassLongPtr(IntPtr hwnd, int index);
 
 	[DllImport("wtsapi32.dll", SetLastError = true)]
 	public static extern bool WTSRegisterSessionNotification(IntPtr hwnd, int flags);

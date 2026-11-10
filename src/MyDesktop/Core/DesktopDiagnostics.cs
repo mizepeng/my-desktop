@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using MyDesktop.Native;
@@ -28,9 +29,10 @@ internal static class DesktopDiagnostics
 	const int DebounceMilliseconds = 300;
 
 	/// <summary>
-	/// 一轮检测里各次采样的时刻（毫秒，从防抖结束算起，约为事件后 0.3、1、3、10 秒）。
+	/// 一轮检测里各次采样的时刻（毫秒，从防抖结束算起，约为事件后 0.8、1.5、3、10 秒）。
+	/// 第一次不早于事件后 0.8 秒：显示桌面的最小化动画还没播完时，屏幕上还有窗口的残影，读到的像素一半黑一半亮（用户日志 11:58:22）。
 	/// </summary>
-	static readonly int[] ProbeDelays = [0, 700, 2700, 9700];
+	static readonly int[] ProbeDelays = [500, 1200, 2700, 9700];
 
 	/// <summary>
 	/// 定时检查桌面窗口布局的间隔；两层布局下顺便采样一次（只在变黑、恢复时记日志）。
@@ -56,6 +58,14 @@ internal static class DesktopDiagnostics
 	static Layout? _lastLayout;
 	static DateTime? _blackSince;
 	static DateTime _lastResultLog;
+	static DateTime _lastMixedLog;
+	static Timer? _residentTimer;
+	// 第一次看到 DefView 在没被提起的 WorkerW 里的时刻；确认常驻（连续两次）后的起始时刻
+	static DateTime? _residentSeen;
+	static DateTime? _residentSince;
+	// 系统消息日志的限频：每种消息每分钟最多记 MessageLogLimit 条，超出的计数带到下一条里
+	const int MessageLogLimit = 10;
+	static readonly Dictionary<string, (DateTime Start, int Count, int Suppressed)> _messageLogs = [];
 	static readonly Dictionary<string, DateTime> _skipLogged = [];
 	static readonly Dictionary<string, int> _skipSuppressed = [];
 	// 最近一次各类触发（显示桌面、换宿主、会话解锁等）的时刻，特殊 WorkerW 出现时一起记下，看它跟着什么出现
@@ -99,13 +109,23 @@ internal static class DesktopDiagnostics
 	/// <summary>
 	/// 一次采样的结果。Black 为空表示没下结论，原因在 Skip，同类原因的键在 SkipKey（限频用）。颜色是 COLORREF。
 	/// </summary>
-	sealed record Sample(bool? Black, int Sampled, uint Darkest, uint Brightest, string Covering, string? SkipKey = null, string? Skip = null)
+	/// <remarks>
+	/// BlackCount 是其中纯黑的点数；Points 是逐点的坐标、颜色和点上的窗口，一半黑一半亮时记进日志，看亮的那些点上是什么。
+	/// </remarks>
+	sealed record Sample(bool? Black, int Sampled, uint Darkest, uint Brightest, string Covering, string? SkipKey = null, string? Skip = null,
+			int BlackCount = 0, string Points = "")
 	{
+		/// <summary>
+		/// 露出桌面的点里有纯黑的、也有不黑的（用户日志 11:58:22：已经黑了却判成「不是纯黑，最亮 #E4E4E4」）。
+		/// </summary>
+		public bool Mixed => Black == false && BlackCount > 0;
+
 		public override string ToString() => Black switch
 		{
 			null => $"没下结论：{Skip}",
 			true => $"{Sampled} 个露出桌面的点全是纯黑（点上的窗口：{Covering}）",
-			false => $"{Sampled} 个露出桌面的点不是纯黑，最暗 {Hex(Darkest)}，最亮 {Hex(Brightest)}（点上的窗口：{Covering}）",
+			false => $"{Sampled} 个露出桌面的点不是纯黑，最暗 {Hex(Darkest)}，最亮 {Hex(Brightest)}（点上的窗口：{Covering}）"
+					+ (Mixed ? $"；其中 {BlackCount} 个纯黑，逐点：{Points}" : ""),
 		};
 	}
 
@@ -126,9 +146,154 @@ internal static class DesktopDiagnostics
 				return;
 			}
 			_layoutTimer = new Timer(_ => CheckLayout(), null, TimeSpan.Zero, LayoutInterval);
+			_residentTimer = new Timer(_ => CheckResident(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
 		}
 		_dispatcher = Dispatcher.CurrentDispatcher;
 		HookExplorer();
+	}
+
+	/// <summary>
+	/// 托盘隐藏窗口收到的系统消息（界面线程，只在 Win10 上调用）：显示器、工作区、设置、会话、电源、显示器开关、DWM 和主题变化都记一条，
+	/// 附上当时的显示器布局、是否远程会话和前台窗口，查黑屏前那次「显示器变化」到底是什么（用户日志 11-10 11:25:20）。只读、只记日志。
+	/// </summary>
+	public static void OnTrayMessage(int msg, IntPtr wParam, IntPtr lParam)
+	{
+		try
+		{
+			string? kind;
+			string detail;
+			switch (msg)
+			{
+				case WM_DISPLAYCHANGE:
+					kind = "WM_DISPLAYCHANGE";
+					detail = $"分辨率 {lParam.ToInt64() & 0xFFFF}×{(lParam.ToInt64() >> 16) & 0xFFFF}，色深 {wParam.ToInt64()} 位";
+					break;
+				case WM_SETTINGCHANGE:
+					kind = "WM_SETTINGCHANGE";
+					// 只有 wParam 为 0 时 lParam 才是设置区段名字符串（如 ImmersiveColorSet、TraySettings、Policy）
+					string section = wParam == IntPtr.Zero && lParam != IntPtr.Zero ? Marshal.PtrToStringUni(lParam) ?? "" : "";
+					detail = $"SPI=0x{wParam.ToInt64():X}{(section.Length > 0 ? $" 区段「{section}」" : "")}";
+					break;
+				case WM_WTSSESSION_CHANGE:
+					kind = "WM_WTSSESSION_CHANGE";
+					detail = (int)wParam switch
+					{
+						1 => "控制台连入",
+						2 => "控制台断开",
+						3 => "远程连入",
+						4 => "远程断开",
+						5 => "登录",
+						6 => "注销",
+						7 => "锁屏",
+						8 => "解锁",
+						9 => "远程控制状态变化",
+						_ => $"代码 {wParam.ToInt64()}",
+					} + $"（会话 {lParam.ToInt64()}）";
+					break;
+				case WM_POWERBROADCAST:
+					kind = "WM_POWERBROADCAST";
+					detail = DescribePower((int)wParam, lParam);
+					break;
+				case WM_DWMCOMPOSITIONCHANGED:
+					kind = "WM_DWMCOMPOSITIONCHANGED";
+					detail = "DWM 合成状态变化";
+					break;
+				case WM_THEMECHANGED:
+					kind = "WM_THEMECHANGED";
+					detail = "主题变化";
+					break;
+				case WM_DPICHANGED:
+					kind = "WM_DPICHANGED";
+					detail = $"DPI {wParam.ToInt64() & 0xFFFF}";
+					break;
+				default:
+					kind = null;
+					detail = "";
+					break;
+			}
+			if (kind == null)
+			{
+				return;
+			}
+			int suppressed;
+			lock (Gate)
+			{
+				var now = DateTime.Now;
+				var entry = _messageLogs.GetValueOrDefault(kind);
+				if (now - entry.Start >= TimeSpan.FromMinutes(1))
+				{
+					entry = (now, 0, entry.Suppressed);
+				}
+				if (entry.Count >= MessageLogLimit)
+				{
+					_messageLogs[kind] = (entry.Start, entry.Count, entry.Suppressed + 1);
+					return;
+				}
+				suppressed = entry.Suppressed;
+				_messageLogs[kind] = (entry.Start, entry.Count + 1, 0);
+				_lastEvents[$"{kind} {detail}"] = now;
+			}
+			var foreground = GetForegroundWindow();
+			GetWindowThreadProcessId(foreground, out uint process);
+			string note = suppressed > 0 ? $"（上一条之后另有 {suppressed} 条同类消息没记）" : "";
+			Log.Info($"系统消息 {kind}：{detail}{note}；显示器：{DescribeMonitors()}；远程会话：{(GetSystemMetrics(SM_REMOTESESSION) != 0 ? "是" : "否")}；"
+					+ $"前台 {Describe(foreground)}（pid={process}）");
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("记录系统消息失败", ex);
+		}
+	}
+
+	static string DescribePower(int code, IntPtr lParam)
+	{
+		switch (code)
+		{
+			case PBT_APMSUSPEND:
+				return "进入睡眠";
+			case PBT_APMRESUMESUSPEND:
+				return "从睡眠唤醒（用户操作）";
+			case PBT_APMRESUMEAUTOMATIC:
+				return "从睡眠唤醒";
+			case PBT_APMPOWERSTATUSCHANGE:
+				return "电源状态变化";
+			case PBT_POWERSETTINGCHANGE when lParam != IntPtr.Zero:
+				var setting = Marshal.PtrToStructure<Guid>(lParam);
+				// POWERBROADCAST_SETTING：Guid（16 字节）、DataLength（4 字节）、Data
+				int value = Marshal.ReadInt32(lParam, 20);
+				if (setting == GUID_CONSOLE_DISPLAY_STATE)
+				{
+					return value switch
+					{
+						0 => "显示器关闭",
+						1 => "显示器打开",
+						2 => "显示器变暗",
+						_ => $"显示器状态 {value}",
+					};
+				}
+				return $"电源设置 {setting} = {value}";
+			default:
+				return $"代码 0x{code:X}";
+		}
+	}
+
+	/// <summary>
+	/// 每块显示器的范围、工作区和缩放比例。
+	/// </summary>
+	static string DescribeMonitors()
+	{
+		var parts = new List<string>();
+		EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr monitor, IntPtr hdc, ref RECT rect, IntPtr data) =>
+		{
+			var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+			GetMonitorInfo(monitor, ref info);
+			var (_, scale) = GetMonitorWorkArea(monitor);
+			var m = info.rcMonitor;
+			var w = info.rcWork;
+			parts.Add($"({m.Left},{m.Top},{m.Width},{m.Height}) 工作区 ({w.Left},{w.Top},{w.Width},{w.Height}) {scale * 100:F0}%");
+			return true;
+		}, IntPtr.Zero);
+		return parts.Count == 0 ? "无" : string.Join("、", parts);
 	}
 
 	/// <summary>
@@ -335,6 +500,8 @@ internal static class DesktopDiagnostics
 		{
 			_stopped = true;
 			_layoutTimer?.Dispose();
+			_residentTimer?.Dispose();
+			_residentTimer = null;
 			_layoutTimer = null;
 			_debounce?.Dispose();
 			_debounce = null;
@@ -488,10 +655,14 @@ internal static class DesktopDiagnostics
 					LogSkip(when, sample);
 					continue;
 				}
-				// 每轮记一次结果（不黑的至多一分钟一条），之后只在变黑、不再黑时记
+				// 每轮记一次结果（不黑的至多一分钟一条），之后只在变黑、不再黑时记；一半黑一半亮的另外记（至多半分钟一条），带逐点颜色
 				if (!reported && sample.Black == false && ShouldLogResult())
 				{
 					Log.Info($"桌面背景检测（{when}）：{sample}");
+				}
+				else if (sample.Mixed && ShouldLogMixed())
+				{
+					Log.Info($"桌面背景检测（{when}）一部分点纯黑：{sample}");
 				}
 				reported = true;
 				Handle(when, sample, delay == ProbeDelays[^1]);
@@ -618,6 +789,65 @@ internal static class DesktopDiagnostics
 			return new Layout(LayoutKind.Progman, host, IntPtr.Zero);
 		}
 		return wallpaper == IntPtr.Zero ? new Layout(LayoutKind.SimpleWorker, host, IntPtr.Zero) : new Layout(LayoutKind.TwoLayer, host, wallpaper);
+	}
+
+	static bool ShouldLogMixed()
+	{
+		lock (Gate)
+		{
+			var now = DateTime.Now;
+			if (now - _lastMixedLog < TimeSpan.FromSeconds(30))
+			{
+				return false;
+			}
+			_lastMixedLog = now;
+			return true;
+		}
+	}
+
+	/// <summary>
+	/// 每 5 秒看一次 DefView 是不是常驻在 WorkerW 里：在 WorkerW 里、而桌面没被提到普通窗口最上层（不是在显示桌面），连续两次就记「进入常驻」；
+	/// 回到 Progman 时记「结束」和持续多久。用户日志里黑屏都发生在这种状态下（11-10 11:25:20 起 DefView 再没回过 Progman），要知道它从什么时候开始、跟着什么事件。
+	/// </summary>
+	static void CheckResident()
+	{
+		try
+		{
+			var layout = ReadLayout();
+			bool inWorker = layout.Kind is LayoutKind.SimpleWorker or LayoutKind.TwoLayer;
+			bool candidate = inWorker && !DesktopHost.IsDesktopOnTop();
+			string? message = null;
+			lock (Gate)
+			{
+				var now = DateTime.Now;
+				if (candidate)
+				{
+					_residentSeen ??= now;
+					if (_residentSince == null && now - _residentSeen.Value >= TimeSpan.FromSeconds(4))
+					{
+						_residentSince = _residentSeen;
+						message = $"图标视图常驻在 WorkerW 里（桌面没被提起，已持续约 {(now - _residentSince.Value).TotalSeconds:F0} 秒）：{layout}";
+					}
+				}
+				else
+				{
+					_residentSeen = null;
+					if (_residentSince is DateTime since && !inWorker)
+					{
+						_residentSince = null;
+						message = $"图标视图不再常驻 WorkerW（持续 {(now - since).TotalMinutes:F1} 分钟）：{layout}";
+					}
+				}
+			}
+			if (message != null)
+			{
+				Log.Info($"{message}；最近的触发：{RecentEvents()}；{Snapshot(false)}");
+			}
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("检查图标视图是否常驻 WorkerW 失败", ex);
+		}
 	}
 
 	static bool ShouldLogResult()
@@ -814,6 +1044,8 @@ internal static class DesktopDiagnostics
 		}
 		var windows = TopLevelWindows();
 		var points = new List<POINT>();
+		// 每个露出桌面的点上的桌面窗口类名，和 points 一一对应
+		var surfaces = new List<string>();
 		var covering = new HashSet<string>();
 		// 挡住采样点的窗口、判断时越过的看不见的窗口：各按窗口去重，日志里只列前几个
 		var blocking = new Dictionary<IntPtr, string>();
@@ -832,7 +1064,8 @@ internal static class DesktopDiagnostics
 					if (surface != IntPtr.Zero)
 					{
 						points.Add(point);
-						covering.Add(GetClassName(surface));
+						surfaces.Add(GetClassName(surface));
+						covering.Add(surfaces[^1]);
 					}
 				}
 			}
@@ -862,8 +1095,11 @@ internal static class DesktopDiagnostics
 			uint brightest = 0;
 			int darkestSum = int.MaxValue;
 			int brightestSum = -1;
-			foreach (var point in points)
+			int blackCount = 0;
+			var details = new List<string>();
+			for (int i = 0; i < points.Count; i++)
 			{
+				var point = points[i];
 				uint color = GetPixel(screen, point.X, point.Y);
 				if (color == CLR_INVALID)
 				{
@@ -872,6 +1108,8 @@ internal static class DesktopDiagnostics
 				sampled++;
 				color &= 0xFFFFFF;
 				black &= color == 0;
+				blackCount += color == 0 ? 1 : 0;
+				details.Add($"({point.X},{point.Y}) {Hex(color)} {surfaces[i]}");
 				int sum = (int)((color & 0xFF) + ((color >> 8) & 0xFF) + ((color >> 16) & 0xFF));
 				if (sum < darkestSum)
 				{
@@ -888,7 +1126,7 @@ internal static class DesktopDiagnostics
 			{
 				return new Sample(null, sampled, 0, 0, coveringText, "pixel", $"{points.Count} 个露出桌面的点里只读出 {sampled} 个像素（CLR_INVALID，可能在锁屏或安全桌面上）");
 			}
-			return new Sample(black, sampled, darkest, brightest, coveringText);
+			return new Sample(black, sampled, darkest, brightest, coveringText, BlackCount: blackCount, Points: string.Join("、", details));
 		}
 		finally
 		{
@@ -973,7 +1211,8 @@ internal static class DesktopDiagnostics
 			long exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
 			lines.Add($"[{position}] {className} 0x{hwnd.ToInt64():X} pid={process}{(process != explorer ? "（不是资源管理器）" : "")}"
 					+ $" {(visible ? "可见" : "隐藏")}{(cloaked != 0 ? $" DWM 隐藏 {cloaked}" : "")} rect=({rect.Left},{rect.Top},{rect.Width},{rect.Height})"
-					+ $" style=0x{style:X} exstyle=0x{exStyle:X}{(view != IntPtr.Zero ? " 装着图标视图" : "")}{DescribeChildWorkers(hwnd)}");
+					+ $" style=0x{style:X} exstyle=0x{exStyle:X} 类画刷=0x{GetClassLongPtr(hwnd, GCLP_HBRBACKGROUND).ToInt64():X}"
+					+ $"{(view != IntPtr.Zero ? " 装着图标视图" : "")}{DescribeChildWorkers(hwnd)}");
 			return true;
 		}, IntPtr.Zero);
 		if (compact)
