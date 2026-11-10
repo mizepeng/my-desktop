@@ -1,7 +1,7 @@
 namespace MyDesktop.Core;
 
 /// <summary>
-/// 致谢名单：读取打包进程序的仓库根目录 THANKS.md（唯一的名单来源），取出表格里每人的昵称、来源和简述。
+/// 致谢名单：读取打包进程序的仓库 docs/THANKS.md（唯一的名单来源），取出表格里每人的昵称、来源和简述。
 /// 表格按表头的列名找列，列的顺序可以调整；格式不对时抛出异常，由调用方记日志并在界面上提示。
 /// </summary>
 internal static class ThanksList
