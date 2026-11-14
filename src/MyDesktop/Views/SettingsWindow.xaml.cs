@@ -168,8 +168,9 @@ internal partial class SettingsWindow : Window
 		IconSizeBox.SelectedIndex = (int)Settings.DefaultIconSize;
 		BuildColorSwatches();
 		UpdateColorPreview();
-		var version = typeof(App).Assembly.GetName().Version;
-		VersionText.Text = $"版本 {version?.ToString(3)}";
+		var version = System.Reflection.CustomAttributeExtensions
+				.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(typeof(App).Assembly)!.InformationalVersion.Split('+')[0];
+		VersionText.Text = $"版本 {version}";
 		DataDirText.Text = AppPaths.DataDir;
 		HelpList.ItemsSource = Help;
 		LoadThanks();

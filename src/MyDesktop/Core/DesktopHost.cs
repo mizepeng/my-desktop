@@ -1189,11 +1189,16 @@ internal static class DesktopHost
 			=> foreground == target || (IsWindows10 && foreground != IntPtr.Zero && IsDesktopSurface(foreground));
 
 	/// <summary>
-	/// 只隐藏图标控件本身，不改动系统「显示桌面图标」设置，Explorer 重启后自动恢复。
-	/// 用异步版本，避免 Explorer 无响应时拖住本程序。
+	/// Win10 测试版改用 Shell 图标显示标志；Win11 仍只异步隐藏图标控件。
+	/// Shell 操作在独立 STA 线程上执行，避免 Explorer 无响应时拖住界面。
 	/// </summary>
 	public static void SetIconsVisible(bool visible)
 	{
+		if (IsWindows10)
+		{
+			ShellDesktopIcons.SetVisible(visible);
+			return;
+		}
 		var view = FindFolderView();
 		if (view != IntPtr.Zero)
 		{
@@ -1203,6 +1208,10 @@ internal static class DesktopHost
 
 	public static bool AreIconsVisible()
 	{
+		if (IsWindows10)
+		{
+			return ShellDesktopIcons.Visible;
+		}
 		var view = FindFolderView();
 		return view != IntPtr.Zero && IsWindowVisible(view);
 	}
@@ -1212,8 +1221,54 @@ internal static class DesktopHost
 	/// </summary>
 	public static bool IconsHiddenBySystem()
 	{
+		if (IsWindows10 && ShellDesktopIcons.OwnsSetting)
+		{
+			return ShellDesktopIcons.InitiallyHidden;
+		}
 		using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced");
 		return key?.GetValue("HideIcons") is int value && value != 0;
+	}
+
+	internal static int? ReadSystemHideIcons()
+	{
+		using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced");
+		var value = key?.GetValue("HideIcons");
+		return value switch
+		{
+			null => null,
+			int number => number,
+			_ => throw new InvalidDataException("Explorer 的 HideIcons 不是 DWORD。"),
+		};
+	}
+
+	internal static void RestoreSystemHideIcons(int? value)
+	{
+		using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", true)
+				?? throw new InvalidOperationException("无法打开 Explorer 设置以恢复原始 HideIcons。");
+		if (value is int number)
+		{
+			key.SetValue("HideIcons", number, RegistryValueKind.DWord);
+		}
+		else
+		{
+			key.DeleteValue("HideIcons", false);
+		}
+	}
+
+	/// <summary>
+	/// 退出或异常终止前恢复系统图标；Win10 必须恢复已保存的 Shell 状态，不能把程序自己的隐藏当作用户的设置。
+	/// </summary>
+	public static bool RestoreIcons()
+	{
+		if (IsWindows10)
+		{
+			return ShellDesktopIcons.Restore(TimeSpan.FromSeconds(2));
+		}
+		if (!IconsHiddenBySystem())
+		{
+			SetIconsVisible(true);
+		}
+		return true;
 	}
 
 	/// <summary>

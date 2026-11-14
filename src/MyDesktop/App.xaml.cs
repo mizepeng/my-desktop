@@ -7,6 +7,7 @@ using Microsoft.Win32;
 using MyDesktop.Core;
 using MyDesktop.Models;
 using MyDesktop.Services;
+using MyDesktop.Views;
 
 namespace MyDesktop;
 
@@ -47,9 +48,26 @@ public partial class App : Application
 			return;
 		}
 		RegisterExceptionHandlers();
+		if (DesktopHost.IsWindows10)
+		{
+			int failureReported = 0;
+			ShellDesktopIcons.Failed += ex =>
+			{
+				if (Interlocked.Exchange(ref failureReported, 1) != 0)
+				{
+					return;
+				}
+				Dispatcher.BeginInvoke(() =>
+				{
+					MessageDialog.Show("Win10 黑屏测试版", $"无法使用系统图标隐藏方式，测试已中止。请恢复使用正式版，并把 app.log 发给我们。\n\n{ex.Message}", "确定");
+					ExitApp();
+				});
+			};
+		}
 		SystemTheme.ApplyToMenus();
 		Log.Info($"启动 {typeof(App).Assembly.GetName().Version}，数据目录：{AppPaths.DataDir}，管理员权限：{(Environment.IsPrivilegedProcess ? "是" : "否")}，"
 				+ $".NET 运行时：{Environment.Version}，Windows：{WindowsVersion()}");
+		Log.Info("运行 Win10 黑屏测试版 1：仅 Win10 改用 Shell 图标隐藏；黑屏是否改善仍待用户验证。");
 		var settings = SettingsStore.Load(out bool firstRun);
 		FenceManager.ApplyRenderMode(settings.HardwareAcceleration);
 		Manager = new FenceManager(settings);
@@ -263,10 +281,7 @@ public partial class App : Application
 				Log.Error("未处理的异常，程序即将退出", exception);
 			}
 			// 进程即将崩溃，尽量把被隐藏的桌面图标恢复出来
-			if (!DesktopHost.IconsHiddenBySystem())
-			{
-				DesktopHost.SetIconsVisible(true);
-			}
+			DesktopHost.RestoreIcons();
 		};
 		TaskScheduler.UnobservedTaskException += (_, e) =>
 		{

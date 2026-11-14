@@ -189,8 +189,8 @@ internal sealed class FenceManager
 		// 旧版本的登录计划任务迁回 Run 项，不耽误接管桌面
 		_dispatcher.InvokeAsync(AutoStart.MigrateTask, DispatcherPriority.Background);
 
-		// 上次异常退出时桌面图标可能停留在隐藏状态，启动时先恢复
-		if (!DesktopHost.IconsHiddenBySystem())
+		// 上次异常退出时桌面图标可能停留在隐藏状态，Win10 还要读取恢复文件，不能仅凭 HideIcons 跳过恢复
+		if (DesktopHost.IsWindows10 || !DesktopHost.IconsHiddenBySystem())
 		{
 			DesktopHost.SetIconsVisible(true);
 		}
@@ -453,9 +453,9 @@ internal sealed class FenceManager
 		Organizer.Dispose();
 		// 退出接管时恢复资源管理器的桌面图标
 		_takeover?.Dispose();
-		if (_iconsHidden && !DesktopHost.IconsHiddenBySystem())
+		if (_iconsHidden)
 		{
-			DesktopHost.SetIconsVisible(true);
+			DesktopHost.RestoreIcons();
 		}
 		foreach (var window in _windows.ToList())
 		{

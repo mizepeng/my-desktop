@@ -252,12 +252,12 @@ internal sealed class DesktopTakeover : IDisposable
 		_layoutTimer.Stop();
 		UnhookExplorer();
 		_advancedWatcher?.Dispose();
-		if (_active && !DesktopHost.IconsHiddenBySystem())
-		{
-			DesktopHost.SetIconsVisible(true);
-		}
+		bool restored = !_active || DesktopHost.RestoreIcons();
 		_active = false;
-		StopGuard();
+		if (restored)
+		{
+			StopGuard();
+		}
 		foreach (var layer in _layers)
 		{
 			layer.CloseForReal();
@@ -338,6 +338,10 @@ internal sealed class DesktopTakeover : IDisposable
 		if (!_active)
 		{
 			return;
+		}
+		if (DesktopHost.IsWindows10 && !_dpiRelayoutPending)
+		{
+			ShellDesktopIcons.Refresh();
 		}
 		// 缩放比例变化后正在让资源管理器的图标列表短暂显示、重新排列，这时不要把它藏回去
 		if (DesktopHost.AreIconsVisible() && !DesktopHost.IconsHiddenBySystem() && !_dpiRelayoutPending)
