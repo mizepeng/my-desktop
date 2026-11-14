@@ -63,6 +63,11 @@ internal sealed class TrayIcon : IDisposable
 	public event Action? HotkeyPressed;
 
 	/// <summary>
+	/// 其他进程用 WM_COPYDATA 发来数据（参数是 dwData 和 Unicode 文本），返回是否接收。在窗口过程里同步调用，发送方等着结果，不要在里面弹窗。
+	/// </summary>
+	public Func<int, string, bool>? DataReceived { get; set; }
+
+	/// <summary>
 	/// 只在 Win10 上触发：会话解锁、登录或睡眠唤醒（参数是原因），查 Win10 桌面背景变黑用（见 DesktopDiagnostics）。
 	/// </summary>
 	public event Action<string>? SessionResumed;
@@ -99,6 +104,7 @@ internal sealed class TrayIcon : IDisposable
 		ChangeWindowMessageFilterEx(Handle, _taskbarCreatedMessage, MSGFLT_ALLOW, IntPtr.Zero);
 		ChangeWindowMessageFilterEx(Handle, _commandMessage, MSGFLT_ALLOW, IntPtr.Zero);
 		ChangeWindowMessageFilterEx(Handle, _stateMessage, MSGFLT_ALLOW, IntPtr.Zero);
+		ChangeWindowMessageFilterEx(Handle, WM_COPYDATA, MSGFLT_ALLOW, IntPtr.Zero);
 		_icon = LoadAppIcon();
 		_addRetryTimer = new DispatcherTimer { Interval = AddRetryInterval };
 		_addRetryTimer.Tick += (_, _) => RetryAdd();
@@ -264,6 +270,13 @@ internal sealed class TrayIcon : IDisposable
 		{
 			handled = true;
 			return new IntPtr(StateProvider?.Invoke() ?? 0);
+		}
+		else if (msg == WM_COPYDATA)
+		{
+			handled = true;
+			var data = Marshal.PtrToStructure<COPYDATASTRUCT>(lParam);
+			var text = data.lpData == IntPtr.Zero ? string.Empty : Marshal.PtrToStringUni(data.lpData, data.cbData / 2);
+			return DataReceived?.Invoke((int)data.dwData, text) == true ? new IntPtr(1) : IntPtr.Zero;
 		}
 		else if (msg == WM_DISPLAYCHANGE)
 		{

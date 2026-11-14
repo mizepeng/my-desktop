@@ -13,6 +13,7 @@ public enum BackupReason
 	Organize,
 	DeleteFence,
 	Restore,
+	ApplyAppearance,
 }
 
 /// <summary>
@@ -28,11 +29,12 @@ public sealed record BackupEntry(string File, DateTime Time, BackupReason Reason
 		BackupReason.Organize => "一键整理前自动备份",
 		BackupReason.DeleteFence => "删除分区前自动备份",
 		BackupReason.Restore => "恢复配置前自动备份",
+		BackupReason.ApplyAppearance => "外观应用到所有分区前自动备份",
 	};
 }
 
 /// <summary>
-/// 配置备份：整份配置（全部分区与设置）。一键整理、删除分区、恢复配置之前自动备份，也可以手动备份；只保留最近 30 份。
+/// 配置备份：整份配置（全部分区与设置）。一键整理、删除分区、恢复配置、外观应用到所有分区之前自动备份，也可以手动备份；只保留最近 30 份。
 /// </summary>
 internal static class SettingsBackup
 {

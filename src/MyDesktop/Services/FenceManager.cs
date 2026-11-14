@@ -19,6 +19,9 @@ internal sealed class FenceManager
 {
 	const double DefaultWidthDip = 340;
 	const double DefaultHeightDip = 240;
+	// 换算到新显示器组合时分区至少保留的大小
+	const double RemapMinWidthDip = 120;
+	const double RemapMinHeightDip = 80;
 
 	/// <summary>
 	/// 成员对应的文件消失这么久之后才移出分区：改名时旧路径会短暂消失，要等改名通知把成员换成新路径。
@@ -72,6 +75,8 @@ internal sealed class FenceManager
 	bool _flyInAtStartup;
 	// 正在切换标签的标签组（见 ActivateTabAsync）
 	readonly HashSet<FenceGroup> _switchingGroups = [];
+	// 刚换算到新显示器组合、还要避开别的分区的分区（见 RemapToDisplays、ResolveRemappedOverlaps）
+	readonly HashSet<Guid> _remapped = [];
 
 	public FenceManager(AppSettings settings)
 	{
@@ -174,6 +179,7 @@ internal sealed class FenceManager
 			DesktopDiagnostics.Start();
 		}
 		_tray.HotkeyPressed += ToggleSearch;
+		_tray.DataReceived = OnDataReceived;
 		if (!ApplySearchHotkey())
 		{
 			_dispatcher.InvokeAsync(() => _tray?.ShowBalloon($"快捷键 {Settings.SearchHotkey} 已被其他程序占用", "搜索桌面图标的快捷键没有生效，可以在 MyDesktop 设置里换一个。"),
@@ -225,6 +231,7 @@ internal sealed class FenceManager
 			OpenWindow(model);
 		}
 		RefreshAllTabs();
+		ResolveRemappedOverlaps();
 		EnsureAllOnScreen();
 		// 同组没显示的标签先让 DWM 准备好亚克力，第一次切过去时不闪（见 AcrylicBackdrop.WarmUpAsync）
 		_dispatcher.InvokeAsync(() =>
@@ -446,6 +453,8 @@ internal sealed class FenceManager
 		// 先关设置窗口，它关闭时会写回未保存的规则修改
 		_settingsWindow?.Close();
 		_searchWindow?.Close();
+		// 不透明度对话框里没点确定的预览值不保存
+		CloseOpacityDialogs();
 		SaveNow();
 		_mouse?.Dispose();
 		_bandFrame?.Dispose();
@@ -523,6 +532,69 @@ internal sealed class FenceManager
 		}
 		var name = Path.GetFileName(PathUtil.Normalize(folder));
 		CreateFence(UniqueTitle(string.IsNullOrEmpty(name) ? folder : name), folder, near, bounds: bounds);
+	}
+
+	/// <summary>
+	/// 其他进程（「发送到」、右键菜单「映射到桌面分区」）交来要映射的文件夹：在窗口过程里只确认收下，稍后再处理，发送方不用等弹窗。
+	/// </summary>
+	bool OnDataReceived(int id, string text)
+	{
+		if (id != AppCommands.MapFolderData || AppCommands.ParseMapFolders(text, AppPaths.DataDir) is not List<string> folders)
+		{
+			return false;
+		}
+		Log.Info($"收到要映射的文件夹：{string.Join("、", folders)}");
+		_dispatcher.InvokeAsync(() => _ = MapFoldersAsync(folders), DispatcherPriority.Background);
+		return true;
+	}
+
+	/// <summary>
+	/// 把文件夹各建成一个映射分区，放在屏幕上的空位，名字用文件夹名；已经映射过的不重复建，定位到那个分区并提示。
+	/// </summary>
+	public async Task MapFoldersAsync(IReadOnlyList<string> folders)
+	{
+		const string title = "映射到桌面分区";
+		var notFolders = new List<string>();
+		foreach (var folder in folders)
+		{
+			if (!Directory.Exists(folder))
+			{
+				notFolders.Add(folder);
+				continue;
+			}
+			if (!CheckPortalFolder(title, folder))
+			{
+				continue;
+			}
+			var existing = Settings.Fences.FirstOrDefault(f => f.IsPortal && PathUtil.AreEqual(f.FolderPath, folder));
+			if (existing != null && WindowOf(existing.Id) is FenceWindow window)
+			{
+				await LocateFenceAsync(window);
+				MessageDialog.Show(title, $"「{folder}」已经映射成分区「{existing.Title}」了。", "确定");
+				continue;
+			}
+			var name = Path.GetFileName(PathUtil.Normalize(folder));
+			var created = CreateFence(UniqueTitle(string.IsNullOrEmpty(name) ? folder : name), folder);
+			BringToFront(created);
+			Log.Info($"映射文件夹 {folder} → 分区「{created.Model.Title}」");
+		}
+		if (notFolders.Count > 0)
+		{
+			MessageDialog.Show(title, $"只能把文件夹映射成分区，下面这些不是文件夹：\n\n{string.Join("\n", notFolders)}", "确定");
+		}
+	}
+
+	/// <summary>
+	/// 让用户看到这个分区：分区被隐藏时恢复显示，在标签组里没显示的切过去，再提到其他分区之上。
+	/// </summary>
+	async Task LocateFenceAsync(FenceWindow window)
+	{
+		if (_fencesHidden)
+		{
+			ToggleHidden();
+		}
+		await ActivateTabAsync(window, false);
+		BringToFront(window);
 	}
 
 	public void ChangePortalFolder(FenceWindow window)
@@ -2056,10 +2128,53 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
+	/// 分区菜单「外观应用到所有分区」：确认后把这个分区的颜色、不透明度、背景效果、边框、图标大小和图标名称（含「跟随默认外观」）
+	/// 照搬到其他所有分区，不动位置、大小、名称和内容；照搬前先备份配置。
+	/// </summary>
+	public void ApplyAppearanceToAll(FenceWindow source)
+	{
+		var model = source.Model;
+		var others = Settings.Fences.Where(f => f != model).ToList();
+		if (others.Count == 0)
+		{
+			return;
+		}
+		var message = $"把分区「{model.Title}」的外观应用到其他 {others.Count} 个分区？\n\n"
+				+ "会照搬背景颜色、不透明度、背景效果、边框、图标大小和是否显示图标名称；各分区的位置、大小、名称和里面的内容不变。\n\n"
+				+ "应用前会自动备份当前配置，可以在设置里恢复。";
+		if (MessageDialog.Show("外观应用到所有分区", message, "应用", "取消") != 0)
+		{
+			return;
+		}
+		// 开着的不透明度对话框按取消处理，免得之后取消时把照搬来的不透明度改回去
+		CloseOpacityDialogs();
+		SettingsBackup.Create(Settings, BackupReason.ApplyAppearance);
+		foreach (var other in others)
+		{
+			(other.Color, other.Opacity, other.Background, other.Border) = (model.Color, model.Opacity, model.Background, model.Border);
+			(other.IconSize, other.ShowIconNames) = (model.IconSize, model.ShowIconNames);
+		}
+		Log.Info($"分区「{model.Title}」的外观应用到其他 {others.Count} 个分区");
+		RefreshAllAppearance();
+		RefreshAllViewMode();
+		UpdateWallpaperUsage();
+		SaveSoon();
+	}
+
+	void CloseOpacityDialogs()
+	{
+		foreach (var window in _windows)
+		{
+			window.CloseOpacityDialog();
+		}
+	}
+
+	/// <summary>
 	/// 清除各分区单独设置的颜色、不透明度、背景效果、边框、图标大小和图标名称，统一跟随默认外观。
 	/// </summary>
 	public void ResetAllAppearance()
 	{
+		CloseOpacityDialogs();
 		foreach (var model in Settings.Fences)
 		{
 			model.Color = null;
@@ -2477,6 +2592,7 @@ internal sealed class FenceManager
 			}
 		}
 		RefreshAllTabs();
+		ResolveRemappedOverlaps();
 		_takeover?.RelayoutSoon();
 	}
 
@@ -2495,13 +2611,15 @@ internal sealed class FenceManager
 			window.ApplyBounds();
 			window.ApplyBounds();
 		}
+		ResolveRemappedOverlaps();
 		SaveSoon();
 		_takeover?.RelayoutSoon();
 	}
 
 	/// <summary>
 	/// 显示器组合变了：分区现在的布局记到原来的组合下，新组合以前用过的恢复当时的布局（如重新接上外接显示器时分区回到原处），
-	/// 没用过的保持不动，跑到屏幕外的随后由 EnsureAllOnScreen 拉回来。
+	/// 没用过的按原显示器上的相对位置和比例换算到新组合的显示器上（RemapToDisplays），换算后压住别的分区的，
+	/// 等窗口按新位置摆好后由 ResolveRemappedOverlaps 挪到空位。
 	/// </summary>
 	/// <returns>显示器组合变了时返回 true。</returns>
 	bool SwitchDisplayLayout()
@@ -2520,6 +2638,7 @@ internal sealed class FenceManager
 			return true;
 		}
 		Log.Info($"显示器组合变化：{old} → {key}");
+		var unsaved = new List<FenceSettings>();
 		foreach (var model in Settings.Fences)
 		{
 			model.LayoutByDisplay[old] = new FenceLayout(model.X, model.Y, model.Width, model.Height, model.LayoutDpi, model.RollEdge);
@@ -2528,8 +2647,179 @@ internal sealed class FenceManager
 				(model.X, model.Y, model.Width, model.Height) = (saved.X, saved.Y, saved.Width, saved.Height);
 				(model.LayoutDpi, model.RollEdge) = (saved.Dpi, saved.RollEdge);
 			}
+			else
+			{
+				unsaved.Add(model);
+			}
+		}
+		if (unsaved.Count > 0)
+		{
+			RemapToDisplays(unsaved, ParseDisplayKey(old));
 		}
 		return true;
+	}
+
+	/// <summary>
+	/// 第一次到某个显示器组合时，把分区从原来的显示器换算到新组合的显示器上：
+	/// 原显示器还在（范围不变）的不动；同样大小的显示器只是挪了坐标（如拔掉主显示器后笔记本屏幕成了主显示器）的整体平移；
+	/// 原显示器没了的，优先放到新组合里没对应上的显示器，否则放到主显示器，位置和大小按原显示器到新显示器工作区的比例换算，
+	/// 这样一块屏幕上的分区仍按原来的相对位置排开、彼此不重叠。换算过的分区记进 _remapped，之后再避开别的分区。
+	/// </summary>
+	void RemapToDisplays(List<FenceSettings> models, List<RECT> oldMonitors)
+	{
+		var newMonitors = new List<(RECT Bounds, RECT Work, double Scale)>();
+		EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr monitor, IntPtr hdc, ref RECT rect, IntPtr data) =>
+		{
+			var (work, scale) = GetMonitorWorkArea(monitor);
+			newMonitors.Add((rect, work, scale));
+			return true;
+		}, IntPtr.Zero);
+		if (newMonitors.Count == 0)
+		{
+			return;
+		}
+		var (primaryWork, _) = GetMonitorWorkArea(MonitorFromPoint(new POINT(0, 0), MONITOR_DEFAULTTOPRIMARY));
+		int primary = Math.Max(0, newMonitors.FindIndex(m => SameRect(m.Work, primaryWork)));
+		// 每个原显示器对应到新组合里的哪个显示器：先找范围完全相同的，再找大小相同的，剩下的找还没对应上的，都没有就是主显示器
+		var targets = new int[oldMonitors.Count];
+		var used = new HashSet<int>();
+		Array.Fill(targets, -1);
+		for (int i = 0; i < oldMonitors.Count; i++)
+		{
+			int same = newMonitors.FindIndex(m => SameRect(m.Bounds, oldMonitors[i]));
+			if (same >= 0 && used.Add(same))
+			{
+				targets[i] = same;
+			}
+		}
+		for (int i = 0; i < oldMonitors.Count; i++)
+		{
+			if (targets[i] < 0)
+			{
+				var old = oldMonitors[i];
+				int sameSize = Enumerable.Range(0, newMonitors.Count).FirstOrDefault(j => !used.Contains(j)
+						&& newMonitors[j].Bounds.Width == old.Width && newMonitors[j].Bounds.Height == old.Height, -1);
+				if (sameSize >= 0 && used.Add(sameSize))
+				{
+					targets[i] = sameSize;
+				}
+			}
+		}
+		for (int i = 0; i < oldMonitors.Count; i++)
+		{
+			if (targets[i] < 0)
+			{
+				int spare = Enumerable.Range(0, newMonitors.Count).FirstOrDefault(j => !used.Contains(j), -1);
+				targets[i] = spare >= 0 && used.Add(spare) ? spare : primary;
+			}
+		}
+		foreach (var model in models)
+		{
+			var rect = new RECT(model.X, model.Y, model.X + model.Width, model.Y + model.Height);
+			int from = OldMonitorOf(rect, oldMonitors);
+			if (from < 0)
+			{
+				continue;
+			}
+			var source = oldMonitors[from];
+			var (bounds, work, scale) = newMonitors[targets[from]];
+			if (SameRect(bounds, source))
+			{
+				continue;
+			}
+			string before = $"({model.X},{model.Y},{model.Width}×{model.Height})";
+			if (bounds.Width == source.Width && bounds.Height == source.Height)
+			{
+				model.X += bounds.Left - source.Left;
+				model.Y += bounds.Top - source.Top;
+			}
+			else
+			{
+				double sx = (double)work.Width / source.Width;
+				double sy = (double)work.Height / source.Height;
+				int width = Math.Min(work.Width, Math.Max((int)Math.Round(model.Width * sx), (int)Math.Ceiling(RemapMinWidthDip * scale)));
+				int height = Math.Min(work.Height, Math.Max((int)Math.Round(model.Height * sy), (int)Math.Ceiling(RemapMinHeightDip * scale)));
+				int left = work.Left + (int)Math.Round((model.X - source.Left) * sx);
+				int top = work.Top + (int)Math.Round((model.Y - source.Top) * sy);
+				model.X = Math.Clamp(left, work.Left, work.Right - width);
+				model.Y = Math.Clamp(top, work.Top, work.Bottom - height);
+				(model.Width, model.Height) = (width, height);
+				// 已按新显示器的大小换算过，不再按缩放比例之差缩放一次（见 AdaptLayoutToDpi）
+				model.LayoutDpi = (int)Math.Round(scale * 96);
+			}
+			_remapped.Add(model.Id);
+			Log.Info($"分区「{model.Title}」换算到新的显示器组合：{before} → ({model.X},{model.Y},{model.Width}×{model.Height})");
+		}
+	}
+
+	/// <summary>
+	/// 分区原来在哪个显示器上：中心所在的那个，中心不在任何显示器里时取离中心最近的；没有显示器时返回 -1。
+	/// </summary>
+	static int OldMonitorOf(RECT rect, List<RECT> monitors)
+	{
+		var center = new POINT((rect.Left + rect.Right) / 2, (rect.Top + rect.Bottom) / 2);
+		int best = -1;
+		long bestDistance = long.MaxValue;
+		for (int i = 0; i < monitors.Count; i++)
+		{
+			var m = monitors[i];
+			long dx = Math.Max(0, Math.Max(m.Left - center.X, center.X - (m.Right - 1)));
+			long dy = Math.Max(0, Math.Max(m.Top - center.Y, center.Y - (m.Bottom - 1)));
+			if (dx * dx + dy * dy < bestDistance)
+			{
+				best = i;
+				bestDistance = dx * dx + dy * dy;
+			}
+		}
+		return best;
+	}
+
+	static bool SameRect(RECT a, RECT b) => a.Left == b.Left && a.Top == b.Top && a.Right == b.Right && a.Bottom == b.Bottom;
+
+	/// <summary>
+	/// 解析 CurrentDisplayKey 生成的显示器组合；格式不对说明配置被改坏了，直接抛出。
+	/// </summary>
+	static List<RECT> ParseDisplayKey(string key)
+	{
+		return key.Split(';').Select(part =>
+		{
+			var v = part.Split(',').Select(int.Parse).ToArray();
+			if (v.Length != 4)
+			{
+				throw new FormatException($"显示器组合格式不对：{key}");
+			}
+			return new RECT(v[0], v[1], v[2], v[3]);
+		}).ToList();
+	}
+
+	/// <summary>
+	/// 换算到新显示器组合的分区压住了别的分区（如外接显示器上的分区挤到笔记本屏幕上原有的分区上）时，滑到最近的空位；
+	/// 放不下的留在换算的位置并记日志。要在分区窗口按新位置摆好之后调用。
+	/// </summary>
+	void ResolveRemappedOverlaps()
+	{
+		if (_remapped.Count == 0)
+		{
+			return;
+		}
+		foreach (var window in _windows.Where(w => _remapped.Contains(w.Model.Id)))
+		{
+			var layout = window.GetLayoutBounds();
+			if (FindFreeSpot(window, layout) is not RECT spot)
+			{
+				Log.Warn($"分区「{window.Model.Title}」换算到新的显示器组合后压住了别的分区，屏幕上没有足够的空位");
+				continue;
+			}
+			if (spot.Left != layout.Left || spot.Top != layout.Top)
+			{
+				window.Model.X += spot.Left - layout.Left;
+				window.Model.Y += spot.Top - layout.Top;
+				window.ApplyBounds();
+			}
+		}
+		_remapped.Clear();
+		SaveSoon();
+		_takeover?.RelayoutSoon();
 	}
 
 	/// <summary>

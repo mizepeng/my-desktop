@@ -11,7 +11,10 @@ internal static class ExplorerShell
 {
 	static readonly Guid ShellWindowsClsid = new("9BA05972-F6A8-11CF-A442-00A0C90A8F39");
 
-	public static void Open(string path, string workingDirectory)
+	public static void Open(string path, string workingDirectory) => Open(path, null, workingDirectory);
+
+	/// <param name="arguments">命令行参数，为 null 时不带参数。</param>
+	public static void Open(string path, string? arguments, string workingDirectory)
 	{
 		var windows = (IShellWindows)Activator.CreateInstance(Type.GetTypeFromCLSID(ShellWindowsClsid)!)!;
 		object? desktop = null;
@@ -30,7 +33,7 @@ internal static class ExplorerShell
 			}
 			document = ((dynamic)desktop).Document;
 			application = ((dynamic)document).Application;
-			((dynamic)application).ShellExecute(path, Type.Missing, workingDirectory, Type.Missing, 1);
+			((dynamic)application).ShellExecute(path, arguments ?? Type.Missing, workingDirectory, Type.Missing, 1);
 		}
 		finally
 		{

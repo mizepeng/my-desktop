@@ -1,4 +1,6 @@
+using System.Runtime.InteropServices;
 using MyDesktop.Models;
+using MyDesktop.Native;
 using static MyDesktop.Native.NativeMethods;
 
 namespace MyDesktop.Core;
@@ -89,6 +91,56 @@ internal static class AppCommands
 	{
 		AllowSetForegroundWindow(ASFW_ANY);
 		PostMessage(HWND_BROADCAST, RegisterWindowMessage(MessageName), new IntPtr((int)command), IntPtr.Zero);
+	}
+
+	/// <summary>
+	/// 把文件夹映射成分区：「发送到」快捷方式和右键菜单「映射到桌面分区」用，后面跟一个或多个文件夹路径。
+	/// </summary>
+	public const string MapFolderArgument = "--map-folder";
+
+	/// <summary>
+	/// WM_COPYDATA 的 dwData：内容是「数据目录\0文件夹1\0文件夹2…」，各实例只处理数据目录和自己相同的。
+	/// </summary>
+	public const int MapFolderData = 0x4D44_0001;
+
+	const uint CopyDataTimeoutMs = 2000;
+
+	/// <summary>
+	/// 把要映射的文件夹交给正在运行的实例（数据目录相同的那个）；有实例接收时返回 true。
+	/// 托盘窗口要等实例接管桌面前才建好，刚启动的实例可能还收不到，由调用方重试。
+	/// </summary>
+	public static bool SendMapFolders(string dataDir, IReadOnlyList<string> folders)
+	{
+		var text = string.Join("\0", [dataDir, .. folders]);
+		var buffer = Marshal.StringToHGlobalUni(text);
+		try
+		{
+			var data = new COPYDATASTRUCT { dwData = new IntPtr(MapFolderData), cbData = text.Length * 2, lpData = buffer };
+			AllowSetForegroundWindow(ASFW_ANY);
+			for (var window = FindWindowEx(IntPtr.Zero, IntPtr.Zero, null, DesktopMenuServer.MainWindowTitle); window != IntPtr.Zero;
+					window = FindWindowEx(IntPtr.Zero, window, null, DesktopMenuServer.MainWindowTitle))
+			{
+				if (SendCopyDataTimeout(window, WM_COPYDATA, IntPtr.Zero, ref data, SMTO_ABORTIFHUNG, CopyDataTimeoutMs, out var result) != IntPtr.Zero
+						&& result != IntPtr.Zero)
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+		finally
+		{
+			Marshal.FreeHGlobal(buffer);
+		}
+	}
+
+	/// <summary>
+	/// 解析 SendMapFolders 发来的内容；不是发给数据目录 dataDir 的实例时返回 null。
+	/// </summary>
+	public static List<string>? ParseMapFolders(string text, string dataDir)
+	{
+		var parts = text.Split('\0');
+		return PathUtil.AreEqual(parts[0], dataDir) ? parts.Skip(1).Where(p => p.Length > 0).ToList() : null;
 	}
 
 	public static AppCommand? Parse(string? argument)

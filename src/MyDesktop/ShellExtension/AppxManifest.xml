@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
 	桌面右键菜单扩展包（外部位置包，不含程序文件，只为 MyDesktop.exe 提供包身份并注册菜单扩展）。
-	__VERSION__ 由 Pack-DesktopMenu.ps1 替换为程序版本；CLSID 与 DesktopMenuServer.Clsid 保持一致。
+	__VERSION__ 由 Pack-DesktopMenu.ps1 替换为程序版本；CLSID 与 DesktopMenuServer.Clsid、MapFolderClsid 保持一致。
 -->
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
 		xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
@@ -38,6 +38,7 @@
 					<com:ComServer>
 						<com:ExeServer Executable="MyDesktop.exe" Arguments="--shell-extension" DisplayName="MyDesktop 桌面右键菜单">
 							<com:Class Id="54873389-EF3D-41F1-8659-877D58CE2CBD" DisplayName="MyDesktop 桌面右键菜单" />
+							<com:Class Id="8E0A5C1D-3B7F-4C29-9D61-2F4A7B8C5E13" DisplayName="MyDesktop 映射到桌面分区" />
 						</com:ExeServer>
 					</com:ComServer>
 				</com:Extension>
@@ -46,6 +47,10 @@
 					<desktop4:FileExplorerContextMenus>
 						<desktop5:ItemType Type="Directory\Background">
 							<desktop5:Verb Id="MyDesktop" Clsid="54873389-EF3D-41F1-8659-877D58CE2CBD" />
+						</desktop5:ItemType>
+						<!-- 文件夹右键「映射到桌面分区」，CLSID 与 DesktopMenuServer.MapFolderClsid 保持一致 -->
+						<desktop5:ItemType Type="Directory">
+							<desktop5:Verb Id="MyDesktopMapFolder" Clsid="8E0A5C1D-3B7F-4C29-9D61-2F4A7B8C5E13" />
 						</desktop5:ItemType>
 					</desktop4:FileExplorerContextMenus>
 				</desktop4:Extension>
