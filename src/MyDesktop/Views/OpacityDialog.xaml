@@ -1,0 +1,33 @@
+<Window x:Class="MyDesktop.Views.OpacityDialog"
+		x:ClassModifier="internal"
+		xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+		ThemeMode="System"
+		Title="分区不透明度"
+		Width="420"
+		SizeToContent="Height"
+		ResizeMode="NoResize"
+		WindowStartupLocation="CenterScreen"
+		Topmost="True"
+		ShowInTaskbar="False"
+		Icon="/Assets/app.ico">
+	<Grid Margin="24,20,24,20">
+		<Grid.RowDefinitions>
+			<RowDefinition Height="Auto" />
+			<RowDefinition Height="Auto" />
+			<RowDefinition Height="Auto" />
+			<RowDefinition Height="Auto" />
+		</Grid.RowDefinitions>
+		<TextBlock x:Name="HeaderText" Margin="0,0,0,12" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" Text="分区不透明度" />
+		<TextBlock Grid.Row="1" Margin="0,0,0,8" TextWrapping="Wrap" Text="拖动滑块调整背景的不透明度，分区会实时预览；方向键每次调 1%。" />
+		<DockPanel Grid.Row="2">
+			<TextBlock x:Name="ValueText" Width="52" VerticalAlignment="Center" DockPanel.Dock="Right" TextAlignment="Right" />
+			<Slider x:Name="ValueSlider" IsSnapToTickEnabled="True" Maximum="100" Minimum="0" TickFrequency="1" SmallChange="1" LargeChange="10"
+					ValueChanged="ValueSlider_ValueChanged" />
+		</DockPanel>
+		<StackPanel Grid.Row="3" Margin="0,24,0,0" HorizontalAlignment="Right" Orientation="Horizontal">
+			<Button MinWidth="96" Content="确定" IsDefault="True" Style="{DynamicResource AccentButtonStyle}" Click="OkButton_Click" />
+			<Button MinWidth="96" Margin="8,0,0,0" Content="取消" IsCancel="True" Click="CancelButton_Click" />
+		</StackPanel>
+	</Grid>
+</Window>

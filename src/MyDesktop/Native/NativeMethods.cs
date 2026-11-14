@@ -65,6 +65,7 @@ internal static class NativeMethods
 	public const int WM_HOTKEY = 0x0312;
 	public const int WM_SYSCHAR = 0x0106;
 	public const int WM_APP = 0x8000;
+	public const int WM_COPYDATA = 0x004A;
 
 	public const uint MOD_ALT = 0x0001;
 	public const uint MOD_CONTROL = 0x0002;
@@ -366,6 +367,9 @@ internal static class NativeMethods
 
 	[DllImport("user32.dll")]
 	public static extern IntPtr SendMessageTimeout(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
+
+	[DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW")]
+	public static extern IntPtr SendCopyDataTimeout(IntPtr hwnd, int msg, IntPtr wParam, ref COPYDATASTRUCT data, uint flags, uint timeout, out IntPtr result);
 
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
 	public static extern int RegisterWindowMessage(string name);
@@ -972,6 +976,14 @@ internal struct WINDOWPOS
 	public int cx;
 	public int cy;
 	public uint flags;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct COPYDATASTRUCT
+{
+	public IntPtr dwData;
+	public int cbData;
+	public IntPtr lpData;
 }
 
 [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]

@@ -251,6 +251,9 @@ internal partial class FenceWindow : Window
 
 	AppSettings Settings => _manager.Settings;
 
+	// 开着的不透明度对话框（见 PickOpacity），同一个分区只开一个
+	OpacityDialog? _opacityDialog;
+
 	double ScaleFactor => VisualTreeHelper.GetDpi(this).DpiScaleX;
 
 	bool IsCollapsed => Model.RolledUp && !_tempExpanded;
@@ -352,6 +355,7 @@ internal partial class FenceWindow : Window
 		_mouseTabTimer.Stop();
 		_detachPreview?.Dispose();
 		_marquee?.Dispose();
+		CloseOpacityDialog();
 		Close();
 	}
 
@@ -3527,13 +3531,18 @@ internal partial class FenceWindow : Window
 		colors.Add(new("跟随默认外观", () => SetColor(null), Checked: Model.Color == null, Radio: true));
 		items.Add(new("背景颜色", Children: colors));
 
-		var opacities = Appearance.OpacityPresets
-				.Select(percent => new ExtraMenuItem($"{percent}%", () => SetOpacity(percent / 100.0),
-						Checked: Model.Opacity is double value && Math.Abs(value * 100 - percent) < 0.5, Radio: true))
-				.ToList();
-		opacities.Add(separator);
-		opacities.Add(new("跟随默认外观", () => SetOpacity(null), Checked: Model.Opacity == null, Radio: true));
-		items.Add(new("不透明度", Children: opacities));
+		// 单独设置的不透明度在对话框里用滑块精确调整；以前的预设档存的就是对应的小数（如 25% 存成 0.25），滑块直接显示成同样的百分比
+		double opacityPercent = Math.Round(Math.Clamp(Model.Opacity ?? Settings.DefaultOpacity, 0, 1) * 100);
+		items.Add(new("不透明度", Children:
+		[
+			new($"调整…（当前 {opacityPercent:0}%）", PickOpacity, Checked: Model.Opacity != null, Radio: true),
+			separator,
+			new("跟随默认外观", () =>
+			{
+				CloseOpacityDialog();
+				SetOpacity(null);
+			}, Checked: Model.Opacity == null, Radio: true),
+		]));
 
 		var effects = Enum.GetValues<BackgroundEffect>()
 				.Select(effect => new ExtraMenuItem(effect.DisplayName(), () => SetBackground(effect), Checked: Model.Background == effect, Radio: true))
@@ -3557,6 +3566,7 @@ internal partial class FenceWindow : Window
 			separator,
 			new("跟随默认外观", () => SetShowIconNames(null), Checked: Model.ShowIconNames == null, Radio: true),
 		]));
+		items.Add(new("外观应用到所有分区…", () => _manager.ApplyAppearanceToAll(this), Enabled: Settings.Fences.Count > 1));
 		items.Add(separator);
 		items.Add(new("重命名分区", BeginTitleEdit));
 		var tabs = _manager.TabsOf(this);
@@ -3675,6 +3685,40 @@ internal partial class FenceWindow : Window
 		ApplyAppearance();
 		_manager.SaveSoon();
 	}
+
+	/// <summary>
+	/// 用滑块调整这个分区的不透明度，拖动时实时预览；对话框不是模态的，开着时照常能拖动分区。
+	/// 已经开着时只激活它；取消时恢复原来的设置（包括原来跟随默认外观）。
+	/// </summary>
+	void PickOpacity()
+	{
+		if (_opacityDialog != null)
+		{
+			_opacityDialog.Activate();
+			return;
+		}
+		var original = Model.Opacity;
+		_opacityDialog = OpacityDialog.Open(original ?? Settings.DefaultOpacity, value =>
+		{
+			Model.Opacity = value;
+			ApplyAppearance();
+		}, picked =>
+		{
+			_opacityDialog = null;
+			if (picked is double value)
+			{
+				SetOpacity(value);
+				return;
+			}
+			Model.Opacity = original;
+			ApplyAppearance();
+		});
+	}
+
+	/// <summary>
+	/// 关掉开着的不透明度对话框，按取消处理（恢复打开前的值）：删除分区、退出程序，或别处要改这个分区的外观之前调用。
+	/// </summary>
+	public void CloseOpacityDialog() => _opacityDialog?.Close();
 
 	void SetBackground(BackgroundEffect? background)
 	{

@@ -7,6 +7,7 @@ using Microsoft.Win32;
 using MyDesktop.Core;
 using MyDesktop.Models;
 using MyDesktop.Services;
+using MyDesktop.Views;
 
 namespace MyDesktop;
 
@@ -16,6 +17,11 @@ public partial class App : Application
 	/// 恢复配置后重新启动时带上：等原来的进程退出后再启动，不当作重复运行。
 	/// </summary>
 	const string RestartArgument = "--restart";
+
+	/// <summary>
+	/// 把要映射的文件夹交给已在运行的实例时最多等多久（那个实例可能刚开机启动，还在等桌面就绪，见 StartWhenDesktopReady）。
+	/// </summary>
+	static readonly TimeSpan MapFolderWait = TimeSpan.FromSeconds(70);
 
 	Mutex? _mutex;
 	bool _ownsMutex;
@@ -35,9 +41,16 @@ public partial class App : Application
 			Shutdown();
 			return;
 		}
+		var folders = ParseMapFolders(e.Args);
 		bool restart = e.Args.Contains(RestartArgument, StringComparer.OrdinalIgnoreCase);
 		if (!AcquireSingleInstance(restart ? TimeSpan.FromSeconds(20) : TimeSpan.Zero))
 		{
+			if (folders != null)
+			{
+				SendMapFolders(folders);
+				Shutdown();
+				return;
+			}
 			// 已有实例在运行：把命令（默认打开设置）转交给它；开机自启重复拉起时（如旧的 Run 项还没迁移）什么也不做
 			if (!e.Args.Contains(AutoStart.Argument, StringComparer.OrdinalIgnoreCase))
 			{
@@ -53,7 +66,7 @@ public partial class App : Application
 		var settings = SettingsStore.Load(out bool firstRun);
 		FenceManager.ApplyRenderMode(settings.HardwareAcceleration);
 		Manager = new FenceManager(settings);
-		StartWhenDesktopReady(Manager, firstRun, command);
+		StartWhenDesktopReady(Manager, firstRun, command, folders);
 	}
 
 	public void ExitApp()
@@ -113,7 +126,7 @@ public partial class App : Application
 	/// <summary>
 	/// 开机自启时 Explorer 可能还没创建好桌面窗口，轮询等待（最多约一分钟）。
 	/// </summary>
-	static void StartWhenDesktopReady(FenceManager manager, bool firstRun, AppCommand? command)
+	static void StartWhenDesktopReady(FenceManager manager, bool firstRun, AppCommand? command, List<string>? folders)
 	{
 		void Start()
 		{
@@ -121,6 +134,10 @@ public partial class App : Application
 			if (command is AppCommand value)
 			{
 				manager.ExecuteCommand(value);
+			}
+			if (folders != null)
+			{
+				_ = manager.MapFoldersAsync(folders);
 			}
 		}
 		if (DesktopHost.FindFolderView() != IntPtr.Zero)
@@ -160,6 +177,34 @@ public partial class App : Application
 			}
 		}
 		return command;
+	}
+
+	/// <summary>
+	/// --map-folder 后面的参数都是要映射的文件夹（「发送到」把选中的项目追加在命令行末尾）；没有这个参数时返回 null。
+	/// </summary>
+	static List<string>? ParseMapFolders(string[] args)
+	{
+		int index = Array.FindIndex(args, a => string.Equals(a, AppCommands.MapFolderArgument, StringComparison.OrdinalIgnoreCase));
+		return index < 0 ? null : args.Skip(index + 1).ToList();
+	}
+
+	/// <summary>
+	/// 已有实例在运行：把要映射的文件夹交给它。实例刚启动、还在等桌面就绪时托盘窗口还没建好，隔一会儿再试，最多等 MapFolderWait；
+	/// 一直交不出去时提示，不悄悄丢掉。
+	/// </summary>
+	static void SendMapFolders(List<string> folders)
+	{
+		var deadline = DateTime.UtcNow + MapFolderWait;
+		while (!AppCommands.SendMapFolders(AppPaths.DataDir, folders))
+		{
+			if (DateTime.UtcNow >= deadline)
+			{
+				Log.Warn($"没能把要映射的文件夹交给正在运行的 MyDesktop：{string.Join("、", folders)}");
+				MessageDialog.Show("映射到桌面分区", "MyDesktop 正在运行，但没有响应。请稍后再试。", "确定");
+				return;
+			}
+			Thread.Sleep(500);
+		}
 	}
 
 	/// <summary>

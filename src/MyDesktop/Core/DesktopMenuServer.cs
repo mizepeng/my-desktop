@@ -20,6 +20,11 @@ internal static class DesktopMenuServer
 	public static readonly Guid Clsid = new("54873389-EF3D-41F1-8659-877D58CE2CBD");
 
 	/// <summary>
+	/// 文件夹右键菜单「映射到桌面分区」，与扩展包清单中第二个 com:Class 和 Directory 上的 desktop5:Verb 保持一致。
+	/// </summary>
+	public static readonly Guid MapFolderClsid = new("8E0A5C1D-3B7F-4C29-9D61-2F4A7B8C5E13");
+
+	/// <summary>
 	/// 主程序托盘窗口的标题，用来判断 MyDesktop 是否在运行、向它查询状态。
 	/// </summary>
 	public const string MainWindowTitle = "MyDesktopTrayHost";
@@ -53,11 +58,17 @@ internal static class DesktopMenuServer
 	static void Serve()
 	{
 		var clsid = Clsid;
-		int hr = CoRegisterClassObject(ref clsid, new ClassFactory(), CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE, out uint cookie);
+		int hr = CoRegisterClassObject(ref clsid, new ClassFactory(() => new RootCommand()), CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE, out uint cookie);
 		if (hr != 0)
 		{
 			Log.Warn($"注册桌面右键菜单服务失败：0x{hr:X8}");
 			return;
+		}
+		var mapClsid = MapFolderClsid;
+		hr = CoRegisterClassObject(ref mapClsid, new ClassFactory(() => new MapFolderCommand()), CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE, out uint mapCookie);
+		if (hr != 0)
+		{
+			Log.Warn($"注册文件夹右键菜单「映射到桌面分区」失败：0x{hr:X8}");
 		}
 		Thread.Sleep(GracePeriod);
 		while (FindMainWindow() != IntPtr.Zero)
@@ -65,6 +76,10 @@ internal static class DesktopMenuServer
 			Thread.Sleep(PollInterval);
 		}
 		CoRevokeClassObject(cookie);
+		if (hr == 0)
+		{
+			CoRevokeClassObject(mapCookie);
+		}
 	}
 
 	/// <summary>
@@ -84,7 +99,7 @@ internal static class DesktopMenuServer
 
 	[ComVisible(true)]
 	[ClassInterface(ClassInterfaceType.None)]
-	sealed class ClassFactory : IClassFactory
+	sealed class ClassFactory(Func<IExplorerCommand> create) : IClassFactory
 	{
 		const int CLASS_E_NOAGGREGATION = unchecked((int)0x80040110);
 
@@ -95,7 +110,7 @@ internal static class DesktopMenuServer
 			{
 				return CLASS_E_NOAGGREGATION;
 			}
-			var unknown = Marshal.GetIUnknownForObject(new RootCommand());
+			var unknown = Marshal.GetIUnknownForObject(create());
 			try
 			{
 				return Marshal.QueryInterface(unknown, in iid, out result);
@@ -380,6 +395,109 @@ internal static class DesktopMenuServer
 			{
 				Log.Warn($"桌面右键菜单：没有传入选中项，也无法从站点取得当前文件夹（{reason}），菜单不显示");
 			}
+		}
+	}
+
+	/// <summary>
+	/// 文件夹右键菜单里的「映射到桌面分区」：把选中的文件夹交给正在运行的 MyDesktop，没在运行时带着这些文件夹启动它。
+	/// </summary>
+	[ComVisible(true)]
+	[ClassInterface(ClassInterfaceType.None)]
+	sealed class MapFolderCommand() : MenuCommand("映射到桌面分区")
+	{
+		const uint SIGDN_FILESYSPATH = 0x80058000;
+
+		public override int GetIcon(IntPtr items, out IntPtr icon)
+		{
+			icon = Marshal.StringToCoTaskMemUni($"{Environment.ProcessPath},0");
+			return 0;
+		}
+
+		public override int GetCanonicalName(out Guid name)
+		{
+			name = MapFolderClsid;
+			return 0;
+		}
+
+		public override int GetState(IntPtr items, bool okToBeSlow, out uint state)
+		{
+			// 新版 Windows 11 询问状态时可能不传选中项，这时照常显示，点击时再看选中的是不是文件夹
+			state = items == IntPtr.Zero || Folders(items).Count > 0 ? ECS_ENABLED : ECS_HIDDEN;
+			return 0;
+		}
+
+		public override int Invoke(IntPtr items, IntPtr bindContext)
+		{
+			var folders = items == IntPtr.Zero ? [] : Folders(items);
+			if (folders.Count == 0)
+			{
+				Log.Warn("文件夹右键菜单「映射到桌面分区」：选中项里没有文件夹");
+				return 0;
+			}
+			// 不在资源管理器调用 Invoke 的线程上等：交给主程序最多要等几秒，启动主程序还要经资源管理器
+			new Thread(() => MapFolders(folders)) { Name = "MapFolder", IsBackground = false }.Start();
+			return 0;
+		}
+
+		static void MapFolders(List<string> folders)
+		{
+			try
+			{
+				if (FindMainWindow() != IntPtr.Zero && AppCommands.SendMapFolders(AppPaths.DataDir, folders))
+				{
+					return;
+				}
+				// 主程序没在运行：经资源管理器启动，不继承本服务进程的包身份
+				var arguments = AppCommands.MapFolderArgument + " " + string.Join(" ", folders.Select(QuoteArgument));
+				ExplorerShell.Open(Environment.ProcessPath!, arguments, Path.GetDirectoryName(Environment.ProcessPath!)!);
+			}
+			catch (Exception ex)
+			{
+				Log.Warn($"文件夹右键菜单「映射到桌面分区」失败：{string.Join("、", folders)}", ex);
+			}
+		}
+
+		/// <summary>
+		/// 命令行里给路径加引号；以反斜杠结尾的（如 D:\）要再补一个，否则会把后面的引号转义掉。
+		/// </summary>
+		static string QuoteArgument(string path) => "\"" + (path.EndsWith('\\') ? path + "\\" : path) + "\"";
+
+		/// <summary>
+		/// 选中项里有文件系统路径的文件夹。
+		/// </summary>
+		static List<string> Folders(IntPtr items)
+		{
+			var result = new List<string>();
+			var array = (IShellItemArray)Marshal.GetObjectForIUnknown(items);
+			try
+			{
+				array.GetCount(out uint count);
+				for (uint i = 0; i < count; i++)
+				{
+					array.GetItemAt(i, out var item);
+					try
+					{
+						item.GetDisplayName(SIGDN_FILESYSPATH, out var path);
+						if (Directory.Exists(path))
+						{
+							result.Add(path);
+						}
+					}
+					catch (COMException)
+					{
+						// 没有文件系统路径的虚拟项目（此电脑、库等）
+					}
+					finally
+					{
+						Marshal.ReleaseComObject(item);
+					}
+				}
+			}
+			finally
+			{
+				Marshal.ReleaseComObject(array);
+			}
+			return result;
 		}
 	}
 
