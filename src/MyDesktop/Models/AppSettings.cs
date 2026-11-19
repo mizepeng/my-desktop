@@ -194,6 +194,21 @@ public sealed class AppSettings
 	/// </summary>
 	public int CollapseDelay { get; set; } = 400;
 
+	/// <summary>
+	/// 卷起的分区连标题栏也藏起来，鼠标移到收起那一条所在的位置时再展开；分区单独设置 FenceSettings.AutoHide 时以分区为准。默认关闭。
+	/// </summary>
+	public bool AutoHide { get; set; }
+
+	/// <summary>
+	/// 自动隐藏的分区藏起来后，在收起那一条靠收向的一侧留一道细线，提示分区藏在这里。
+	/// </summary>
+	public bool AutoHideShowLine { get; set; }
+
+	/// <summary>
+	/// 鼠标在自动隐藏的分区那一条上停多久才展开（毫秒），免得鼠标路过时误弹出；0 为立即展开。
+	/// </summary>
+	public int AutoHideRevealDelay { get; set; } = 150;
+
 	public bool SnapToEdges { get; set; } = true;
 
 	/// <summary>
@@ -479,6 +494,11 @@ public sealed class FenceSettings
 	/// 标题栏所在、卷起时收向的边：按卷起方向和位置确定，移动分区后随之更新（收起状态下拖到屏幕下边或左右边时也更新）。
 	/// </summary>
 	public RollEdge RollEdge { get; set; }
+
+	/// <summary>
+	/// 卷起后是否连标题栏也藏起来；为空时跟随全局 AppSettings.AutoHide。
+	/// </summary>
+	public bool? AutoHide { get; set; }
 
 	public bool Locked { get; set; }
 
