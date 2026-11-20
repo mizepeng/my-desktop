@@ -56,6 +56,11 @@ internal sealed class DesktopTakeover : IDisposable
 	/// </summary>
 	static readonly TimeSpan RehideLogInterval = TimeSpan.FromMinutes(10);
 
+	/// <summary>
+	/// 把新图标挪出分区底下后，最多等资源管理器这么久报告新位置；期间图标层直接把它画在要挪到的格子上。
+	/// </summary>
+	static readonly TimeSpan MoveOutWait = TimeSpan.FromSeconds(3);
+
 	readonly FenceManager _manager;
 	readonly Dispatcher _dispatcher;
 	readonly List<DesktopLayerWindow> _layers = [];
@@ -104,6 +109,9 @@ internal sealed class DesktopTakeover : IDisposable
 	DrawFrameWindow? _marquee;
 	// 见过的桌面项目，用来认出新出现的文件；为 null 时下一次读到的是全量（接管、资源管理器重启），不算新文件
 	HashSet<string>? _seenKeys;
+	// 正被挪出分区底下的新图标：资源管理器报告的原格子、要挪到的格子和开始挪的时刻。
+	// 资源管理器报告新位置之前，图标层直接画在要挪到的格子上，不在分区底下露一下再跳过去
+	readonly Dictionary<string, (POINT From, POINT To, DateTime Since)> _movingOut = new(StringComparer.OrdinalIgnoreCase);
 
 	public DesktopTakeover(FenceManager manager)
 	{
@@ -290,10 +298,12 @@ internal sealed class DesktopTakeover : IDisposable
 		}
 		var fresh = TakeNewKeys();
 		_manager.OnDesktopItemsChanged();
+		SettleMovingOut();
+		// 先决定落在分区底下的新图标挪到哪里，图标层第一次画它就画在那里，不在分区底下露一下（Max 实测）
+		MoveOutFromUnderFences(fresh);
 		Relayout();
 		TryPendingRename();
 		PlacePending();
-		MoveOutFromUnderFences(fresh);
 	}
 
 	void Activate()
@@ -901,7 +911,7 @@ internal sealed class DesktopTakeover : IDisposable
 		var loose = LooseEntries(snapshot);
 		var placed = snapshot.AutoArrange && !_keepExplorerPlaces
 				? Arrange(snapshot, loose)
-				: loose.Select(e => (Entry: e, Cell: ToCell(snapshot, e.Position))).ToList();
+				: loose.Select(e => (Entry: e, Cell: _movingOut.TryGetValue(e.Key, out var move) ? move.To : ToCell(snapshot, e.Position))).ToList();
 		var placement = new Dictionary<string, POINT>(StringComparer.OrdinalIgnoreCase);
 		var groups = _layers.ToDictionary(l => l, _ => new List<(DesktopEntry Entry, POINT Cell)>());
 		foreach (var item in placed)
@@ -1020,7 +1030,9 @@ internal sealed class DesktopTakeover : IDisposable
 		int insetY = spacing.Y / 8;
 		RECT Inner(POINT c) => new(c.X + insetX, c.Y + insetY, c.X + spacing.X - insetX, c.Y + spacing.Y - insetY);
 		bool Covered(POINT c) => blocked.Any(b => b.IntersectsWith(Inner(c)));
-		var occupied = snapshot.Items.Where(e => !fenced.Contains(e.Key) && !candidates.Contains(e.Key))
+		// 分区里的图标在资源管理器的隐藏列表里也还占着格子（归入分区前的位置）。开着「将图标与网格对齐」时，
+		// 写到这种格子上会被资源管理器顺延到下一个空格，可能又落回分区底下（Max 实测），所以它们也算占用
+		var occupied = snapshot.Items.Where(e => !candidates.Contains(e.Key))
 				.Select(e => Inner(ToCell(snapshot, e.Position))).ToList();
 		bool Free(POINT c) => !Covered(c) && !occupied.Any(o => o.IntersectsWith(Inner(c)));
 		var keys = new List<string>();
@@ -1059,6 +1071,7 @@ internal sealed class DesktopTakeover : IDisposable
 				keys.Add(entry.Key);
 				points.Add(ToPosition(snapshot, free));
 				occupied.Add(Inner(free));
+				_movingOut[entry.Key] = (cell, free, DateTime.UtcNow);
 			}
 			else
 			{
@@ -1069,6 +1082,66 @@ internal sealed class DesktopTakeover : IDisposable
 		if (keys.Count > 0)
 		{
 			Items.Move(keys, points);
+			// 资源管理器一直不报告新位置时，也要按时结束「先画在要挪到的格子上」
+			var timer = new DispatcherTimer { Interval = MoveOutWait + TimeSpan.FromMilliseconds(500) };
+			timer.Tick += (_, _) =>
+			{
+				timer.Stop();
+				if (!_disposed && _movingOut.Count > 0)
+				{
+					SettleMovingOut();
+					Relayout();
+				}
+			};
+			timer.Start();
+		}
+	}
+
+	/// <summary>
+	/// 核对正被挪出分区底下的图标：资源管理器报告了新位置（或项目没了）就不再替它决定画在哪里；
+	/// 新位置不是要挪到的格子时记下来，又被分区挡住时记警告；超时还没动也记警告。
+	/// </summary>
+	void SettleMovingOut()
+	{
+		if (_movingOut.Count == 0 || Items.Snapshot is not DesktopSnapshot snapshot)
+		{
+			return;
+		}
+		var spacing = snapshot.Spacing;
+		var blocked = _manager.FenceLayoutBounds();
+		var now = DateTime.UtcNow;
+		foreach (var (key, move) in _movingOut.ToList())
+		{
+			if (snapshot.ByKey.GetValueOrDefault(key) is not DesktopEntry entry)
+			{
+				_movingOut.Remove(key);
+				continue;
+			}
+			var cell = ToCell(snapshot, entry.Position);
+			if (cell.X == move.From.X && cell.Y == move.From.Y)
+			{
+				if (now - move.Since > MoveOutWait)
+				{
+					Log.Warn($"资源管理器 {MoveOutWait.TotalSeconds:0} 秒内没有把 {entry.DisplayName} 从 ({cell.X}, {cell.Y}) 挪到 ({move.To.X}, {move.To.Y})，仍在分区底下");
+					_movingOut.Remove(key);
+				}
+				continue;
+			}
+			_movingOut.Remove(key);
+			if (cell.X == move.To.X && cell.Y == move.To.Y)
+			{
+				continue;
+			}
+			var inner = new RECT(cell.X + spacing.X / 8, cell.Y + spacing.Y / 8, cell.X + spacing.X - spacing.X / 8, cell.Y + spacing.Y - spacing.Y / 8);
+			string message = $"资源管理器把 {entry.DisplayName} 摆到了 ({cell.X}, {cell.Y})，不是要挪到的 ({move.To.X}, {move.To.Y})";
+			if (blocked.Any(b => b.IntersectsWith(inner)))
+			{
+				Log.Warn($"{message}，又被分区挡住");
+			}
+			else
+			{
+				Log.Info(message);
+			}
 		}
 	}
 
