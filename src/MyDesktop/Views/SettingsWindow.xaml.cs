@@ -947,6 +947,18 @@ internal partial class SettingsWindow : Window
 
 	void Rule_LostFocus(object sender, RoutedEventArgs e) => SaveRules();
 
+	/// <summary>
+	/// 别处（图标右键菜单「以后把这类文件都放到这里…」）改了规则列表，设置窗口开着时重新载入，免得下次保存时用旧列表把它盖掉。
+	/// </summary>
+	public void ReloadRules()
+	{
+		_rules.Clear();
+		foreach (var rule in Settings.Rules)
+		{
+			_rules.Add(rule);
+		}
+	}
+
 	void SaveRules()
 	{
 		Settings.Rules = _rules.ToList();
@@ -998,6 +1010,57 @@ internal partial class SettingsWindow : Window
 		{
 			_rules.Remove(rule);
 			SaveRules();
+		}
+	}
+
+	/// <summary>
+	/// 给分类表里还没有规则的类别各建一条规则，排在第一条按快捷方式扩展名归类的规则前面（没有就排在兜底规则前面）：
+	/// 排在后面的话快捷方式先被「快捷方式」规则收走，类别规则永远匹配不到。旧配置升级上来不会自动加，由用户在这里决定。
+	/// </summary>
+	void AddCategoryRules_Click(object sender, RoutedEventArgs e)
+	{
+		var names = ShortcutCategories.Names();
+		if (ShortcutCategories.LastError is string error)
+		{
+			MessageDialog.Show("添加分类规则", $"快捷方式分类表读不出来：\n\n{error}\n\n请先改好 {ShortcutCategories.FilePath}。", "确定");
+			return;
+		}
+		var existing = _rules.Select(r => r.ShortcutCategory.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+		var added = OrganizeRule.CreateCategoryRules(names.Where(n => !existing.Contains(n)));
+		if (added.Count == 0)
+		{
+			MessageDialog.Show("添加分类规则", "分类表里的每个类别都已经有规则了。", "确定");
+			return;
+		}
+		var list = _rules.ToList();
+		int index = list.FindIndex(r => !r.IsFallback && OrganizeRule.ParseExtensions(r.Extensions).Contains(".lnk"));
+		if (index < 0)
+		{
+			index = list.FindIndex(r => r.IsFallback);
+		}
+		if (index < 0)
+		{
+			index = list.Count;
+		}
+		foreach (var rule in added)
+		{
+			_rules.Insert(index++, rule);
+		}
+		SaveRules();
+		Log.Info($"添加分类规则：{string.Join("、", added.Select(r => r.Name))}");
+	}
+
+	void EditCategories_Click(object sender, RoutedEventArgs e)
+	{
+		try
+		{
+			var file = ShortcutCategories.EnsureFile();
+			ExplorerShell.Open("notepad.exe", $"\"{file}\"", Path.GetDirectoryName(file)!);
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("打开快捷方式分类表失败", ex);
+			MessageDialog.Show("编辑分类表", $"打不开分类表：{ex.Message}", "确定");
 		}
 	}
 

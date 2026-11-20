@@ -1,3 +1,4 @@
+using System.IO.Enumeration;
 using System.Text.Json.Serialization;
 
 namespace MyDesktop.Models;
@@ -563,12 +564,20 @@ public sealed class FenceSettings
 	public List<string> CustomOrder { get; set; } = [];
 }
 
-/// <summary>
+//// <summary>
 /// 整理规则：把匹配的桌面文件归入同名分区。
+/// 条件分四类：类型（扩展名、文件夹）、名称、快捷方式目标、快捷方式类别。
+/// 同一类里的多个值满足一个即可（或），填了的几类都要满足（且），留空的那一类不参与；
+/// 一类条件都没填的规则不匹配任何项目（兜底规则除外）。旧版本只有类型这一类，升级后行为不变。
 /// </summary>
 public sealed class OrganizeRule
 {
 	static readonly char[] Separators = [';', ',', ' ', '；', '，'];
+
+	/// <summary>
+	/// 名称、快捷方式目标的分隔符：名称和程序名里常有空格、逗号，只按分号和换行分隔。
+	/// </summary>
+	static readonly char[] PatternSeparators = [';', '；', '\r', '\n'];
 
 	public string Name { get; set; } = string.Empty;
 
@@ -577,7 +586,29 @@ public sealed class OrganizeRule
 	/// </summary>
 	public string Extensions { get; set; } = string.Empty;
 
+	/// <summary>
+	/// 类型条件里的「文件夹」：和扩展名同属一类，文件夹看这一项、文件看扩展名。
+	/// </summary>
 	public bool MatchFolders { get; set; }
+
+	/// <summary>
+	/// 名称条件，分号分隔：带 * 或 ? 的是通配符，和完整文件名或去掉扩展名的名称匹配；
+	/// 不带的是包含，文件名里有这段文字就算。不区分大小写。
+	/// </summary>
+	public string NamePatterns { get; set; } = string.Empty;
+
+	/// <summary>
+	/// 快捷方式目标条件，分号分隔，只对快捷方式（.lnk 看目标路径，.url 看网址）起作用：
+	/// 不含 \、/、: 的按目标的文件名匹配（如 photoshop.exe、*Code*.exe），不带通配符时要完全相同；
+	/// 含有的按完整目标匹配（如 D:\Games\*、steam://*），不带通配符时包含即可。不区分大小写。
+	/// </summary>
+	public string TargetPatterns { get; set; } = string.Empty;
+
+	/// <summary>
+	/// 快捷方式类别条件：快捷方式分类表（数据目录的 shortcut-categories.json）里的类别名，
+	/// 目标按该类别的程序列表匹配，规则同 TargetPatterns。
+	/// </summary>
+	public string ShortcutCategory { get; set; } = string.Empty;
 
 	/// <summary>
 	/// 兜底规则：收纳所有未被其他规则命中的项目。
@@ -589,20 +620,56 @@ public sealed class OrganizeRule
 	/// </summary>
 	public Guid? FenceId { get; set; }
 
-	public bool Matches(string path, bool isDirectory)
+	/// <param name="context">取快捷方式目标和类别的程序列表；只在规则带这两类条件时才用到。</param>
+	public bool Matches(string path, bool isDirectory, RuleContext context)
 	{
-		if (isDirectory)
+		bool any = false;
+		if (MatchFolders || !string.IsNullOrWhiteSpace(Extensions))
 		{
-			return MatchFolders;
+			any = true;
+			bool typeMatched = isDirectory
+					? MatchFolders
+					: Path.GetExtension(path) is { Length: > 0 } extension && ParseExtensions(Extensions).Contains(extension);
+			if (!typeMatched)
+			{
+				return false;
+			}
 		}
-		var extension = Path.GetExtension(path);
-		return extension.Length > 0 && ParseExtensions(Extensions).Contains(extension);
+		var names = ParsePatterns(NamePatterns);
+		if (names.Count > 0)
+		{
+			any = true;
+			if (!names.Any(p => NameMatches(p, path)))
+			{
+				return false;
+			}
+		}
+		var targets = ParsePatterns(TargetPatterns);
+		bool hasCategory = !string.IsNullOrWhiteSpace(ShortcutCategory);
+		if (targets.Count > 0 || hasCategory)
+		{
+			any = true;
+			var target = isDirectory ? null : context.ResolveTarget(path);
+			if (string.IsNullOrEmpty(target))
+			{
+				return false;
+			}
+			if (targets.Count > 0 && !targets.Any(p => TargetMatches(p, target)))
+			{
+				return false;
+			}
+			if (hasCategory && !context.CategoryPatterns(ShortcutCategory.Trim()).Any(p => TargetMatches(p, target)))
+			{
+				return false;
+			}
+		}
+		return any;
 	}
 
 	/// <summary>
 	/// 按列表顺序取第一条命中的规则，都不命中时返回兜底规则（没有则为 null）。
 	/// </summary>
-	public static OrganizeRule? Match(IEnumerable<OrganizeRule> rules, string path, bool isDirectory)
+	public static OrganizeRule? Match(IEnumerable<OrganizeRule> rules, string path, bool isDirectory, RuleContext context)
 	{
 		OrganizeRule? fallback = null;
 		foreach (var rule in rules)
@@ -611,12 +678,46 @@ public sealed class OrganizeRule
 			{
 				fallback ??= rule;
 			}
-			else if (rule.Matches(path, isDirectory))
+			else if (rule.Matches(path, isDirectory, context))
 			{
 				return rule;
 			}
 		}
 		return fallback;
+	}
+
+	static bool HasWildcard(string pattern) => pattern.IndexOfAny(['*', '?']) >= 0;
+
+	/// <summary>
+	/// 文件名是否符合一个名称条件，规则见 NamePatterns。
+	/// </summary>
+	public static bool NameMatches(string pattern, string path)
+	{
+		var fileName = Path.GetFileName(path);
+		if (HasWildcard(pattern))
+		{
+			return FileSystemName.MatchesSimpleExpression(pattern, fileName)
+					|| FileSystemName.MatchesSimpleExpression(pattern, Path.GetFileNameWithoutExtension(fileName));
+		}
+		return fileName.Contains(pattern, StringComparison.OrdinalIgnoreCase);
+	}
+
+	/// <summary>
+	/// 快捷方式目标是否符合一个条件，规则见 TargetPatterns。
+	/// </summary>
+	public static bool TargetMatches(string pattern, string target)
+	{
+		bool wildcard = HasWildcard(pattern);
+		if (pattern.IndexOfAny(['\\', '/', ':']) >= 0)
+		{
+			return wildcard
+					? FileSystemName.MatchesSimpleExpression(pattern, target)
+					: target.Contains(pattern, StringComparison.OrdinalIgnoreCase);
+		}
+		var fileName = Path.GetFileName(target.TrimEnd('\\', '/'));
+		return wildcard
+				? FileSystemName.MatchesSimpleExpression(pattern, fileName)
+				: string.Equals(pattern, fileName, StringComparison.OrdinalIgnoreCase);
 	}
 
 	public static HashSet<string> ParseExtensions(string text)
@@ -626,10 +727,27 @@ public sealed class OrganizeRule
 				.ToHashSet(StringComparer.OrdinalIgnoreCase);
 	}
 
+	/// <summary>
+	/// 名称、快捷方式目标条件：按分号、换行分隔，去掉首尾空白。
+	/// </summary>
+	public static List<string> ParsePatterns(string text)
+	{
+		return text.Split(PatternSeparators, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+	}
+
+	/// <summary>
+	/// 按快捷方式分类表归类的规则，要排在「快捷方式」规则前面；分类表里识别不到的快捷方式仍归入「快捷方式」。
+	/// </summary>
+	public static List<OrganizeRule> CreateCategoryRules(IEnumerable<string> categories)
+	{
+		return categories.Select(c => new OrganizeRule { Name = c, ShortcutCategory = c }).ToList();
+	}
+
 	public static List<OrganizeRule> CreateDefaults()
 	{
 		return
 		[
+			.. CreateCategoryRules(DefaultShortcutCategories.Keys),
 			new() { Name = "快捷方式", Extensions = ".lnk; .url; .appref-ms; .website" },
 			new() { Name = "文件夹", MatchFolders = true },
 			new() { Name = "文档", Extensions = ".doc; .docx; .xls; .xlsx; .xlsm; .ppt; .pptx; .pdf; .txt; .md; .rtf; .wps; .et; .dps; .csv; .odt; .ods; .odp; .ofd; .xmind; .vsdx; .epub" },
@@ -640,9 +758,61 @@ public sealed class OrganizeRule
 			new() { Name = "其他", IsFallback = true },
 		];
 	}
+
+	/// <summary>
+	/// 内置的快捷方式分类表：类别 → 目标程序（规则同 TargetPatterns）。
+	/// 第一次用到时写进数据目录的 shortcut-categories.json，之后以那个文件为准。
+	/// </summary>
+	public static readonly IReadOnlyDictionary<string, string[]> DefaultShortcutCategories = new Dictionary<string, string[]>
+	{
+		["设计"] =
+		[
+			"Photoshop.exe", "Illustrator.exe", "InDesign.exe", "AfterFX.exe", "Adobe Premiere Pro.exe", "Lightroom.exe", "Adobe Lightroom Classic.exe",
+			"XD.exe", "Animate.exe", "Dreamweaver.exe", "Figma.exe", "blender.exe", "SketchUp.exe", "CorelDRW.exe", "3dsmax.exe", "maya.exe",
+			"Cinema 4D.exe", "ZBrush.exe", "krita.exe", "gimp*.exe", "inkscape.exe", "Pixso.exe", "MasterGo.exe", "acad.exe", "Rhino.exe",
+			"CapCut.exe", "JianyingPro.exe", "Resolve.exe", "Affinity*.exe",
+		],
+		["社交"] =
+		[
+			"WeChat.exe", "Weixin.exe", "WXWork.exe", "QQ.exe", "QQNT.exe", "TIM.exe", "DingTalk.exe", "Feishu.exe", "Lark.exe", "Telegram.exe",
+			"Discord.exe", "Slack.exe", "Teams.exe", "ms-teams.exe", "Skype.exe", "WhatsApp.exe", "LINE.exe", "KOOK.exe", "YY.exe", "Zoom.exe",
+			"wemeetapp.exe",
+		],
+		["下载"] =
+		[
+			"Thunder.exe", "IDMan.exe", "Motrix.exe", "qbittorrent.exe", "BitComet.exe", "uTorrent.exe", "fdm.exe", "BaiduNetdisk.exe",
+			"aDrive.exe", "115*.exe", "NDM.exe", "FlashGet*.exe",
+		],
+		["多媒体"] =
+		[
+			"PotPlayerMini64.exe", "PotPlayerMini.exe", "PotPlayer*.exe", "vlc.exe", "mpc-hc64.exe", "mpc-be64.exe", "cloudmusic.exe", "QQMusic.exe",
+			"KuGou.exe", "KwMusic.exe", "Spotify.exe", "foobar2000.exe", "AIMP.exe", "哔哩哔哩.exe", "QyClient.exe", "QQLive.exe", "YoukuDesktop.exe",
+			"obs64.exe", "Kodi.exe", "mpv.exe", "Honeyview.exe", "ImageGlass.exe", "Huya.exe", "DouyuLive*.exe", "FormatFactory.exe",
+		],
+		["开发"] =
+		[
+			"Code.exe", "Code - Insiders.exe", "Cursor.exe", "Windsurf.exe", "devenv.exe", "idea64.exe", "pycharm64.exe", "webstorm64.exe", "clion64.exe",
+			"goland64.exe", "rider64.exe", "datagrip64.exe", "phpstorm64.exe", "studio64.exe", "sublime_text.exe", "notepad++.exe", "HBuilderX.exe",
+			"wechatdevtools.exe", "git-bash.exe", "WindowsTerminal.exe", "wt.exe", "Postman.exe", "navicat.exe", "dbeaver.exe", "Docker Desktop.exe",
+			"Xshell.exe", "MobaXterm*.exe", "Termius.exe", "putty.exe", "WinSCP.exe", "GitHubDesktop.exe", "Fork.exe", "SourceTree.exe", "Apifox.exe",
+		],
+		["游戏"] =
+		[
+			"steam.exe", "steam://*", "EpicGamesLauncher.exe", "com.epicgames.launcher://*", "WeGame.exe", "Battle.net.exe", "Battle.net Launcher.exe",
+			"EADesktop.exe", "Origin.exe", "UbisoftConnect.exe", "upc.exe", "GalaxyClient.exe", "MinecraftLauncher.exe", "HYP.exe", "YuanShen.exe",
+			"GenshinImpact.exe", "StarRail.exe", "LeagueClient.exe", "NetEase*Launcher*.exe", "XboxPcApp.exe", "PlayniteDesktopApp.exe",
+		],
+	};
 }
 
 /// <summary>
+/// 规则匹配时要从外部取的信息。
+/// </summary>
+/// <param name="ResolveTarget">快捷方式的目标（.lnk 为目标路径，.url 为网址），不是快捷方式或取不到时为 null。</param>
+/// <param name="CategoryPatterns">快捷方式分类表里某个类别的程序列表，没有这个类别时为空。</param>
+public sealed record RuleContext(Func<string, string?> ResolveTarget, Func<string, IReadOnlyList<string>> CategoryPatterns);
+
+// <summary>
 /// 自定义顺序里的一个角标处理程序。
 /// </summary>
 public sealed class OverlayHandlerSetting

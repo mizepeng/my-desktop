@@ -3738,6 +3738,11 @@ internal partial class FenceWindow : Window
 			{
 				extras.Add(new ExtraMenuItem("移回桌面", () => MoveToDesktop(paths)));
 			}
+			// 映射分区显示的是文件夹本身，整理规则只往桌面分区里归
+			if (!Model.IsPortal)
+			{
+				extras.Add(new ExtraMenuItem("以后把这类文件都放到这里…", () => _manager.AddRuleFromItems(this, paths)));
+			}
 			ItemOps.ShowContextMenu(_hwnd, items, desktop, point, extras, verb =>
 			{
 				// Shell 自己不会处理重命名（需要视图配合），改为在分区内联编辑

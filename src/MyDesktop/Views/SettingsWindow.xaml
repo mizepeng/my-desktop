@@ -537,7 +537,7 @@
 				<!-- 整理规则 -->
 				<StackPanel x:Name="RulesPage" Visibility="Collapsed">
 					<TextBlock Style="{StaticResource PageTitle}" Text="整理规则" />
-					<TextBlock Style="{StaticResource Hint}" Text="一键整理时，桌面上的图标按下列规则从上到下匹配，归入同名分区（不存在时自动创建）。只是归类显示，文件仍留在桌面文件夹里。扩展名之间用分号分隔。" />
+					<TextBlock Style="{StaticResource Hint}" Text="一键整理时，桌面上的图标按下列规则从上到下匹配，归入同名分区（不存在时自动创建）。只是归类显示，文件仍留在桌面文件夹里。每条规则可以按扩展名、名称、快捷方式目标、快捷方式类别匹配：同一栏里用分号分隔的多个值满足一个即可，填了的几栏都要满足，留空的栏不参与。" />
 
 					<Border Margin="0,16,0,4" Style="{StaticResource Card}">
 						<CheckBox x:Name="AutoOrganizeBox" Click="Setting_Changed">
@@ -559,6 +559,10 @@
 											<ColumnDefinition Width="*" />
 											<ColumnDefinition Width="Auto" />
 										</Grid.ColumnDefinitions>
+										<Grid.RowDefinitions>
+											<RowDefinition Height="Auto" />
+											<RowDefinition Height="Auto" />
+										</Grid.RowDefinitions>
 										<TextBox Margin="0,0,8,0" VerticalContentAlignment="Center" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" LostFocus="Rule_LostFocus" />
 										<TextBox x:Name="ExtensionsBox" Grid.Column="1" VerticalContentAlignment="Center" Text="{Binding Extensions, UpdateSourceTrigger=PropertyChanged}" LostFocus="Rule_LostFocus" />
 										<!-- 扩展名为空时在输入框里显示的格式提示，不接收鼠标，点它就是点输入框 -->
@@ -572,12 +576,51 @@
 												Visibility="Collapsed" />
 										<TextBlock x:Name="ExtensionsHint" Grid.Column="1" Margin="4,0" VerticalAlignment="Center" Opacity="0.7" Visibility="Collapsed" />
 										<Button Grid.Column="2" Margin="8,0,0,0" Content="&#xE74D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" ToolTip="删除规则" Click="DeleteRule_Click" />
+										<!-- 扩展名以外的条件：名称、快捷方式目标、快捷方式类别，兜底规则不显示 -->
+										<Grid x:Name="MoreConditions" Grid.Row="1" Grid.Column="1" Margin="0,6,0,0">
+											<Grid.ColumnDefinitions>
+												<ColumnDefinition Width="*" />
+												<ColumnDefinition Width="*" />
+												<ColumnDefinition Width="110" />
+											</Grid.ColumnDefinitions>
+											<TextBox x:Name="NameBox"
+													Margin="0,0,6,0"
+													VerticalContentAlignment="Center"
+													Text="{Binding NamePatterns, UpdateSourceTrigger=PropertyChanged}"
+													ToolTip="名称条件，分号分隔。带 * 或 ? 的是通配符（如 *报告*、截图??），不带的是包含（名称里有这段文字就算）。不区分大小写。"
+													LostFocus="Rule_LostFocus" />
+											<TextBlock x:Name="NamePlaceholder" Margin="12,0" VerticalAlignment="Center" IsHitTestVisible="False" Opacity="0.5" Text="名称，可用通配符" Visibility="Collapsed" />
+											<TextBox x:Name="TargetBox"
+													Grid.Column="1"
+													Margin="0,0,6,0"
+													VerticalContentAlignment="Center"
+													Text="{Binding TargetPatterns, UpdateSourceTrigger=PropertyChanged}"
+													ToolTip="快捷方式指向的程序，分号分隔，只对快捷方式起作用。写 exe 名（如 photoshop.exe、*code*.exe）按程序名匹配；含 \ / : 的按完整目标匹配（如 D:\Games\*、steam://*）。"
+													LostFocus="Rule_LostFocus" />
+											<TextBlock x:Name="TargetPlaceholder" Grid.Column="1" Margin="12,0" VerticalAlignment="Center" IsHitTestVisible="False" Opacity="0.5" Text="快捷方式指向的程序" Visibility="Collapsed" />
+											<TextBox x:Name="CategoryBox"
+													Grid.Column="2"
+													VerticalContentAlignment="Center"
+													Text="{Binding ShortcutCategory, UpdateSourceTrigger=PropertyChanged}"
+													ToolTip="快捷方式分类表里的类别名（如 游戏），目标程序在分类表的这个类别里才算。点下面的「编辑分类表…」修改分类表。"
+													LostFocus="Rule_LostFocus" />
+											<TextBlock x:Name="CategoryPlaceholder" Grid.Column="2" Margin="12,0" VerticalAlignment="Center" IsHitTestVisible="False" Opacity="0.5" Text="快捷方式类别" Visibility="Collapsed" />
+										</Grid>
 									</Grid>
 								</Border>
 								<DataTemplate.Triggers>
 									<!-- 放在最前面，下面文件夹、兜底规则的触发器会把提示再藏起来 -->
 									<Trigger SourceName="ExtensionsBox" Property="Text" Value="">
 										<Setter TargetName="ExtensionsPlaceholder" Property="Visibility" Value="Visible" />
+									</Trigger>
+									<Trigger SourceName="NameBox" Property="Text" Value="">
+										<Setter TargetName="NamePlaceholder" Property="Visibility" Value="Visible" />
+									</Trigger>
+									<Trigger SourceName="TargetBox" Property="Text" Value="">
+										<Setter TargetName="TargetPlaceholder" Property="Visibility" Value="Visible" />
+									</Trigger>
+									<Trigger SourceName="CategoryBox" Property="Text" Value="">
+										<Setter TargetName="CategoryPlaceholder" Property="Visibility" Value="Visible" />
 									</Trigger>
 									<DataTrigger Binding="{Binding MatchFolders}" Value="True">
 										<Setter TargetName="ExtensionsBox" Property="Visibility" Value="Collapsed" />
@@ -590,6 +633,7 @@
 										<Setter TargetName="ExtensionsPlaceholder" Property="Visibility" Value="Collapsed" />
 										<Setter TargetName="ExtensionsHint" Property="Visibility" Value="Visible" />
 										<Setter TargetName="ExtensionsHint" Property="Text" Value="其他规则都没有匹配到的项目" />
+										<Setter TargetName="MoreConditions" Property="Visibility" Value="Collapsed" />
 									</DataTrigger>
 								</DataTemplate.Triggers>
 							</DataTemplate>
@@ -603,7 +647,16 @@
 								ToolTip="收纳其他规则都没有匹配到的项目，固定排在最后"
 								Click="AddFallbackRule_Click" />
 						<Button Margin="0,0,8,0" Content="恢复默认规则" Click="ResetRules_Click" />
-						<Button Content="立即整理桌面…" Click="Organize_Click" />
+						<Button Margin="0,0,8,0" Content="立即整理桌面…" Click="Organize_Click" />
+					</WrapPanel>
+					<TextBlock Style="{StaticResource SectionTitle}" Text="快捷方式分类表" />
+					<TextBlock Style="{StaticResource Hint}" Text="内置一份常见软件的分类（设计、社交、下载、多媒体、开发、游戏），按快捷方式指向的程序归类，识别不到的仍归入「快捷方式」。分类表是数据目录里的 shortcut-categories.json，可以自己增删类别和程序，保存后下次整理生效。" />
+					<WrapPanel Margin="0,8,0,0">
+						<Button Margin="0,0,8,0"
+								Content="添加分类规则"
+								ToolTip="为分类表里还没有规则的类别各建一条规则，排在「快捷方式」规则前面"
+								Click="AddCategoryRules_Click" />
+						<Button Content="编辑分类表…" Click="EditCategories_Click" />
 					</WrapPanel>
 				</StackPanel>
 

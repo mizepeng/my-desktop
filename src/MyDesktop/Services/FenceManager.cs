@@ -771,6 +771,96 @@ internal sealed class FenceManager
 		return window;
 	}
 
+	/// <summary>
+	/// 图标右键菜单「以后把这类文件都放到这里…」：按这些图标的类型在这个分区建整理规则，排在规则列表最前面。
+	/// 快捷方式能读到目标的按目标程序（.lnk 取 exe 文件名，steam:// 这类非网页的网址取协议），其余文件按扩展名，文件夹按「文件夹」。
+	/// 只影响以后的整理（一键整理、自动整理新文件），已在桌面上的图标不动。
+	/// </summary>
+	public void AddRuleFromItems(FenceWindow window, IReadOnlyList<string> paths)
+	{
+		var extensions = new List<string>();
+		var targets = new List<string>();
+		bool folders = false;
+		foreach (var path in paths)
+		{
+			if (Directory.Exists(path))
+			{
+				folders = true;
+				continue;
+			}
+			if (TargetPatternOf(path) is string target)
+			{
+				targets.Add(target);
+				continue;
+			}
+			var extension = Path.GetExtension(path);
+			if (extension.Length > 0)
+			{
+				extensions.Add(extension.ToLowerInvariant());
+			}
+		}
+		extensions = extensions.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+		targets = targets.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+		var title = window.Model.Title;
+		var rules = new List<OrganizeRule>();
+		var lines = new List<string>();
+		if (extensions.Count > 0 || folders)
+		{
+			rules.Add(new OrganizeRule { Name = title, Extensions = string.Join("; ", extensions), MatchFolders = folders, FenceId = window.Model.Id });
+			if (extensions.Count > 0)
+			{
+				lines.Add($"    · 扩展名为 {string.Join("、", extensions)} 的文件");
+			}
+			if (folders)
+			{
+				lines.Add("    · 所有文件夹");
+			}
+		}
+		if (targets.Count > 0)
+		{
+			rules.Add(new OrganizeRule { Name = title, TargetPatterns = string.Join("; ", targets), FenceId = window.Model.Id });
+			lines.Add($"    · 指向 {string.Join("、", targets)} 的快捷方式");
+		}
+		if (rules.Count == 0)
+		{
+			MessageDialog.Show("添加整理规则", "这些图标既没有扩展名也不是能读出目标的快捷方式，没法按类型建规则。", "确定");
+			return;
+		}
+		var message = $"以后整理桌面时，下面这些项目归入「{title}」分区：\n\n{string.Join("\n", lines)}\n\n"
+				+ "新规则排在整理规则的最前面，可以在设置的「整理规则」里修改。已经在桌面上的图标不受影响，下次一键整理或自动整理新文件时才按它归入。";
+		if (MessageDialog.Show("添加整理规则", message, "添加规则", "取消") != 0)
+		{
+			return;
+		}
+		Settings.Rules.InsertRange(0, rules);
+		SaveSoon();
+		_settingsWindow?.ReloadRules();
+		Log.Info($"从图标右键菜单添加整理规则：分区「{title}」，扩展名 {string.Join(" ", extensions)}，文件夹 {folders}，目标 {string.Join(" ", targets)}");
+	}
+
+	/// <summary>
+	/// 快捷方式按目标建规则时的条件：.lnk 取目标的文件名，非网页的网址（如 steam://rungameid/1）取「协议://*」；
+	/// 不是快捷方式、读不出目标或是普通网页链接时为 null，改按扩展名。
+	/// </summary>
+	static string? TargetPatternOf(string path)
+	{
+		var target = ShortcutTargets.Resolve(path);
+		if (string.IsNullOrEmpty(target))
+		{
+			return null;
+		}
+		if (Path.GetExtension(path).Equals(".lnk", StringComparison.OrdinalIgnoreCase))
+		{
+			var name = Path.GetFileName(target.TrimEnd('\\', '/'));
+			return name.Length > 0 ? name : null;
+		}
+		if (Uri.TryCreate(target, UriKind.Absolute, out var uri) && uri.Scheme is not ("http" or "https" or "file"))
+		{
+			return uri.Scheme + "://*";
+		}
+		return null;
+	}
+
 	#endregion
 
 	#region 标签页

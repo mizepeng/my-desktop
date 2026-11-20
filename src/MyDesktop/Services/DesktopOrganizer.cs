@@ -33,6 +33,11 @@ internal sealed class DesktopOrganizer : IDisposable
 	/// </summary>
 	static readonly TimeSpan GroupStagger = TimeSpan.FromMilliseconds(260);
 
+	/// <summary>
+	/// 规则匹配时读快捷方式目标、查快捷方式分类表。
+	/// </summary>
+	public static readonly RuleContext RuleContext = new(ShortcutTargets.Resolve, ShortcutCategories.Patterns);
+
 	sealed class PendingItem
 	{
 		public int Checks;
@@ -61,6 +66,15 @@ internal sealed class DesktopOrganizer : IDisposable
 		{
 			MessageDialog.Show("一键整理桌面", "桌面上没有需要整理的图标。", "确定");
 			return;
+		}
+		// 分类表读不出来时按类别的规则都不生效，先让用户知道，免得快捷方式全进了「快捷方式」却不知道为什么
+		if (ShortcutCategories.LastError is string error && _manager.Settings.Rules.Any(r => !string.IsNullOrWhiteSpace(r.ShortcutCategory)))
+		{
+			var notice = $"快捷方式分类表 {ShortcutCategories.FilePath} 读不出来，按快捷方式类别的规则这次不会生效：\n\n{error}";
+			if (MessageDialog.Show("一键整理桌面", notice, "仍然整理", "取消") != 0)
+			{
+				return;
+			}
 		}
 		int total = plan.Sum(g => g.Paths.Count);
 		var summary = string.Join("\n", plan.Select(g => $"    · {g.Rule.Name}：{g.Paths.Count} 个"));
@@ -454,7 +468,7 @@ internal sealed class DesktopOrganizer : IDisposable
 		var groups = new Dictionary<OrganizeRule, List<string>>();
 		foreach (var path in candidates)
 		{
-			var rule = OrganizeRule.Match(rules, path, Directory.Exists(path));
+			var rule = OrganizeRule.Match(rules, path, Directory.Exists(path), RuleContext);
 			if (rule == null)
 			{
 				continue;
