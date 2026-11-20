@@ -121,6 +121,7 @@ internal partial class SettingsWindow : Window
 		_loading = true;
 		AutoStartBox.IsChecked = AutoStart.IsEnabled();
 		HotkeyBox.Text = HotkeyText();
+		PeekHotkeyBox.Text = PeekHotkeyText();
 		DoubleClickBox.IsChecked = Settings.DoubleClickToHide;
 		DoubleClickTargetBox.ItemsSource = Enum.GetValues<HideTarget>().Select(t => t.DisplayName()).ToList();
 		DoubleClickTargetBox.SelectedIndex = (int)Settings.DoubleClickTarget;
@@ -258,11 +259,13 @@ internal partial class SettingsWindow : Window
 
 	string HotkeyText() => string.IsNullOrEmpty(Settings.SearchHotkey) ? "未设置" : Settings.SearchHotkey;
 
+	string PeekHotkeyText() => string.IsNullOrEmpty(Settings.PeekHotkey) ? "未设置" : Settings.PeekHotkey;
+
 	void HotkeyBox_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
 	{
 		_capturingHotkey = true;
 		_manager.SuspendSearchHotkey();
-		HotkeyBox.Text = "请按下组合键";
+		((TextBox)sender).Text = "请按下组合键";
 	}
 
 	/// <summary>
@@ -272,6 +275,7 @@ internal partial class SettingsWindow : Window
 	{
 		_capturingHotkey = false;
 		HotkeyBox.Text = HotkeyText();
+		PeekHotkeyBox.Text = PeekHotkeyText();
 		ApplyHotkey();
 	}
 
@@ -293,19 +297,34 @@ internal partial class SettingsWindow : Window
 		if (!hotkey.IsValid)
 		{
 			// 只按了修饰键，或少了 Ctrl、Alt、Win：先显示已按下的修饰键，等用户按全
-			HotkeyBox.Text = Keyboard.Modifiers == ModifierKeys.None ? "请按下组合键" : Hotkey.ModifiersText(Keyboard.Modifiers);
+			((TextBox)sender).Text = Keyboard.Modifiers == ModifierKeys.None ? "请按下组合键" : Hotkey.ModifiersText(Keyboard.Modifiers);
 			return;
 		}
-		Settings.SearchHotkey = hotkey.ToString();
+		if (sender == PeekHotkeyBox)
+		{
+			Settings.PeekHotkey = hotkey.ToString();
+		}
+		else
+		{
+			Settings.SearchHotkey = hotkey.ToString();
+		}
 		_manager.SaveSoon();
 		EndHotkeyCapture();
 	}
 
 	void ClearHotkey_Click(object sender, RoutedEventArgs e)
 	{
-		Settings.SearchHotkey = string.Empty;
+		if ((sender as FrameworkElement)?.Tag as string == "Peek")
+		{
+			Settings.PeekHotkey = string.Empty;
+		}
+		else
+		{
+			Settings.SearchHotkey = string.Empty;
+		}
 		_manager.SaveSoon();
 		HotkeyBox.Text = HotkeyText();
+		PeekHotkeyBox.Text = PeekHotkeyText();
 		ApplyHotkey();
 	}
 
@@ -319,6 +338,9 @@ internal partial class SettingsWindow : Window
 		bool ok = _manager.ApplySearchHotkey();
 		HotkeyStatus.Text = $"{Settings.SearchHotkey} 已被其他程序占用，请换一个组合键";
 		HotkeyStatus.Visibility = ok ? Visibility.Collapsed : Visibility.Visible;
+		bool peekOk = _manager.ApplyPeekHotkey();
+		PeekHotkeyStatus.Text = $"{Settings.PeekHotkey} 已被其他程序占用，请换一个组合键";
+		PeekHotkeyStatus.Visibility = peekOk ? Visibility.Collapsed : Visibility.Visible;
 	}
 
 	void Setting_Changed(object sender, RoutedEventArgs e)
@@ -856,6 +878,7 @@ internal partial class SettingsWindow : Window
 			case "常规":
 				_manager.SetAutoStart(true);
 				Settings.SearchHotkey = defaults.SearchHotkey;
+				Settings.PeekHotkey = defaults.PeekHotkey;
 				if (Settings.HardwareAcceleration != defaults.HardwareAcceleration)
 				{
 					Settings.HardwareAcceleration = defaults.HardwareAcceleration;

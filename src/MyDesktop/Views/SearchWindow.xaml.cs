@@ -49,6 +49,9 @@ internal partial class SearchWindow : Window
 	// 弹出位置的工作区和窗口上边（物理像素），结果变多时窗口往上挪，不伸出屏幕
 	RECT _workArea;
 	int _preferredTop;
+	// 速览时弹出：还没输入时只留搜索框，不列常用和全部，免得挡住分区
+	bool _compact;
+	string? _defaultPlaceholder;
 
 	public SearchWindow(Action<FenceItem> open)
 	{
@@ -71,9 +74,13 @@ internal partial class SearchWindow : Window
 	/// <summary>
 	/// 在鼠标所在的显示器上弹出，候选是此刻分区里和桌面上的全部图标。
 	/// </summary>
-	public void Popup(List<Entry> entries)
+	/// <param name="peek">速览时弹出：没输入时只留搜索框，提示文字说明怎么退出速览。</param>
+	public void Popup(List<Entry> entries, bool peek = false)
 	{
 		_entries = entries;
+		_compact = peek;
+		_defaultPlaceholder ??= Placeholder.Text;
+		Placeholder.Text = peek ? "速览中：输入名称或拼音搜索，按 Esc 或点空白处退出" : _defaultPlaceholder;
 		ApplyTheme();
 		QueryBox.Text = string.Empty;
 		UpdateResults();
@@ -150,7 +157,8 @@ internal partial class SearchWindow : Window
 		var query = PinyinMatcher.NormalizeQuery(QueryBox.Text);
 		var rows = new List<Row>();
 		int more = 0;
-		if (query.Length == 0)
+		// 速览没输入时不列候选，按没有结果只留搜索框
+		if (query.Length == 0 && !_compact)
 		{
 			var frequent = _entries
 					.Select(entry => (Entry: entry, Score: UsageStats.Score(entry.Item.FullPath)))
@@ -172,7 +180,7 @@ internal partial class SearchWindow : Window
 				more = _entries.Count - shown;
 			}
 		}
-		else
+		else if (query.Length > 0)
 		{
 			rows.AddRange(_entries
 					.Select(entry => (Entry: entry, Rank: PinyinMatcher.Rank(entry.Item.DisplayName, query)))

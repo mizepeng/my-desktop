@@ -357,8 +357,14 @@ internal static class ItemOps
 		return next;
 	}
 
+	/// <summary>
+	/// 打开了图标（分区里、桌面上、搜索框里都算），在打开之前触发；速览据此恢复原来的层级。
+	/// </summary>
+	public static event Action? Opening;
+
 	public static void Open(IntPtr hwnd, IEnumerable<FenceItem> items, bool desktop)
 	{
+		Opening?.Invoke();
 		foreach (var item in items)
 		{
 			// 给搜索框排「常用」；映射分区里的图标不在搜索范围内，不用记

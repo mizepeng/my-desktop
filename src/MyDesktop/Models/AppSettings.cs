@@ -268,6 +268,11 @@ public sealed class AppSettings
 	/// </summary>
 	public string SearchHotkey { get; set; } = "Alt+Space";
 
+	/// <summary>
+	/// 速览的全局快捷键：把所有分区和桌面图标临时提到当前窗口上面，可以直接打字搜索；空字符串表示不用。
+	/// </summary>
+	public string PeekHotkey { get; set; } = "Ctrl+Alt+Space";
+
 	public bool TextShadow { get; set; } = true;
 
 	/// <summary>

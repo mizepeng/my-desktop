@@ -118,6 +118,27 @@
 							</StackPanel>
 						</DockPanel>
 					</Border>
+					<Border Style="{StaticResource Card}">
+						<DockPanel>
+							<StackPanel VerticalAlignment="Center" DockPanel.Dock="Right" Orientation="Horizontal">
+								<TextBox x:Name="PeekHotkeyBox"
+										Width="170"
+										VerticalContentAlignment="Center"
+										IsReadOnly="True"
+										IsReadOnlyCaretVisible="False"
+										TextAlignment="Center"
+										GotKeyboardFocus="HotkeyBox_GotKeyboardFocus"
+										LostKeyboardFocus="HotkeyBox_LostKeyboardFocus"
+										PreviewKeyDown="HotkeyBox_PreviewKeyDown" />
+								<Button Margin="8,0,0,0" Content="清除" Tag="Peek" Click="ClearHotkey_Click" />
+							</StackPanel>
+							<StackPanel Margin="0,0,12,0" VerticalAlignment="Center">
+								<TextBlock Text="速览的快捷键" />
+								<TextBlock Style="{StaticResource Hint}" Text="把所有分区和桌面图标临时提到当前窗口上面，可以直接打字搜索；按 Esc、点空白处或打开图标后恢复" />
+								<TextBlock x:Name="PeekHotkeyStatus" Style="{StaticResource Hint}" Foreground="{DynamicResource SystemFillColorCautionBrush}" Visibility="Collapsed" />
+							</StackPanel>
+						</DockPanel>
+					</Border>
 
 					<TextBlock Style="{StaticResource SectionTitle}" Text="性能" />
 					<Border Style="{StaticResource Card}">

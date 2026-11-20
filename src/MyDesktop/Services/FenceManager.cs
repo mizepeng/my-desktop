@@ -60,6 +60,10 @@ internal sealed class FenceManager
 	DesktopMouseWatcher? _mouse;
 	SettingsWindow? _settingsWindow;
 	SearchWindow? _searchWindow;
+	PeekBackdrop? _peekBackdrop;
+	// 速览中（分区和图标层临时置顶）；进入速览时的前台窗口，退出时还给它
+	bool _peeking;
+	IntPtr _peekPreviousForeground;
 	DesktopTakeover? _takeover;
 	readonly Dictionary<string, DateTime> _missingMembers = new(StringComparer.OrdinalIgnoreCase);
 	// 剪贴板里被剪切的文件，显示成半透明
@@ -101,6 +105,11 @@ internal sealed class FenceManager
 		_unliftTimer.Tick += (_, _) =>
 		{
 			_unliftTimer.Stop();
+			// 速览期间一直置顶，由 EndPeek 撤销
+			if (_peeking)
+			{
+				return;
+			}
 			DesktopHost.Unlift(_windows.Select(w => w.Handle));
 			KeepFencesAboveDesktop();
 		};
@@ -178,11 +187,17 @@ internal sealed class FenceManager
 			_tray.WallpaperChanged += () => DesktopDiagnostics.Trigger("壁纸变化");
 			DesktopDiagnostics.Start();
 		}
-		_tray.HotkeyPressed += ToggleSearch;
+		_tray.HotkeyPressed += OnHotkeyPressed;
 		_tray.DataReceived = OnDataReceived;
+		ItemOps.Opening += () => EndPeek(false);
 		if (!ApplySearchHotkey())
 		{
 			_dispatcher.InvokeAsync(() => _tray?.ShowBalloon($"快捷键 {Settings.SearchHotkey} 已被其他程序占用", "搜索桌面图标的快捷键没有生效，可以在 MyDesktop 设置里换一个。"),
+					DispatcherPriority.Background);
+		}
+		if (!ApplyPeekHotkey())
+		{
+			_dispatcher.InvokeAsync(() => _tray?.ShowBalloon($"快捷键 {Settings.PeekHotkey} 已被其他程序占用", "速览的快捷键没有生效，可以在 MyDesktop 设置里换一个。"),
 					DispatcherPriority.Background);
 		}
 		StartZOrderCheck();
@@ -452,6 +467,8 @@ internal sealed class FenceManager
 		_reorderHook = IntPtr.Zero;
 		// 先关设置窗口，它关闭时会写回未保存的规则修改
 		_settingsWindow?.Close();
+		EndPeek(false);
+		_peekBackdrop?.Dispose();
 		_searchWindow?.Close();
 		// 不透明度对话框里没点确定的预览值不保存
 		CloseOpacityDialogs();
@@ -2523,7 +2540,7 @@ internal sealed class FenceManager
 	/// </summary>
 	public bool ApplySearchHotkey()
 	{
-		if (_tray == null || _tray.SetHotkey(Hotkey.Parse(Settings.SearchHotkey)))
+		if (_tray == null || _tray.SetHotkey(TrayIcon.SearchHotkeyId, Hotkey.Parse(Settings.SearchHotkey)))
 		{
 			return true;
 		}
@@ -2532,13 +2549,127 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 在设置里录入新快捷键期间先注销原来的，免得按下它时弹出搜索框；录完由 ApplySearchHotkey 重新注册。
+	/// 按设置注册速览的全局快捷键，规则同 ApplySearchHotkey。
 	/// </summary>
-	public void SuspendSearchHotkey() => _tray?.SetHotkey(null);
+	public bool ApplyPeekHotkey()
+	{
+		if (_tray == null || _tray.SetHotkey(TrayIcon.PeekHotkeyId, Hotkey.Parse(Settings.PeekHotkey)))
+		{
+			return true;
+		}
+		Log.Warn($"速览快捷键 {Settings.PeekHotkey} 注册失败，可能已被其他程序占用");
+		return false;
+	}
+
+	/// <summary>
+	/// 在设置里录入新快捷键期间先注销搜索和速览的快捷键，免得按下时弹出搜索框或进入速览；录完由 ApplySearchHotkey、ApplyPeekHotkey 重新注册。
+	/// </summary>
+	public void SuspendSearchHotkey()
+	{
+		_tray?.SetHotkey(TrayIcon.SearchHotkeyId, null);
+		_tray?.SetHotkey(TrayIcon.PeekHotkeyId, null);
+	}
+
+	void OnHotkeyPressed(int id)
+	{
+		switch (id)
+		{
+			case TrayIcon.SearchHotkeyId:
+				// 速览中按搜索快捷键：搜索框本来就在，退出速览
+				if (_peeking)
+				{
+					EndPeek(true);
+				}
+				else
+				{
+					ToggleSearch();
+				}
+				break;
+			case TrayIcon.PeekHotkeyId:
+				if (_peeking)
+				{
+					EndPeek(true);
+				}
+				else
+				{
+					StartPeek();
+				}
+				break;
+			case TrayIcon.EscapeHotkeyId:
+				EndPeek(true);
+				break;
+		}
+	}
+
+	/// <summary>
+	/// 速览：把图标层、亚克力和分区临时置顶（和显示桌面时的临时置顶同一套，DesktopHost.Lift），压在当前窗口上面，
+	/// 下面垫一层半透明遮罩接住空白处的点击，同时弹出搜索框可以直接打字。
+	/// 按 Esc、点空白处、再按一次快捷键或打开了图标时恢复（EndPeek）。不改任何窗口的 owner 或 parent。
+	/// </summary>
+	void StartPeek()
+	{
+		if (_peeking || ComponentDispatcher.IsThreadModal)
+		{
+			return;
+		}
+		_peeking = true;
+		_peekPreviousForeground = GetForegroundWindow();
+		_unliftTimer.Stop();
+		_searchWindow?.Dismiss();
+		try
+		{
+			if (_peekBackdrop == null)
+			{
+				_peekBackdrop = new PeekBackdrop();
+				_peekBackdrop.Clicked += () => EndPeek(true);
+			}
+			_peekBackdrop.Show();
+		}
+		catch (Exception ex)
+		{
+			// 没有遮罩就接不住空白处的点击，仍可用 Esc 和快捷键退出
+			Log.Warn("显示速览遮罩失败", ex);
+		}
+		DesktopHost.Lift(_windows.Select(w => w.Handle));
+		bool escape = _tray?.SetEscapeHotkey(true) == true;
+		if (!escape)
+		{
+			Log.Warn("速览时注册 Esc 失败，可能已被其他程序占用：只能点空白处或再按一次快捷键退出");
+		}
+		_searchWindow ??= new SearchWindow(OpenFromSearch);
+		_searchWindow.Popup(SearchEntries(), peek: true);
+		Log.Info($"进入速览：{_windows.Count(w => w.IsVisible)} 个分区");
+	}
+
+	/// <summary>
+	/// 结束速览，分区和图标层回到桌面之上、普通窗口之下。
+	/// </summary>
+	/// <param name="restoreForeground">把前台还给进入速览前的窗口；打开图标时不还，让打开的程序在前面。</param>
+	void EndPeek(bool restoreForeground)
+	{
+		if (!_peeking)
+		{
+			return;
+		}
+		_peeking = false;
+		_tray?.SetEscapeHotkey(false);
+		_peekBackdrop?.Hide();
+		_searchWindow?.Dismiss();
+		DesktopHost.Unlift(_windows.Select(w => w.Handle));
+		KeepFencesAboveDesktop();
+		if (restoreForeground && _peekPreviousForeground != IntPtr.Zero && IsWindow(_peekPreviousForeground))
+		{
+			SetForegroundWindow(_peekPreviousForeground);
+		}
+		_peekPreviousForeground = IntPtr.Zero;
+		Log.Info(restoreForeground ? "退出速览" : "打开图标，退出速览");
+	}
+
+	void OpenFromSearch(FenceItem item) => ItemOps.Open(_tray?.Handle ?? IntPtr.Zero, [item], true);
 
 	void ToggleSearch()
 	{
-		_searchWindow ??= new SearchWindow(item => ItemOps.Open(_tray?.Handle ?? IntPtr.Zero, [item], true));
+		_searchWindow ??= new SearchWindow(OpenFromSearch);
 		if (_searchWindow.IsVisible)
 		{
 			_searchWindow.Dismiss();

@@ -21,7 +21,17 @@ internal sealed class TrayIcon : IDisposable
 	const int SPI_SETWORKAREA = 0x002F;
 	const int SPI_SETDESKWALLPAPER = 0x0014;
 	const uint IconId = 1;
-	const int HotkeyId = 1;
+
+	/// <summary>
+	/// 全局快捷键的编号：搜索、速览，以及速览期间临时注册的 Esc（结束速览）。
+	/// </summary>
+	public const int SearchHotkeyId = 1;
+
+	public const int PeekHotkeyId = 2;
+
+	public const int EscapeHotkeyId = 3;
+
+	const uint VK_ESCAPE = 0x1B;
 
 	/// <summary>
 	/// 添加图标失败后隔多久重试、最多重试几次：登录后任务栏还没就绪时会失败，之后不一定再收到 TaskbarCreated。
@@ -58,9 +68,9 @@ internal sealed class TrayIcon : IDisposable
 	public event Action? ClipboardChanged;
 
 	/// <summary>
-	/// 按下了 SetHotkey 注册的全局快捷键。
+	/// 按下了 SetHotkey 注册的全局快捷键，参数是快捷键编号（SearchHotkeyId 等）。
 	/// </summary>
-	public event Action? HotkeyPressed;
+	public event Action<int>? HotkeyPressed;
 
 	/// <summary>
 	/// 其他进程用 WM_COPYDATA 发来数据（参数是 dwData 和 Unicode 文本），返回是否接收。在窗口过程里同步调用，发送方等着结果，不要在里面弹窗。
@@ -140,18 +150,29 @@ internal sealed class TrayIcon : IDisposable
 	}
 
 	/// <summary>
-	/// 注册全局快捷键（只有一个，先注销原来的）；传 null 表示不用快捷键。被其他程序占用时返回 false。
+	/// 注册编号为 id 的全局快捷键（先注销这个编号原来的）；传 null 表示不用快捷键。被其他程序占用时返回 false。
 	/// </summary>
-	public bool SetHotkey(Hotkey? hotkey)
+	public bool SetHotkey(int id, Hotkey? hotkey)
 	{
-		UnregisterHotKey(Handle, HotkeyId);
-		return hotkey is not { } key || RegisterHotKey(Handle, HotkeyId, key.NativeModifiers | MOD_NOREPEAT, key.VirtualKey);
+		UnregisterHotKey(Handle, id);
+		return hotkey is not { } key || RegisterHotKey(Handle, id, key.NativeModifiers | MOD_NOREPEAT, key.VirtualKey);
+	}
+
+	/// <summary>
+	/// 速览期间临时把单独的 Esc 注册成全局快捷键：焦点在哪个窗口（分区、搜索框）上按 Esc 都能结束速览。速览结束立即注销，不影响平时的 Esc。
+	/// </summary>
+	public bool SetEscapeHotkey(bool enabled)
+	{
+		UnregisterHotKey(Handle, EscapeHotkeyId);
+		return !enabled || RegisterHotKey(Handle, EscapeHotkeyId, MOD_NOREPEAT, VK_ESCAPE);
 	}
 
 	public void Dispose()
 	{
 		_addRetryTimer.Stop();
-		UnregisterHotKey(Handle, HotkeyId);
+		UnregisterHotKey(Handle, SearchHotkeyId);
+		UnregisterHotKey(Handle, PeekHotkeyId);
+		UnregisterHotKey(Handle, EscapeHotkeyId);
 		RemoveClipboardFormatListener(Handle);
 		if (_sessionNotification)
 		{
@@ -286,9 +307,9 @@ internal sealed class TrayIcon : IDisposable
 		{
 			ClipboardChanged?.Invoke();
 		}
-		else if (msg == WM_HOTKEY && (int)wParam == HotkeyId)
+		else if (msg == WM_HOTKEY && (int)wParam is SearchHotkeyId or PeekHotkeyId or EscapeHotkeyId)
 		{
-			HotkeyPressed?.Invoke();
+			HotkeyPressed?.Invoke((int)wParam);
 			handled = true;
 		}
 		else if (DesktopHost.IsWindows10 && msg == WM_WTSSESSION_CHANGE && (int)wParam is WTS_SESSION_UNLOCK or WTS_SESSION_LOGON)
