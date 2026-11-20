@@ -582,5 +582,9 @@
 				</Border>
 			</Grid>
 		</Border>
+		<!-- 自动隐藏的分区藏起来时代替收起的那一条：1/255 的底色看不见但能接收鼠标（全透明的像素会点穿），细线由代码按设置显示 -->
+		<Border x:Name="HiddenStrip" Background="#01000000" Visibility="Collapsed">
+			<Border x:Name="HiddenLine" />
+		</Border>
 	</Grid>
 </Window>

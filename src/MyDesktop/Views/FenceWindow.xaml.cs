@@ -55,6 +55,7 @@ internal partial class FenceWindow : Window
 	readonly HashSet<string> _arriving = new(StringComparer.OrdinalIgnoreCase);
 	readonly DispatcherTimer _refreshTimer;
 	readonly DispatcherTimer _collapseTimer;
+	readonly DispatcherTimer _revealTimer;
 	readonly DispatcherTimer _buttonsTimer;
 	IntPtr _hwnd;
 	FileSystemWatcher? _watcher;
@@ -163,6 +164,8 @@ internal partial class FenceWindow : Window
 		_collapseTimer = new DispatcherTimer();
 		ApplyCollapseDelay();
 		_collapseTimer.Tick += CollapseTimer_Tick;
+		_revealTimer = new DispatcherTimer();
+		_revealTimer.Tick += RevealTimer_Tick;
 		_buttonsTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
 		_buttonsTimer.Tick += (_, _) =>
 		{
@@ -258,6 +261,16 @@ internal partial class FenceWindow : Window
 
 	bool IsCollapsed => Model.RolledUp && !_tempExpanded;
 
+	/// <summary>
+	/// 卷起后连标题栏也藏起来：分区单独设置优先，为空时跟随全局默认。
+	/// </summary>
+	bool AutoHides => Model.AutoHide ?? Settings.AutoHide;
+
+	/// <summary>
+	/// 现在是否处于藏起来的状态（收起动画播完、只剩看不见的那一条）。
+	/// </summary>
+	bool _autoHidden;
+
 	IconSizeMode EffectiveIconSize => Model.IconSize ?? Settings.DefaultIconSize;
 
 	/// <summary>
@@ -350,6 +363,7 @@ internal partial class FenceWindow : Window
 		_backdrop?.Dispose();
 		_refreshTimer.Stop();
 		_collapseTimer.Stop();
+		_revealTimer.Stop();
 		_buttonsTimer.Stop();
 		_tabHoverTimer.Stop();
 		_mouseTabTimer.Stop();
@@ -1457,6 +1471,68 @@ internal partial class FenceWindow : Window
 			RollEdge.Right => new CornerRadius(0, radius, radius, 0),
 		};
 		ContentHost.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+		UpdateAutoHideVisuals(collapsed && AutoHides && _rollClip == null);
+	}
+
+	/// <summary>
+	/// 自动隐藏：藏起来时背景、标题栏都不画，只留一条看不见但能接收鼠标的条（可选带细线），亚克力窗口也一起藏。
+	/// </summary>
+	void UpdateAutoHideVisuals(bool hidden)
+	{
+		var shown = hidden ? Visibility.Hidden : Visibility.Visible;
+		BlurLayer.Visibility = shown;
+		Frame.Visibility = shown;
+		HiddenStrip.Visibility = hidden ? Visibility.Visible : Visibility.Collapsed;
+		if (hidden)
+		{
+			// 细线 2 物理像素，贴在收向的那一侧
+			double thickness = 2 / ScaleFactor;
+			bool vertical = IsVerticalRoll;
+			HiddenLine.Visibility = Settings.AutoHideShowLine ? Visibility.Visible : Visibility.Collapsed;
+			HiddenLine.Background = Frozen(Appearance.ParseColor(Settings.AutoHideLineColor, Colors.White));
+			HiddenLine.Width = vertical ? thickness : double.NaN;
+			HiddenLine.Height = vertical ? double.NaN : thickness;
+			HiddenLine.HorizontalAlignment = Model.RollEdge switch
+			{
+				RollEdge.Top or RollEdge.Bottom => HorizontalAlignment.Stretch,
+				RollEdge.Left => HorizontalAlignment.Left,
+				RollEdge.Right => HorizontalAlignment.Right,
+			};
+			HiddenLine.VerticalAlignment = Model.RollEdge switch
+			{
+				RollEdge.Left or RollEdge.Right => VerticalAlignment.Stretch,
+				RollEdge.Top => VerticalAlignment.Top,
+				RollEdge.Bottom => VerticalAlignment.Bottom,
+			};
+		}
+		else
+		{
+			_revealTimer.Stop();
+		}
+		if (_autoHidden != hidden)
+		{
+			_autoHidden = hidden;
+			UpdateBackdrop();
+		}
+	}
+
+	/// <summary>
+	/// 设置里改了自动隐藏的默认开关或细线。
+	/// </summary>
+	public void ApplyAutoHide() => UpdateRollVisuals();
+
+	void SetAutoHide(bool? autoHide)
+	{
+		Model.AutoHide = autoHide;
+		// 打开时还展开着的分区顺带卷起，不然看不出效果
+		if (AutoHides && !Model.RolledUp)
+		{
+			ToggleRollUp();
+			return;
+		}
+		UpdateRollVisuals();
+		_manager.SyncGroup(this);
+		_manager.SaveSoon();
 	}
 
 	/// <summary>
@@ -1839,7 +1915,7 @@ internal partial class FenceWindow : Window
 		{
 			return;
 		}
-		if (!IsVisible)
+		if (!IsVisible || _autoHidden)
 		{
 			_backdrop.Hide();
 			return;
@@ -2309,13 +2385,42 @@ internal partial class FenceWindow : Window
 		_buttonsTimer.Stop();
 		_collapseTimer.Stop();
 		ShowTitleButtons(true);
-		if (Model.RolledUp && !_tempExpanded && Settings.ExpandOnHover)
+		if (!Model.RolledUp || _tempExpanded)
 		{
-			_tempExpanded = true;
-			// 展开的部分盖住普通应用和旁边的分区，鼠标才点得到被挡住的图标
-			SyncExpandedZOrder();
-			_manager.BringToFront(this);
-			ApplyRollBounds();
+			return;
+		}
+		// 藏起来的分区不管「悬停展开」开没开都要能呼出来，停一会儿再展开，免得鼠标路过时误弹出
+		if (_autoHidden)
+		{
+			if (Settings.AutoHideRevealDelay <= 0)
+			{
+				HoverExpand();
+				return;
+			}
+			_revealTimer.Interval = TimeSpan.FromMilliseconds(Settings.AutoHideRevealDelay);
+			RestartTimer(_revealTimer);
+		}
+		else if (Settings.ExpandOnHover)
+		{
+			HoverExpand();
+		}
+	}
+
+	void HoverExpand()
+	{
+		_tempExpanded = true;
+		// 展开的部分盖住普通应用和旁边的分区，鼠标才点得到被挡住的图标
+		SyncExpandedZOrder();
+		_manager.BringToFront(this);
+		ApplyRollBounds();
+	}
+
+	void RevealTimer_Tick(object? sender, EventArgs e)
+	{
+		_revealTimer.Stop();
+		if (_autoHidden && Model.RolledUp && !_tempExpanded && GetBounds().Contains(NativeMethods.GetCursorPos()))
+		{
+			HoverExpand();
 		}
 	}
 
@@ -2328,6 +2433,7 @@ internal partial class FenceWindow : Window
 	protected override void OnMouseLeave(MouseEventArgs e)
 	{
 		base.OnMouseLeave(e);
+		_revealTimer.Stop();
 		RestartTimer(_buttonsTimer);
 		if (_tempExpanded)
 		{
@@ -3590,6 +3696,13 @@ internal partial class FenceWindow : Window
 		};
 		edges.AddRange(Enum.GetValues<RollEdge>().Select(edge => new ExtraMenuItem(edge.DisplayName(), () => SetRollDirection(edge), Checked: Model.RollDirection == edge, Radio: true)));
 		items.Add(new("卷起方向", Children: edges));
+		items.Add(new("卷起后自动隐藏", Children:
+		[
+			new("开启", () => SetAutoHide(true), Checked: Model.AutoHide == true, Radio: true),
+			new("关闭", () => SetAutoHide(false), Checked: Model.AutoHide == false, Radio: true),
+			separator,
+			new(Settings.AutoHide ? "跟随默认（开启）" : "跟随默认（关闭）", () => SetAutoHide(null), Checked: Model.AutoHide == null, Radio: true),
+		]));
 		items.Add(new("锁定分区", ToggleLock, Checked: Model.Locked));
 		if (Model.IsPortal)
 		{

@@ -815,6 +815,7 @@ internal sealed class FenceManager
 	{
 		(to.X, to.Y, to.Width, to.Height, to.LayoutDpi) = (from.X, from.Y, from.Width, from.Height, from.LayoutDpi);
 		(to.RolledUp, to.RollDirection, to.RollEdge, to.Locked) = (from.RolledUp, from.RollDirection, from.RollEdge, from.Locked);
+		to.AutoHide = from.AutoHide;
 		to.BoundsByDpi = new Dictionary<int, FenceBounds>(from.BoundsByDpi);
 		to.LayoutByDisplay = new Dictionary<string, FenceLayout>(from.LayoutByDisplay);
 	}
@@ -2066,6 +2067,17 @@ internal sealed class FenceManager
 		foreach (var window in _windows)
 		{
 			window.ApplyCollapseDelay();
+		}
+	}
+
+	/// <summary>
+	/// 设置里改了自动隐藏的默认开关或细线：卷起的分区按新设置藏起或露出来。
+	/// </summary>
+	public void ApplyAutoHide()
+	{
+		foreach (var window in _windows)
+		{
+			window.ApplyAutoHide();
 		}
 	}
 
