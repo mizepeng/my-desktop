@@ -47,9 +47,19 @@ internal sealed class DesktopTakeover : IDisposable
 	static readonly TimeSpan PlacementWait = TimeSpan.FromSeconds(15);
 
 	/// <summary>
-	/// 消失后这么久之内又出现的项目、这么久之内改名得到的项目，都不算新出现的文件。
+	/// 看门狗隔这么久全面检查一次桌面图标列表有没有都藏住（要枚举所有窗口的子窗口，不每次都查）。
 	/// </summary>
-	static readonly TimeSpan ReappearWindow = TimeSpan.FromSeconds(30);
+	static readonly TimeSpan IconListCheckInterval = TimeSpan.FromSeconds(30);
+
+	/// <summary>
+	/// 资源管理器的图标列表又显示出来、被重新隐藏时，前几次都记日志，之后至多隔这么久记一条。
+	/// </summary>
+	static readonly TimeSpan RehideLogInterval = TimeSpan.FromMinutes(10);
+
+	/// <summary>
+	/// 把新图标挪出分区底下后，最多等资源管理器这么久报告新位置；期间图标层直接把它画在要挪到的格子上。
+	/// </summary>
+	static readonly TimeSpan MoveOutWait = TimeSpan.FromSeconds(3);
 
 	readonly FenceManager _manager;
 	readonly Dispatcher _dispatcher;
@@ -68,6 +78,14 @@ internal sealed class DesktopTakeover : IDisposable
 	bool _layersHidden;
 	bool _disposed;
 	bool _dpiRelayoutPending;
+	// 接管后是否已经藏起过资源管理器的图标列表；藏起之前它本来就显示着，不检查
+	bool _listHidden;
+	// 上一次全面检查桌面图标列表的结果和时刻，结果变了才记日志
+	string? _iconListState;
+	DateTime _lastIconListCheck;
+	// 资源管理器的图标列表又显示出来、被重新隐藏的次数，和上次为此记日志的时刻
+	int _rehideCount;
+	DateTime _lastRehideLog;
 	// 散放图标格子左上角的屏幕位置（物理像素），拖动后据此算出新位置；_order 是它们的排列顺序（逐列从上到下）
 	Dictionary<string, POINT> _placement = new(StringComparer.OrdinalIgnoreCase);
 	List<string> _order = [];
@@ -91,10 +109,9 @@ internal sealed class DesktopTakeover : IDisposable
 	DrawFrameWindow? _marquee;
 	// 见过的桌面项目，用来认出新出现的文件；为 null 时下一次读到的是全量（接管、资源管理器重启），不算新文件
 	HashSet<string>? _seenKeys;
-	// 刚消失的项目和消失的时刻：不久又出现的（替换文件、更新程序替换快捷方式）不算新文件
-	readonly Dictionary<string, DateTime> _goneKeys = new(StringComparer.OrdinalIgnoreCase);
-	// 刚改名得到的项目，改名不算新文件
-	readonly Dictionary<string, DateTime> _renamedKeys = new(StringComparer.OrdinalIgnoreCase);
+	// 正被挪出分区底下的新图标：资源管理器报告的原格子、要挪到的格子和开始挪的时刻。
+	// 资源管理器报告新位置之前，图标层直接画在要挪到的格子上，不在分区底下露一下再跳过去
+	readonly Dictionary<string, (POINT From, POINT To, DateTime Since)> _movingOut = new(StringComparer.OrdinalIgnoreCase);
 
 	public DesktopTakeover(FenceManager manager)
 	{
@@ -112,7 +129,6 @@ internal sealed class DesktopTakeover : IDisposable
 		Items = new DesktopItems(_dispatcher);
 		Items.Changed += OnItemsChanged;
 		Items.Renamed += _manager.OnItemRenamed;
-		Items.Renamed += (_, newPath) => _renamedKeys[newPath] = DateTime.UtcNow;
 		DesktopDrag.CurrentChanged += OnDragChanged;
 		WatchAdvancedSettings();
 		HookExplorer();
@@ -282,15 +298,18 @@ internal sealed class DesktopTakeover : IDisposable
 		}
 		var fresh = TakeNewKeys();
 		_manager.OnDesktopItemsChanged();
+		SettleMovingOut();
+		// 先决定落在分区底下的新图标挪到哪里，图标层第一次画它就画在那里，不在分区底下露一下（Max 实测）
+		MoveOutFromUnderFences(fresh);
 		Relayout();
 		TryPendingRename();
 		PlacePending();
-		MoveOutFromUnderFences(fresh);
 	}
 
 	void Activate()
 	{
 		_active = true;
+		_listHidden = false;
 		EnsureLayers();
 		Relayout();
 		ApplyLayerVisibility(false);
@@ -304,6 +323,7 @@ internal sealed class DesktopTakeover : IDisposable
 			{
 				_manager.OnDesktopTakenOver();
 				DesktopHost.SetIconsVisible(false);
+				_listHidden = true;
 			}
 		};
 		timer.Start();
@@ -342,14 +362,79 @@ internal sealed class DesktopTakeover : IDisposable
 		// 缩放比例变化后正在让资源管理器的图标列表短暂显示、重新排列，这时不要把它藏回去
 		if (DesktopHost.AreIconsVisible() && !DesktopHost.IconsHiddenBySystem() && !_dpiRelayoutPending)
 		{
+			if (_listHidden)
+			{
+				// 藏起后又显示出来、事件钩子没拦住（拦住的话这时已经藏好了）：和本程序画的图标叠着显示了最多一个看门狗周期
+				LogRehide("看门狗", DesktopHost.FindFolderView());
+			}
 			DesktopHost.SetIconsVisible(false);
 			Items.RefreshSoon();
 		}
+		CheckIconLists();
 		ApplyLayerVisibility(true);
 		if (_guard is { HasExited: true })
 		{
 			StartGuard();
 		}
+	}
+
+	/// <summary>
+	/// 资源管理器的图标列表藏起后又显示出来、要重新隐藏：前三次都记，之后限频，带上累计次数。
+	/// 查「图标名称画了两遍」用（B 站反馈）：列表显示着的时候，名称和本程序画的叠成两份。
+	/// </summary>
+	void LogRehide(string source, IntPtr view)
+	{
+		_rehideCount++;
+		var now = DateTime.UtcNow;
+		if (_rehideCount > 3 && now - _lastRehideLog < RehideLogInterval)
+		{
+			return;
+		}
+		_lastRehideLog = now;
+		Log.Info($"资源管理器的桌面图标列表又显示出来了，重新隐藏（{source}发现，累计第 {_rehideCount} 次）：{DesktopHost.DescribeWindow(view)}");
+	}
+
+	/// <summary>
+	/// 隔一段时间全面检查桌面图标列表都藏住了没有，结果变了才记日志（第一次检查记一条现状）。只读、不做补救：
+	/// 「图标名称画了两遍」（B 站反馈）可能是资源管理器的列表没藏住，和本程序画的图标叠在一起；
+	/// 要隐藏的那个找不到、或者另有一份显示着的桌面图标列表（比如被别的桌面软件挪进了它自己的窗口），本程序都藏不到。
+	/// </summary>
+	void CheckIconLists()
+	{
+		var now = DateTime.UtcNow;
+		if (!_listHidden || _dpiRelayoutPending || DesktopHost.IconsHiddenBySystem() || now - _lastIconListCheck < IconListCheckInterval)
+		{
+			return;
+		}
+		_lastIconListCheck = now;
+		var target = DesktopHost.FindFolderView();
+		var lists = DesktopHost.FindAllIconLists();
+		// 要隐藏的那个刚被看门狗重新隐藏时是异步的，这时可能还显示着，由 LogRehide 记，这里不算
+		var shown = lists.Where(h => h != target && IsWindowVisible(h)).ToList();
+		bool normal = target != IntPtr.Zero && shown.Count == 0;
+		string state = target == IntPtr.Zero
+				? $"找不到要隐藏的资源管理器桌面图标列表（桌面窗口 {DesktopHost.DescribeWindow(DesktopHost.FindDesktopWindow())}），"
+						+ $"所有窗口里共有 {lists.Count} 个桌面图标列表：{string.Join("、", lists.Select(Describe))}"
+				: shown.Count > 0
+						? $"除了已隐藏的 {DesktopHost.DescribeWindow(target)}，还有 {shown.Count} 个桌面图标列表显示着，本程序藏不到："
+								+ string.Join("、", shown.Select(Describe))
+						: $"桌面图标列表只有已隐藏的 {DesktopHost.DescribeWindow(target)}"
+								+ (lists.Count > 1 ? $"，另有 {lists.Count - 1} 个不显示的：{string.Join("、", lists.Where(h => h != target).Select(Describe))}" : "");
+		if (state == _iconListState)
+		{
+			return;
+		}
+		_iconListState = state;
+		if (normal)
+		{
+			Log.Info(state);
+		}
+		else
+		{
+			Log.Warn($"{state}；显示着的列表会和本程序画的图标叠在一起");
+		}
+
+		static string Describe(IntPtr hwnd) => $"{DesktopHost.DescribeWindow(hwnd)}{(IsWindowVisible(hwnd) ? "显示着" : "不显示")}";
 	}
 
 	/// <summary>
@@ -600,10 +685,19 @@ internal sealed class DesktopTakeover : IDisposable
 				// 资源管理器自己又显示了图标视图（例如重新勾选了「显示桌面图标」），立即重新隐藏
 				if (!DesktopHost.IconsHiddenBySystem())
 				{
+					if (_listHidden)
+					{
+						LogRehide("事件钩子", hwnd);
+					}
 					DesktopHost.SetIconsVisible(false);
 				}
 				ApplyLayerVisibility(true);
 				Items.RefreshSoon();
+			}
+			else if (viewShown && _listHidden && GetClassName(GetParent(hwnd)) == "SHELLDLL_DefView")
+			{
+				// 显示出来的是另一份桌面图标列表，本程序藏不到它，会和画的图标叠在一起（查「图标名称画了两遍」，B 站反馈）
+				Log.Warn($"资源管理器显示了另一份桌面图标列表 {DesktopHost.DescribeWindow(hwnd)}，要隐藏的是 {DesktopHost.DescribeWindow(folderView)}");
 			}
 			else if (hwnd != _handedOffEdit && GetParent(hwnd) == folderView && GetClassName(hwnd) == "Edit")
 			{
@@ -817,7 +911,7 @@ internal sealed class DesktopTakeover : IDisposable
 		var loose = LooseEntries(snapshot);
 		var placed = snapshot.AutoArrange && !_keepExplorerPlaces
 				? Arrange(snapshot, loose)
-				: loose.Select(e => (Entry: e, Cell: ToCell(snapshot, e.Position))).ToList();
+				: loose.Select(e => (Entry: e, Cell: _movingOut.TryGetValue(e.Key, out var move) ? move.To : ToCell(snapshot, e.Position))).ToList();
 		var placement = new Dictionary<string, POINT>(StringComparer.OrdinalIgnoreCase);
 		var groups = _layers.ToDictionary(l => l, _ => new List<(DesktopEntry Entry, POINT Cell)>());
 		foreach (var item in placed)
@@ -890,7 +984,9 @@ internal sealed class DesktopTakeover : IDisposable
 
 	/// <summary>
 	/// 和上一次读到的桌面视图比，新出现的项目。第一次读到（接管、资源管理器重启后）是全量，不算；
-	/// 消失后不久又出现的、刚改名得到的也不算。
+	/// 消失后又出现的、改名得到的也算：它们只有落在分区底下才会被挪，而散放图标在分区底下本来就看不见。
+	/// 以前这两种都排除（为了替换文件、改名时不动用户摆好的图标），结果删掉后马上重新下载的同名文件、
+	/// 浏览器下载最后一步从临时文件（如 .crdownload）改成正式名字的文件，都留在分区底下（B 站反馈，Max 实测）。
 	/// </summary>
 	List<string> TakeNewKeys()
 	{
@@ -901,29 +997,7 @@ internal sealed class DesktopTakeover : IDisposable
 		var current = snapshot.Items.Select(e => e.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
 		var seen = _seenKeys;
 		_seenKeys = current;
-		var now = DateTime.UtcNow;
-		foreach (var stale in _goneKeys.Where(p => now - p.Value > ReappearWindow).Select(p => p.Key).ToList())
-		{
-			_goneKeys.Remove(stale);
-		}
-		foreach (var stale in _renamedKeys.Where(p => now - p.Value > ReappearWindow).Select(p => p.Key).ToList())
-		{
-			_renamedKeys.Remove(stale);
-		}
-		if (seen == null)
-		{
-			return [];
-		}
-		foreach (var key in seen.Where(k => !current.Contains(k)))
-		{
-			_goneKeys[key] = now;
-		}
-		var fresh = current.Where(k => !seen.Contains(k) && !_goneKeys.ContainsKey(k) && !_renamedKeys.ContainsKey(k)).ToList();
-		foreach (var key in current)
-		{
-			_goneKeys.Remove(key);
-		}
-		return fresh;
+		return seen == null ? [] : current.Where(k => !seen.Contains(k)).ToList();
 	}
 
 	/// <summary>
@@ -956,16 +1030,21 @@ internal sealed class DesktopTakeover : IDisposable
 		int insetY = spacing.Y / 8;
 		RECT Inner(POINT c) => new(c.X + insetX, c.Y + insetY, c.X + spacing.X - insetX, c.Y + spacing.Y - insetY);
 		bool Covered(POINT c) => blocked.Any(b => b.IntersectsWith(Inner(c)));
-		var occupied = snapshot.Items.Where(e => !fenced.Contains(e.Key) && !candidates.Contains(e.Key))
+		// 分区里的图标在资源管理器的隐藏列表里也还占着格子（归入分区前的位置）。开着「将图标与网格对齐」时，
+		// 写到这种格子上会被资源管理器顺延到下一个空格，可能又落回分区底下（Max 实测），所以它们也算占用
+		var occupied = snapshot.Items.Where(e => !candidates.Contains(e.Key))
 				.Select(e => Inner(ToCell(snapshot, e.Position))).ToList();
 		bool Free(POINT c) => !Covered(c) && !occupied.Any(o => o.IntersectsWith(Inner(c)));
 		var keys = new List<string>();
 		var points = new List<POINT>();
+		// 每个新图标的去向：查「新文件又被分区挡住」的反馈时，看日志就分得清是没认出新文件、没判成挡住，还是找不到空格
+		var notes = new List<string>();
 		foreach (var entry in snapshot.Items.Where(e => candidates.Contains(e.Key)))
 		{
 			var cell = ToCell(snapshot, entry.Position);
 			if (!Covered(cell))
 			{
+				notes.Add($"{entry.DisplayName} 在 ({cell.X}, {cell.Y}) 没被挡住");
 				occupied.Add(Inner(cell));
 				continue;
 			}
@@ -988,15 +1067,81 @@ internal sealed class DesktopTakeover : IDisposable
 			}
 			if (best is POINT free)
 			{
+				notes.Add($"{entry.DisplayName} 在 ({cell.X}, {cell.Y}) 被分区挡住，挪到 ({free.X}, {free.Y})");
 				keys.Add(entry.Key);
 				points.Add(ToPosition(snapshot, free));
 				occupied.Add(Inner(free));
+				_movingOut[entry.Key] = (cell, free, DateTime.UtcNow);
+			}
+			else
+			{
+				notes.Add($"{entry.DisplayName} 在 ({cell.X}, {cell.Y}) 被分区挡住，所在显示器上找不到空格");
 			}
 		}
+		Log.Info($"新出现的散放图标：{string.Join("；", notes)}");
 		if (keys.Count > 0)
 		{
-			Log.Info($"新出现的 {keys.Count} 个桌面图标落在分区底下，挪到旁边的空格");
 			Items.Move(keys, points);
+			// 资源管理器一直不报告新位置时，也要按时结束「先画在要挪到的格子上」
+			var timer = new DispatcherTimer { Interval = MoveOutWait + TimeSpan.FromMilliseconds(500) };
+			timer.Tick += (_, _) =>
+			{
+				timer.Stop();
+				if (!_disposed && _movingOut.Count > 0)
+				{
+					SettleMovingOut();
+					Relayout();
+				}
+			};
+			timer.Start();
+		}
+	}
+
+	/// <summary>
+	/// 核对正被挪出分区底下的图标：资源管理器报告了新位置（或项目没了）就不再替它决定画在哪里；
+	/// 新位置不是要挪到的格子时记下来，又被分区挡住时记警告；超时还没动也记警告。
+	/// </summary>
+	void SettleMovingOut()
+	{
+		if (_movingOut.Count == 0 || Items.Snapshot is not DesktopSnapshot snapshot)
+		{
+			return;
+		}
+		var spacing = snapshot.Spacing;
+		var blocked = _manager.FenceLayoutBounds();
+		var now = DateTime.UtcNow;
+		foreach (var (key, move) in _movingOut.ToList())
+		{
+			if (snapshot.ByKey.GetValueOrDefault(key) is not DesktopEntry entry)
+			{
+				_movingOut.Remove(key);
+				continue;
+			}
+			var cell = ToCell(snapshot, entry.Position);
+			if (cell.X == move.From.X && cell.Y == move.From.Y)
+			{
+				if (now - move.Since > MoveOutWait)
+				{
+					Log.Warn($"资源管理器 {MoveOutWait.TotalSeconds:0} 秒内没有把 {entry.DisplayName} 从 ({cell.X}, {cell.Y}) 挪到 ({move.To.X}, {move.To.Y})，仍在分区底下");
+					_movingOut.Remove(key);
+				}
+				continue;
+			}
+			_movingOut.Remove(key);
+			if (cell.X == move.To.X && cell.Y == move.To.Y)
+			{
+				continue;
+			}
+			var inner = new RECT(cell.X + spacing.X / 8, cell.Y + spacing.Y / 8, cell.X + spacing.X - spacing.X / 8, cell.Y + spacing.Y - spacing.Y / 8);
+			string message = $"资源管理器把 {entry.DisplayName} 摆到了 ({cell.X}, {cell.Y})，不是要挪到的 ({move.To.X}, {move.To.Y})";
+			if (blocked.Any(b => b.IntersectsWith(inner)))
+			{
+				Log.Warn($"{message}，又被分区挡住");
+			}
+			else
+			{
+				Log.Info(message);
+			}
 		}
 	}
 

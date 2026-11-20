@@ -1199,6 +1199,59 @@ internal static class DesktopHost
 		{
 			ShowWindowAsync(view, visible ? SW_SHOWNA : SW_HIDE);
 		}
+		else
+		{
+			Log.Warn($"找不到资源管理器的桌面图标列表，没能{(visible ? "显示" : "隐藏")}（桌面窗口 {DescribeWindow(FindDesktopWindow())}）");
+		}
+	}
+
+	/// <summary>
+	/// 所有桌面图标列表（父窗口是 SHELLDLL_DefView 的 SysListView32），不管被放进了哪个窗口；资源管理器的文件夹窗口、文件对话框用的不是这种控件。
+	/// 查「图标名称画了两遍」用（B 站反馈）：资源管理器的列表没藏住、或者另有一份时，和本程序画的图标叠在一起，图标重合看不出来，名称换行不同露出两份。
+	/// 要逐个枚举所有窗口的子窗口，只在看门狗里隔一段时间调一次。只读。
+	/// </summary>
+	public static List<IntPtr> FindAllIconLists()
+	{
+		var result = new List<IntPtr>();
+		EnumWindowsProc onChild = (hwnd, _) =>
+		{
+			if (GetClassName(hwnd) == "SysListView32" && GetClassName(GetParent(hwnd)) == "SHELLDLL_DefView")
+			{
+				result.Add(hwnd);
+			}
+			return true;
+		};
+		EnumWindows((top, _) =>
+		{
+			EnumChildWindows(top, onChild, IntPtr.Zero);
+			return true;
+		}, IntPtr.Zero);
+		return result;
+	}
+
+	/// <summary>
+	/// 窗口的类名、句柄、所属进程和顶层窗口，写日志用。
+	/// </summary>
+	public static string DescribeWindow(IntPtr hwnd)
+	{
+		if (hwnd == IntPtr.Zero)
+		{
+			return "无";
+		}
+		GetWindowThreadProcessId(hwnd, out uint pid);
+		string process;
+		try
+		{
+			using var p = System.Diagnostics.Process.GetProcessById((int)pid);
+			process = p.ProcessName;
+		}
+		catch (ArgumentException)
+		{
+			process = "已退出";
+		}
+		var root = GetAncestor(hwnd, GA_ROOT);
+		string top = root == hwnd || root == IntPtr.Zero ? "" : $"，顶层 {GetClassName(root)}(0x{root.ToInt64():X})";
+		return $"{GetClassName(hwnd)}(0x{hwnd.ToInt64():X}，进程 {process} {pid}{top})";
 	}
 
 	public static bool AreIconsVisible()
