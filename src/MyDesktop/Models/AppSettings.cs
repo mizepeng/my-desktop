@@ -205,6 +205,11 @@ public sealed class AppSettings
 	public bool AutoHideShowLine { get; set; }
 
 	/// <summary>
+	/// 自动隐藏后那道细线的颜色（#RRGGBB）；浅色桌面上可以改成深色。
+	/// </summary>
+	public string AutoHideLineColor { get; set; } = "#FFFFFF";
+
+	/// <summary>
 	/// 鼠标在自动隐藏的分区那一条上停多久才展开（毫秒），免得鼠标路过时误弹出；0 为立即展开。
 	/// </summary>
 	public int AutoHideRevealDelay { get; set; } = 150;

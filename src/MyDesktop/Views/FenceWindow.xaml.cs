@@ -1489,6 +1489,7 @@ internal partial class FenceWindow : Window
 			double thickness = 2 / ScaleFactor;
 			bool vertical = IsVerticalRoll;
 			HiddenLine.Visibility = Settings.AutoHideShowLine ? Visibility.Visible : Visibility.Collapsed;
+			HiddenLine.Background = Frozen(Appearance.ParseColor(Settings.AutoHideLineColor, Colors.White));
 			HiddenLine.Width = vertical ? thickness : double.NaN;
 			HiddenLine.Height = vertical ? double.NaN : thickness;
 			HiddenLine.HorizontalAlignment = Model.RollEdge switch

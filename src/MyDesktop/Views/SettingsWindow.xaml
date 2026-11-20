@@ -254,6 +254,17 @@
 							</StackPanel>
 						</CheckBox>
 					</Border>
+					<Border Style="{StaticResource Card}" IsEnabled="{Binding IsChecked, ElementName=AutoHideLineBox}">
+						<DockPanel>
+							<TextBlock VerticalAlignment="Center" Text="细线颜色" />
+							<StackPanel DockPanel.Dock="Right" HorizontalAlignment="Right" Orientation="Horizontal">
+								<Button Padding="2" Click="AutoHideLineColor_Click" ToolTip="选择颜色">
+									<Border x:Name="AutoHideLineColorPreview" Width="24" Height="24" BorderBrush="#40808080" BorderThickness="1" CornerRadius="4" />
+								</Button>
+								<TextBox x:Name="AutoHideLineColorBox" Width="120" Margin="8,0,0,0" VerticalContentAlignment="Center" KeyDown="AutoHideLineColorBox_KeyDown" LostFocus="AutoHideLineColorBox_LostFocus" />
+							</StackPanel>
+						</DockPanel>
+					</Border>
 					<Border Style="{StaticResource Card}">
 						<StackPanel>
 							<TextBlock Text="鼠标停留多久后呼出隐藏的分区" />

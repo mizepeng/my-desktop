@@ -138,6 +138,7 @@ internal partial class SettingsWindow : Window
 		CollapseDelaySlider.Value = Settings.CollapseDelay;
 		AutoHideBox.IsChecked = Settings.AutoHide;
 		AutoHideLineBox.IsChecked = Settings.AutoHideShowLine;
+		UpdateAutoHideLineColor();
 		AutoHideRevealDelaySlider.Value = Settings.AutoHideRevealDelay;
 		DrawToCreateBox.IsChecked = Settings.DrawToCreate;
 		DesktopMenuBox.IsChecked = Settings.DesktopContextMenu;
@@ -497,6 +498,57 @@ internal partial class SettingsWindow : Window
 		_manager.SaveSoon();
 	}
 
+	void UpdateAutoHideLineColor()
+	{
+		var color = Appearance.ParseColor(Settings.AutoHideLineColor, Colors.White);
+		AutoHideLineColorPreview.Background = new SolidColorBrush(color);
+		AutoHideLineColorBox.Text = Appearance.ToHex(color);
+	}
+
+	void SetAutoHideLineColor(Color color)
+	{
+		Settings.AutoHideLineColor = Appearance.ToHex(color);
+		UpdateAutoHideLineColor();
+		_manager.ApplyAutoHide();
+		_manager.SaveSoon();
+	}
+
+	void AutoHideLineColor_Click(object sender, RoutedEventArgs e)
+	{
+		var current = Appearance.ParseColor(Settings.AutoHideLineColor, Colors.White);
+		if (ColorDialog.Pick(new WindowInteropHelper(this).Handle, current) is Color picked)
+		{
+			SetAutoHideLineColor(picked);
+		}
+	}
+
+	void AutoHideLineColorBox_KeyDown(object sender, KeyEventArgs e)
+	{
+		if (e.Key == Key.Enter)
+		{
+			ApplyAutoHideLineColorText();
+		}
+	}
+
+	void AutoHideLineColorBox_LostFocus(object sender, RoutedEventArgs e) => ApplyAutoHideLineColorText();
+
+	void ApplyAutoHideLineColorText()
+	{
+		var text = AutoHideLineColorBox.Text.Trim();
+		if (!text.StartsWith('#'))
+		{
+			text = "#" + text;
+		}
+		if (Appearance.TryParseColor(text, out var color))
+		{
+			SetAutoHideLineColor(color);
+		}
+		else
+		{
+			UpdateAutoHideLineColor();
+		}
+	}
+
 	void AutoHideRevealDelaySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
 	{
 		if (_loading || AutoHideRevealDelayText == null)
@@ -831,6 +883,7 @@ internal partial class SettingsWindow : Window
 				Settings.CollapseDelay = defaults.CollapseDelay;
 				Settings.AutoHide = defaults.AutoHide;
 				Settings.AutoHideShowLine = defaults.AutoHideShowLine;
+				Settings.AutoHideLineColor = defaults.AutoHideLineColor;
 				Settings.AutoHideRevealDelay = defaults.AutoHideRevealDelay;
 				Settings.TabsFillWidth = defaults.TabsFillWidth;
 				Settings.TabAlignment = defaults.TabAlignment;
