@@ -47,11 +47,6 @@ internal sealed class DesktopTakeover : IDisposable
 	static readonly TimeSpan PlacementWait = TimeSpan.FromSeconds(15);
 
 	/// <summary>
-	/// 消失后这么久之内又出现的项目、这么久之内改名得到的项目，都不算新出现的文件。
-	/// </summary>
-	static readonly TimeSpan ReappearWindow = TimeSpan.FromSeconds(30);
-
-	/// <summary>
 	/// 看门狗隔这么久全面检查一次桌面图标列表有没有都藏住（要枚举所有窗口的子窗口，不每次都查）。
 	/// </summary>
 	static readonly TimeSpan IconListCheckInterval = TimeSpan.FromSeconds(30);
@@ -109,10 +104,6 @@ internal sealed class DesktopTakeover : IDisposable
 	DrawFrameWindow? _marquee;
 	// 见过的桌面项目，用来认出新出现的文件；为 null 时下一次读到的是全量（接管、资源管理器重启），不算新文件
 	HashSet<string>? _seenKeys;
-	// 刚消失的项目和消失的时刻：不久又出现的（替换文件、更新程序替换快捷方式）不算新文件
-	readonly Dictionary<string, DateTime> _goneKeys = new(StringComparer.OrdinalIgnoreCase);
-	// 刚改名得到的项目：改名前的路径和改名的时刻。见过的项目改名不算新文件
-	readonly Dictionary<string, (string OldKey, DateTime Time)> _renamedKeys = new(StringComparer.OrdinalIgnoreCase);
 
 	public DesktopTakeover(FenceManager manager)
 	{
@@ -130,7 +121,6 @@ internal sealed class DesktopTakeover : IDisposable
 		Items = new DesktopItems(_dispatcher);
 		Items.Changed += OnItemsChanged;
 		Items.Renamed += _manager.OnItemRenamed;
-		Items.Renamed += (oldPath, newPath) => _renamedKeys[newPath] = (oldPath, DateTime.UtcNow);
 		DesktopDrag.CurrentChanged += OnDragChanged;
 		WatchAdvancedSettings();
 		HookExplorer();
@@ -984,9 +974,9 @@ internal sealed class DesktopTakeover : IDisposable
 
 	/// <summary>
 	/// 和上一次读到的桌面视图比，新出现的项目。第一次读到（接管、资源管理器重启后）是全量，不算；
-	/// 消失后不久又出现的、见过的项目刚改名得到的也不算。
-	/// 浏览器下载先写临时文件（如 .crdownload）、下完再改成正式的名字，下得快时临时文件来不及出现在任何一次读取里，
-	/// 改名前的路径没见过，要算新文件，否则落在分区底下也不会挪出来（B 站反馈）。
+	/// 消失后又出现的、改名得到的也算：它们只有落在分区底下才会被挪，而散放图标在分区底下本来就看不见。
+	/// 以前这两种都排除（为了替换文件、改名时不动用户摆好的图标），结果删掉后马上重新下载的同名文件、
+	/// 浏览器下载最后一步从临时文件（如 .crdownload）改成正式名字的文件，都留在分区底下（B 站反馈，Max 实测）。
 	/// </summary>
 	List<string> TakeNewKeys()
 	{
@@ -997,31 +987,7 @@ internal sealed class DesktopTakeover : IDisposable
 		var current = snapshot.Items.Select(e => e.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
 		var seen = _seenKeys;
 		_seenKeys = current;
-		var now = DateTime.UtcNow;
-		foreach (var stale in _goneKeys.Where(p => now - p.Value > ReappearWindow).Select(p => p.Key).ToList())
-		{
-			_goneKeys.Remove(stale);
-		}
-		foreach (var stale in _renamedKeys.Where(p => now - p.Value.Time > ReappearWindow).Select(p => p.Key).ToList())
-		{
-			_renamedKeys.Remove(stale);
-		}
-		if (seen == null)
-		{
-			return [];
-		}
-		foreach (var key in seen.Where(k => !current.Contains(k)))
-		{
-			_goneKeys[key] = now;
-		}
-		bool RenamedFromSeen(string key) => _renamedKeys.TryGetValue(key, out var renamed)
-				&& (seen.Contains(renamed.OldKey) || _goneKeys.ContainsKey(renamed.OldKey));
-		var fresh = current.Where(k => !seen.Contains(k) && !_goneKeys.ContainsKey(k) && !RenamedFromSeen(k)).ToList();
-		foreach (var key in current)
-		{
-			_goneKeys.Remove(key);
-		}
-		return fresh;
+		return seen == null ? [] : current.Where(k => !seen.Contains(k)).ToList();
 	}
 
 	/// <summary>
