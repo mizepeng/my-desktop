@@ -59,6 +59,13 @@ internal partial class FenceWindow : Window
 	readonly DispatcherTimer _buttonsTimer;
 	IntPtr _hwnd;
 	FileSystemWatcher? _watcher;
+
+	/// <summary>
+	/// 智能分区上次筛选的时间；按修改时间筛选的隔 SmartRefreshInterval 重新筛一次（见 CheckFolder）。
+	/// </summary>
+	DateTime _smartLoaded;
+
+	static readonly TimeSpan SmartRefreshInterval = TimeSpan.FromMinutes(10);
 	ScrollViewer? _scroller;
 	Brush? _frameBorder;
 	// 毛玻璃背景的画刷，开着毛玻璃且取到了壁纸时才有
@@ -2215,7 +2222,7 @@ internal partial class FenceWindow : Window
 	{
 		// 进入子文件夹后标题带上相对路径，如「下载 › 图片 › 2024」
 		TitleText.Text = _subFolder == null ? Model.Title : $"{Model.Title} › {Path.GetRelativePath(Model.FolderPath, _subFolder).Replace("\\", " › ")}";
-		TitleText.ToolTip = Model.IsPortal ? CurrentFolder : null;
+		TitleText.ToolTip = Model.Smart is SmartFilter smart ? $"{CurrentFolder}\n{smart.Describe()}" : Model.IsPortal ? CurrentFolder : null;
 		VerticalTitleText.Text = ToVerticalText(TitleText.Text);
 		VerticalTitleText.ToolTip = TitleText.ToolTip;
 		BackButton.Visibility = _subFolder == null ? Visibility.Collapsed : Visibility.Visible;
@@ -2596,6 +2603,12 @@ internal partial class FenceWindow : Window
 		if (Model.IsPortal && Directory.Exists(CurrentFolder) != _folderExisted)
 		{
 			OnFolderChanged();
+			return;
+		}
+		// 按修改时间筛选的智能分区：文件不变也会随时间过期，没有文件变化通知，隔一段时间重新筛一次
+		if (Model.Smart?.ModifiedWithinDays != null && DateTime.Now - _smartLoaded > SmartRefreshInterval)
+		{
+			RefreshItems();
 		}
 	}
 
@@ -2645,7 +2658,10 @@ internal partial class FenceWindow : Window
 		}
 		ApplyCutState();
 		ApplyHighlights();
-		EmptyHint.Text = IsDesktopFence ? "把桌面图标拖到这里" : _folderExisted ? "拖放文件到这里" : $"文件夹不存在\n{CurrentFolder}";
+		EmptyHint.Text = IsDesktopFence ? "把桌面图标拖到这里"
+				: !_folderExisted ? $"文件夹不存在\n{CurrentFolder}"
+				: Model.Smart != null ? "没有符合条件的文件"
+				: "拖放文件到这里";
 		EmptyHint.Visibility = fresh.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 	}
 
@@ -2702,10 +2718,17 @@ internal partial class FenceWindow : Window
 		}
 		bool showHidden = Settings.ShowHiddenFiles;
 		bool showProtected = showHidden && DesktopHost.ShowsProtectedFiles();
+		var smart = _subFolder == null ? Model.Smart : null;
+		var now = DateTime.Now;
+		_smartLoaded = now;
 		try
 		{
 			foreach (var info in new DirectoryInfo(folder).EnumerateFileSystemInfos())
 			{
+				if (smart != null && !smart.Matches(info, now))
+				{
+					continue;
+				}
 				// 和资源管理器一样只看隐藏属性，只带系统属性的照常显示；同时带系统属性的是 desktop.ini 这类受保护的文件，还要资源管理器设置了显示它们
 				var attributes = info.Attributes;
 				if ((attributes & FileAttributes.Hidden) != 0 && ((attributes & FileAttributes.System) != 0 ? !showProtected : !showHidden))
@@ -3599,6 +3622,7 @@ internal partial class FenceWindow : Window
 		{
 			new("新建分区", () => _manager.CreateFence(near: this, editTitle: true)),
 			new("新建文件夹映射分区…", () => _manager.CreatePortalFence(this)),
+			new("新建智能分区", Children: _manager.SmartFenceMenuItems(this, null)),
 			separator,
 		};
 		if (!inShellMenu)
@@ -3708,7 +3732,9 @@ internal partial class FenceWindow : Window
 		{
 			items.Add(new("在资源管理器中打开", OpenFolderInExplorer, Enabled: folderExists));
 			items.Add(new("复制文件夹路径", CopyFolderPath));
-			items.Add(new("更换映射文件夹…", () => _manager.ChangePortalFolder(this)));
+			items.Add(Model.Smart != null
+					? new("修改筛选条件…", () => _manager.EditSmartFence(this))
+					: new("更换映射文件夹…", () => _manager.ChangePortalFolder(this)));
 		}
 		items.Add(separator);
 		items.Add(new("MyDesktop 设置…", _manager.ShowSettings));
@@ -3900,8 +3926,8 @@ internal partial class FenceWindow : Window
 	void OpenItems(IEnumerable<FenceItem> items)
 	{
 		var list = items.ToList();
-		// 映射分区里打开单个文件夹时在分区里进入它，不用资源管理器打开
-		if (Model.IsPortal && list is [{ IsFolder: true } folder] && Directory.Exists(folder.FullPath))
+		// 映射分区里打开单个文件夹时在分区里进入它，不用资源管理器打开；智能分区只显示筛选结果，照常打开
+		if (Model.IsPortal && Model.Smart == null && list is [{ IsFolder: true } folder] && Directory.Exists(folder.FullPath))
 		{
 			NavigateTo(folder.FullPath);
 			return;
@@ -4659,6 +4685,11 @@ internal partial class FenceWindow : Window
 		if (IsReorderDrag() || (IsDesktopFence && _dropFromDesktop))
 		{
 			return (e.AllowedEffects & DragDropEffects.Move) != 0 ? DragDropEffects.Move : DragDropEffects.None;
+		}
+		// 智能分区只显示筛选结果，不接收放进来的文件
+		if (Model.Smart != null)
+		{
+			return DragDropEffects.None;
 		}
 		var folder = TargetFolder;
 		// 系统图标没有文件可以移动或复制

@@ -498,8 +498,9 @@ internal sealed class FenceManager
 
 	/// <param name="bounds">指定位置与大小（屏幕物理像素）；为空时自动找空位。</param>
 	/// <param name="reveal">处于隐藏状态时是否恢复显示；后台自动整理时不打扰用户的隐藏状态。</param>
+	/// <param name="smart">智能分区的筛选条件，这时 portalFolder 是来源文件夹。</param>
 	public FenceWindow CreateFence(string? title = null, string? portalFolder = null, FenceWindow? near = null, bool editTitle = false, bool reveal = true,
-			RECT? bounds = null)
+			RECT? bounds = null, SmartFilter? smart = null)
 	{
 		// 新建的分区要让用户看到，分区正被隐藏时退出隐藏状态
 		if (reveal && _fencesHidden)
@@ -512,6 +513,7 @@ internal sealed class FenceManager
 			Title = title,
 			IsPortal = portalFolder != null,
 			FolderPath = portalFolder ?? string.Empty,
+			Smart = portalFolder != null ? smart : null,
 		};
 		var rect = bounds ?? FindFreeSlot(near?.GetBounds());
 		// 框选新建或在鼠标处新建时压住了别的分区，挪到最近的空位
@@ -552,6 +554,80 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
+	/// 新建分区菜单里「新建智能分区」的子菜单：各个模板直接创建，「自定义…」弹出对话框填条件。
+	/// </summary>
+	public List<ExtraMenuItem> SmartFenceMenuItems(FenceWindow? near, RECT? bounds)
+	{
+		var items = SmartTemplates.All.Select(t => new ExtraMenuItem(t.Title, () => CreateSmartFence(t, near, bounds))).ToList();
+		items.Add(ExtraMenuItem.Separator);
+		items.Add(new ExtraMenuItem("自定义条件…", () => CreateSmartFence(null, near, bounds)));
+		return items;
+	}
+
+	/// <summary>
+	/// 新建智能分区：按模板直接创建；template 为空时弹出对话框，默认来源是「下载」、最近 7 天。
+	/// </summary>
+	public void CreateSmartFence(SmartTemplate? template, FenceWindow? near = null, RECT? bounds = null)
+	{
+		string title;
+		string folder;
+		SmartFilter filter;
+		try
+		{
+			if (template != null)
+			{
+				(title, folder, filter) = (UniqueTitle(template.Title), template.Folder(), template.Filter());
+			}
+			else if (SmartFenceDialog.Show(UniqueTitle("智能分区"), SmartTemplates.Downloads, new SmartFilter { ModifiedWithinDays = 7 }, true) is { } result)
+			{
+				(title, folder, filter) = (result.Title, result.Folder, result.Filter);
+			}
+			else
+			{
+				return;
+			}
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("新建智能分区时取来源文件夹失败", ex);
+			MessageDialog.Show("新建智能分区", $"取不到来源文件夹：{ex.Message}", "确定");
+			return;
+		}
+		if (!Directory.Exists(folder))
+		{
+			MessageDialog.Show("新建智能分区", $"来源文件夹不存在：{folder}", "确定");
+			return;
+		}
+		var window = CreateFence(title, folder, near, bounds: bounds, smart: filter);
+		Log.Info($"新建智能分区「{title}」：{folder}，{filter.Describe()}");
+		BringToFront(window);
+	}
+
+	/// <summary>
+	/// 智能分区菜单「修改筛选条件…」：改名称、来源文件夹和条件，确定后立即按新条件刷新。
+	/// </summary>
+	public void EditSmartFence(FenceWindow window)
+	{
+		var model = window.Model;
+		if (model.Smart is not SmartFilter filter)
+		{
+			return;
+		}
+		if (SmartFenceDialog.Show(model.Title, model.FolderPath, filter.Clone(), false) is not { } result)
+		{
+			return;
+		}
+		model.Title = result.Title;
+		model.FolderPath = result.Folder;
+		model.Smart = result.Filter;
+		window.UpdateTitle();
+		window.OnFolderChanged();
+		RefreshAllTabs();
+		SaveSoon();
+		Log.Info($"修改智能分区「{model.Title}」：{model.FolderPath}，{result.Filter.Describe()}");
+	}
+
+	/// <summary>
 	/// 其他进程（「发送到」、右键菜单「映射到桌面分区」）交来要映射的文件夹：在窗口过程里只确认收下，稍后再处理，发送方不用等弹窗。
 	/// </summary>
 	bool OnDataReceived(int id, string text)
@@ -583,7 +659,7 @@ internal sealed class FenceManager
 			{
 				continue;
 			}
-			var existing = Settings.Fences.FirstOrDefault(f => f.IsPortal && PathUtil.AreEqual(f.FolderPath, folder));
+			var existing = Settings.Fences.FirstOrDefault(f => f.IsPortal && f.Smart == null && PathUtil.AreEqual(f.FolderPath, folder));
 			if (existing != null && WindowOf(existing.Id) is FenceWindow window)
 			{
 				await LocateFenceAsync(window);
@@ -2004,6 +2080,15 @@ internal sealed class FenceManager
 			{
 				menu.Add("创建分区", () => chosen = CreateDesktop, isDefault: true);
 				menu.Add("创建映射分区…", () => chosen = CreatePortal);
+				menu.AddSubMenu("创建智能分区", sub =>
+				{
+					foreach (var template in SmartTemplates.All)
+					{
+						sub.Add(template.Title, () => chosen = () => CreateSmartFence(template, bounds: bounds));
+					}
+					sub.AddSeparator();
+					sub.Add("自定义条件…", () => chosen = () => CreateSmartFence(null, bounds: bounds));
+				});
 				if (_mouse != null)
 				{
 					_mouse.MenuOpen = true;
@@ -2497,6 +2582,15 @@ internal sealed class FenceManager
 		using var menu = new NativeMenu();
 		menu.Add("新建分区", () => CreateFence(editTitle: true));
 		menu.Add("新建文件夹映射分区…", () => CreatePortalFence());
+		menu.AddSubMenu("新建智能分区", sub =>
+		{
+			foreach (var template in SmartTemplates.All)
+			{
+				sub.Add(template.Title, () => CreateSmartFence(template));
+			}
+			sub.AddSeparator();
+			sub.Add("自定义条件…", () => CreateSmartFence(null));
+		});
 		menu.Add("一键整理桌面…", Organizer.OrganizeInteractive);
 		menu.AddSeparator();
 		menu.AddSubMenu("双击桌面隐藏", sub =>
@@ -3402,7 +3496,8 @@ internal sealed class FenceManager
 
 	bool IsFolderUsed(string folder, FenceSettings? except)
 	{
-		return Settings.Fences.Any(f => f != except && f.IsPortal && PathUtil.AreEqual(f.FolderPath, folder));
+		// 智能分区只显示来源文件夹里的一部分，和映射同一个文件夹的分区不冲突
+		return Settings.Fences.Any(f => f != except && f.IsPortal && f.Smart == null && PathUtil.AreEqual(f.FolderPath, folder));
 	}
 
 	/// <summary>

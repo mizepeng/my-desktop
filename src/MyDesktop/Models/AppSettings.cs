@@ -464,6 +464,11 @@ public sealed class FenceSettings
 	public bool IsPortal { get; set; }
 
 	/// <summary>
+	/// 智能分区的筛选条件：不为空时是智能分区（IsPortal 也为 true，FolderPath 是来源文件夹），只显示来源文件夹里符合条件的项目。
+	/// </summary>
+	public SmartFilter? Smart { get; set; }
+
+	/// <summary>
 	/// 桌面分区的成员：桌面项目的完整解析名（文件为完整路径，此电脑等系统图标为 ::{CLSID}）。
 	/// </summary>
 	public List<string> Members { get; set; } = [];
@@ -570,6 +575,104 @@ public sealed class FenceSettings
 }
 
 //// <summary>
+/// 智能分区的筛选条件：分区显示来源文件夹（FenceSettings.FolderPath）里符合全部条件的项目，只是显示，文件不移动。
+/// 留空的条件不参与；只看来源文件夹这一层，不进子文件夹。设了扩展名或大小条件时不显示文件夹（文件夹没有扩展名和大小）。
+/// </summary>
+public sealed class SmartFilter
+{
+	const double BytesPerMB = 1024 * 1024;
+
+	/// <summary>
+	/// 修改时间在最近这么多天以内；为空表示不限。
+	/// </summary>
+	public int? ModifiedWithinDays { get; set; }
+
+	/// <summary>
+	/// 扩展名，格式同 OrganizeRule.Extensions。
+	/// </summary>
+	public string Extensions { get; set; } = string.Empty;
+
+	/// <summary>
+	/// 名称条件，格式同 OrganizeRule.NamePatterns（带 * ? 的是通配符，不带的是包含）。
+	/// </summary>
+	public string NamePatterns { get; set; } = string.Empty;
+
+	/// <summary>
+	/// 文件大于（MB）；为空表示不限。
+	/// </summary>
+	public double? MinSizeMB { get; set; }
+
+	/// <summary>
+	/// 文件小于（MB）；为空表示不限。
+	/// </summary>
+	public double? MaxSizeMB { get; set; }
+
+	public bool Matches(FileSystemInfo info, DateTime now)
+	{
+		if (ModifiedWithinDays is int days && now - info.LastWriteTime > TimeSpan.FromDays(days))
+		{
+			return false;
+		}
+		var extensions = OrganizeRule.ParseExtensions(Extensions);
+		bool sized = MinSizeMB != null || MaxSizeMB != null;
+		if (info is not FileInfo file)
+		{
+			return extensions.Count == 0 && !sized && NameMatches(info.FullName);
+		}
+		if (extensions.Count > 0 && !extensions.Contains(file.Extension))
+		{
+			return false;
+		}
+		if (MinSizeMB is double min && file.Length <= min * BytesPerMB)
+		{
+			return false;
+		}
+		if (MaxSizeMB is double max && file.Length >= max * BytesPerMB)
+		{
+			return false;
+		}
+		return NameMatches(file.FullName);
+	}
+
+	bool NameMatches(string path)
+	{
+		var patterns = OrganizeRule.ParsePatterns(NamePatterns);
+		return patterns.Count == 0 || patterns.Any(p => OrganizeRule.NameMatches(p, path));
+	}
+
+	/// <summary>
+	/// 条件的简短说明，显示在分区标题的提示里，如「最近 7 天修改 · 大于 1024 MB」。
+	/// </summary>
+	public string Describe()
+	{
+		var parts = new List<string>();
+		if (ModifiedWithinDays is int days)
+		{
+			parts.Add($"最近 {days} 天修改");
+		}
+		if (OrganizeRule.ParseExtensions(Extensions) is { Count: > 0 } extensions)
+		{
+			parts.Add(string.Join(" ", extensions));
+		}
+		if (!string.IsNullOrWhiteSpace(NamePatterns))
+		{
+			parts.Add($"名称 {NamePatterns.Trim()}");
+		}
+		if (MinSizeMB is double min)
+		{
+			parts.Add($"大于 {min} MB");
+		}
+		if (MaxSizeMB is double max)
+		{
+			parts.Add($"小于 {max} MB");
+		}
+		return parts.Count > 0 ? string.Join(" · ", parts) : "全部项目";
+	}
+
+	public SmartFilter Clone() => (SmartFilter)MemberwiseClone();
+}
+
+/// <summary>
 /// 整理规则：把匹配的桌面文件归入同名分区。
 /// 条件分四类：类型（扩展名、文件夹）、名称、快捷方式目标、快捷方式类别。
 /// 同一类里的多个值满足一个即可（或），填了的几类都要满足（且），留空的那一类不参与；
