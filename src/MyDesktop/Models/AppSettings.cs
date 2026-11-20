@@ -212,7 +212,7 @@ public sealed class AppSettings
 	/// <summary>
 	/// 鼠标在自动隐藏的分区那一条上停多久才展开（毫秒），免得鼠标路过时误弹出；0 为立即展开。
 	/// </summary>
-	public int AutoHideRevealDelay { get; set; } = 150;
+	public int AutoHideRevealDelay { get; set; } = 50;
 
 	public bool SnapToEdges { get; set; } = true;
 
