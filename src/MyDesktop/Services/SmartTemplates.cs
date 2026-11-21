@@ -39,7 +39,7 @@ internal static class SmartTemplates
 	public static readonly IReadOnlyList<SmartTemplate> All =
 	[
 		new("最近 7 天的下载", () => Downloads, () => new SmartFilter { ModifiedWithinDays = 7 }),
-		new("大于 1 GB 的文件", () => Downloads, () => new SmartFilter { MinSizeMB = 1024 }),
+		new("下载里大于 1 GB 的文件", () => Downloads, () => new SmartFilter { MinSizeMB = 1024 }),
 		new("下载的安装包", () => Downloads, () => new SmartFilter { Extensions = ".exe; .msi; .msix; .appx; .msixbundle" }),
 		new("下载的压缩包", () => Downloads, () => new SmartFilter { Extensions = ".zip; .rar; .7z; .tar; .gz; .xz; .iso" }),
 		new("最近 30 天的文档", () => Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),

@@ -2222,7 +2222,8 @@ internal partial class FenceWindow : Window
 	{
 		// 进入子文件夹后标题带上相对路径，如「下载 › 图片 › 2024」
 		TitleText.Text = _subFolder == null ? Model.Title : $"{Model.Title} › {Path.GetRelativePath(Model.FolderPath, _subFolder).Replace("\\", " › ")}";
-		TitleText.ToolTip = Model.Smart is SmartFilter smart ? $"{CurrentFolder}\n{smart.Describe()}" : Model.IsPortal ? CurrentFolder : null;
+		// 智能分区进入子文件夹后显示全部内容、不筛选，提示和映射分区一样只写文件夹
+		TitleText.ToolTip = Model.Smart is SmartFilter smart && _subFolder == null ? $"{CurrentFolder}\n{smart.Describe()}" : Model.IsPortal ? CurrentFolder : null;
 		VerticalTitleText.Text = ToVerticalText(TitleText.Text);
 		VerticalTitleText.ToolTip = TitleText.ToolTip;
 		BackButton.Visibility = _subFolder == null ? Visibility.Collapsed : Visibility.Visible;
@@ -2605,8 +2606,8 @@ internal partial class FenceWindow : Window
 			OnFolderChanged();
 			return;
 		}
-		// 按修改时间筛选的智能分区：文件不变也会随时间过期，没有文件变化通知，隔一段时间重新筛一次
-		if (Model.Smart?.ModifiedWithinDays != null && DateTime.Now - _smartLoaded > SmartRefreshInterval)
+		// 按修改时间筛选的智能分区：文件不变也会随时间过期，没有文件变化通知，隔一段时间重新筛一次；进入了子文件夹时不筛选，不用重读
+		if (Model.Smart?.ModifiedWithinDays != null && _subFolder == null && DateTime.Now - _smartLoaded > SmartRefreshInterval)
 		{
 			RefreshItems();
 		}
@@ -2660,7 +2661,7 @@ internal partial class FenceWindow : Window
 		ApplyHighlights();
 		EmptyHint.Text = IsDesktopFence ? "把桌面图标拖到这里"
 				: !_folderExisted ? $"文件夹不存在\n{CurrentFolder}"
-				: Model.Smart != null ? "没有符合条件的文件"
+				: Model.Smart != null && _subFolder == null ? "没有符合条件的文件"
 				: "拖放文件到这里";
 		EmptyHint.Visibility = fresh.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 	}
@@ -3926,8 +3927,8 @@ internal partial class FenceWindow : Window
 	void OpenItems(IEnumerable<FenceItem> items)
 	{
 		var list = items.ToList();
-		// 映射分区里打开单个文件夹时在分区里进入它，不用资源管理器打开；智能分区只显示筛选结果，照常打开
-		if (Model.IsPortal && Model.Smart == null && list is [{ IsFolder: true } folder] && Directory.Exists(folder.FullPath))
+		// 映射分区（含智能分区）里打开单个文件夹时在分区里进入它，不用资源管理器打开；智能分区进入后显示全部内容，返回顶层再按条件筛选
+		if (Model.IsPortal && list is [{ IsFolder: true } folder] && Directory.Exists(folder.FullPath))
 		{
 			NavigateTo(folder.FullPath);
 			return;
@@ -4686,8 +4687,8 @@ internal partial class FenceWindow : Window
 		{
 			return (e.AllowedEffects & DragDropEffects.Move) != 0 ? DragDropEffects.Move : DragDropEffects.None;
 		}
-		// 智能分区只显示筛选结果，不接收放进来的文件
-		if (Model.Smart != null)
+		// 智能分区顶层只显示筛选结果，不接收放进来的文件；进入子文件夹后和映射分区一样
+		if (Model.Smart != null && _subFolder == null)
 		{
 			return DragDropEffects.None;
 		}
