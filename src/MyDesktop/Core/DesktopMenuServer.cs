@@ -92,18 +92,19 @@ internal static class DesktopMenuServer
 	}
 
 	/// <summary>
-	/// 向主程序查询「双击桌面隐藏」的状态、是否在桌面右键菜单中显示；主程序没在运行或没及时响应时返回 false。
+	/// 向主程序查询「双击桌面隐藏」的状态、是否在桌面右键菜单中显示、隐私模式是否开着；主程序没在运行或没及时响应时返回 false。
 	/// </summary>
-	static bool TryQueryState(out HideTarget target, out bool doubleClickEnabled, out bool desktopMenu)
+	static bool TryQueryState(out HideTarget target, out bool doubleClickEnabled, out bool desktopMenu, out bool privacy)
 	{
 		target = HideTarget.All;
 		doubleClickEnabled = false;
 		desktopMenu = false;
+		privacy = false;
 		var window = FindMainWindow();
 		return window != IntPtr.Zero
 				&& SendMessageTimeout(window, RegisterWindowMessage(AppCommands.StateMessageName), IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG,
 						StateQueryTimeoutMs, out var result) != IntPtr.Zero
-				&& AppCommands.TryDecodeState((int)result, out target, out doubleClickEnabled, out desktopMenu);
+				&& AppCommands.TryDecodeState((int)result, out target, out doubleClickEnabled, out desktopMenu, out privacy);
 	}
 
 	[ComVisible(true)]
@@ -253,7 +254,7 @@ internal static class DesktopMenuServer
 			// 设置里关掉桌面右键菜单后立即隐藏：后台注销扩展包要好几秒，已经启动的本服务进程也可能还在被资源管理器调用；
 			// 主程序一时没应答时照常显示
 			_flatten = items == IntPtr.Zero;
-			bool shown = (items == IntPtr.Zero ? IsDesktopSite() : IsDesktop(items)) && FindMainWindow() != IntPtr.Zero && !(TryQueryState(out _, out _, out bool desktopMenu) && !desktopMenu);
+			bool shown = (items == IntPtr.Zero ? IsDesktopSite() : IsDesktop(items)) && FindMainWindow() != IntPtr.Zero && !(TryQueryState(out _, out _, out bool desktopMenu, out _) && !desktopMenu);
 			state = shown ? ECS_ENABLED : ECS_HIDDEN;
 			return 0;
 		}
@@ -266,8 +267,8 @@ internal static class DesktopMenuServer
 
 		public override int EnumSubCommands(out IntPtr enumerator)
 		{
-			// 子菜单生成时取一次主程序状态，用来勾选「双击桌面隐藏」的当前选项
-			bool known = TryQueryState(out var target, out bool doubleClickEnabled, out _);
+			// 子菜单生成时取一次主程序状态，用来勾选「双击桌面隐藏」的当前选项和「隐私模式」
+			bool known = TryQueryState(out var target, out bool doubleClickEnabled, out _, out bool privacy);
 			HideTarget? current = known ? target : null;
 			IExplorerCommand[] actions =
 			[
@@ -282,6 +283,7 @@ internal static class DesktopMenuServer
 				[
 					.. actions,
 					new DoubleClickMenu(current, doubleClickEnabled),
+					new PrivacyCommand(privacy, false),
 					new ActionCommand("设置…", AppCommand.ShowSettings, true),
 				], out enumerator);
 			}
@@ -294,6 +296,7 @@ internal static class DesktopMenuServer
 				new SeparatorCommand(),
 				.. choices,
 				new SeparatorCommand(),
+				new PrivacyCommand(privacy, false),
 				new ActionCommand("设置…", AppCommand.ShowSettings, false),
 			], out enumerator);
 		}
@@ -560,6 +563,32 @@ internal static class DesktopMenuServer
 		public override int Invoke(IntPtr items, IntPtr bindContext)
 		{
 			AppCommands.Broadcast(command);
+			return 0;
+		}
+
+		public override int GetFlags(out uint flags)
+		{
+			flags = separatorBefore ? ECF_SEPARATORBEFORE : ECF_DEFAULT;
+			return 0;
+		}
+	}
+
+	/// <summary>
+	/// 「隐私模式」开关，开着时打勾。
+	/// </summary>
+	[ComVisible(true)]
+	[ClassInterface(ClassInterfaceType.None)]
+	sealed class PrivacyCommand(bool on, bool separatorBefore) : MenuCommand("隐私模式")
+	{
+		public override int GetState(IntPtr items, bool okToBeSlow, out uint state)
+		{
+			state = on ? ECS_CHECKED : ECS_ENABLED;
+			return 0;
+		}
+
+		public override int Invoke(IntPtr items, IntPtr bindContext)
+		{
+			AppCommands.Broadcast(AppCommand.TogglePrivacy);
 			return 0;
 		}
 

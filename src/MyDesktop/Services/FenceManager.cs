@@ -49,9 +49,13 @@ internal sealed class FenceManager
 	ShellChangeWatcher? _shellChanges;
 	readonly WinEventProc _foregroundCallback;
 	readonly WinEventProc _reorderCallback;
+	readonly WinEventProc _privacyForegroundCallback;
 	readonly IntPtr _rootWindow = GetDesktopWindow();
 	IntPtr _foregroundHook;
 	IntPtr _reorderHook;
+	// 隐私模式「桌面在前台时露出」：本程序自己的窗口成为前台也要知道，单独一个不跳过本进程的钩子
+	IntPtr _privacyForegroundHook;
+	bool _desktopActive;
 	TrayIcon? _tray;
 	// 框选后弹出新建分区菜单时留在原处的选框
 	DrawFrameWindow? _bandFrame;
@@ -122,6 +126,7 @@ internal sealed class FenceManager
 		// 委托必须由字段持有，防止被 GC 回收
 		_foregroundCallback = OnForegroundChanged;
 		_reorderCallback = OnZOrderChanged;
+		_privacyForegroundCallback = OnPrivacyForegroundChanged;
 		Organizer = new DesktopOrganizer(this);
 		Updater = new Updater(this);
 	}
@@ -157,7 +162,7 @@ internal sealed class FenceManager
 	{
 		_tray = new TrayIcon("MyDesktop 桌面分区", AppCommands.MessageName, AppCommands.StateMessageName)
 		{
-			StateProvider = () => AppCommands.EncodeState(Settings.DoubleClickTarget, Settings.DoubleClickToHide, Settings.DesktopContextMenu),
+			StateProvider = () => AppCommands.EncodeState(Settings.DoubleClickTarget, Settings.DoubleClickToHide, Settings.DesktopContextMenu, Settings.PrivacyMode),
 		};
 		_tray.LeftClick += ShowSettings;
 		_tray.RightClick += ShowTrayMenu;
@@ -193,6 +198,11 @@ internal sealed class FenceManager
 		if (!ApplyPeekHotkey())
 		{
 			_dispatcher.InvokeAsync(() => _tray?.ShowBalloon($"快捷键 {Settings.PeekHotkey} 已被其他程序占用", "速览的快捷键没有生效，可以在 MyDesktop 设置里换一个。"),
+					DispatcherPriority.Background);
+		}
+		if (!ApplyPrivacyHotkey())
+		{
+			_dispatcher.InvokeAsync(() => _tray?.ShowBalloon($"快捷键 {Settings.PrivacyHotkey} 已被其他程序占用", "隐私模式的快捷键没有生效，可以在 MyDesktop 设置里换一个。"),
 					DispatcherPriority.Background);
 		}
 		StartZOrderCheck();
@@ -233,6 +243,11 @@ internal sealed class FenceManager
 				WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 		_reorderHook = SetWinEventHook(EVENT_OBJECT_REORDER, EVENT_OBJECT_REORDER, IntPtr.Zero, _reorderCallback, 0, 0,
 				WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+		_privacyForegroundHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, _privacyForegroundCallback, 0, 0,
+				WINEVENT_OUTOFCONTEXT);
+		// 分区打开前定好隐私模式的状态，开着时分区一出现就是打码的
+		_desktopActive = IsPrivacyDesktop(GetForegroundWindow());
+		ApplyPrivacy();
 		ApplyStartupHidden();
 		// 系统关掉了「显示桌面图标」时桌面上没有图标可以飞；启动时就藏起了图标或分区的、关掉了飞入动画的也不播
 		_flyInAtStartup = Settings.FlightAnimation && !DesktopHost.IconsHiddenBySystem() && !_iconsHidden && !_fencesHidden;
@@ -452,7 +467,7 @@ internal sealed class FenceManager
 		_iconReloadTimer.Stop();
 		_registryWatchers.ForEach(w => w.Dispose());
 		_shellChanges?.Dispose();
-		foreach (var hook in new[] { _foregroundHook, _reorderHook })
+		foreach (var hook in new[] { _foregroundHook, _reorderHook, _privacyForegroundHook })
 		{
 			if (hook != IntPtr.Zero)
 			{
@@ -461,6 +476,7 @@ internal sealed class FenceManager
 		}
 		_foregroundHook = IntPtr.Zero;
 		_reorderHook = IntPtr.Zero;
+		_privacyForegroundHook = IntPtr.Zero;
 		// 先关设置窗口，它关闭时会写回未保存的规则修改
 		_settingsWindow?.Close();
 		EndPeek(false);
@@ -1915,6 +1931,7 @@ internal sealed class FenceManager
 			AppCommand.DoubleClickHidesIcons => () => SetDoubleClickTarget(HideTarget.Icons),
 			AppCommand.DoubleClickHidesFences => () => SetDoubleClickTarget(HideTarget.Fences),
 			AppCommand.Exit => App.Current.ExitApp,
+			AppCommand.TogglePrivacy => () => SetPrivacyMode(!Settings.PrivacyMode),
 		};
 		action();
 	}
@@ -2641,6 +2658,7 @@ internal sealed class FenceManager
 				sub.Add(target.DisplayName(), () => SetDoubleClickTarget(target), isChecked: Settings.DoubleClickTarget == target, radio: true);
 			}
 		}, enabled: Settings.DoubleClickToHide);
+		menu.Add("隐私模式", () => SetPrivacyMode(!Settings.PrivacyMode), isChecked: Settings.PrivacyMode);
 		menu.Add("锁定所有分区", () => SetAllLocked(!allLocked), isChecked: allLocked, enabled: _windows.Count > 0);
 		menu.Add("重置分区位置", ResetFencePositions, enabled: _windows.Count > 0);
 		menu.AddSeparator();
@@ -2705,8 +2723,101 @@ internal sealed class FenceManager
 			case TrayIcon.EscapeHotkeyId:
 				EndPeek(true);
 				break;
+			case TrayIcon.PrivacyHotkeyId:
+				SetPrivacyMode(!Settings.PrivacyMode);
+				break;
 		}
 	}
+
+	#region 隐私模式
+
+	/// <summary>
+	/// 按设置注册隐私模式的全局快捷键；返回是否成功（没设快捷键也算成功），被其他程序占用时失败。
+	/// </summary>
+	public bool ApplyPrivacyHotkey()
+	{
+		if (_tray == null || _tray.SetHotkey(TrayIcon.PrivacyHotkeyId, Hotkey.Parse(Settings.PrivacyHotkey)))
+		{
+			return true;
+		}
+		Log.Warn($"隐私模式快捷键 {Settings.PrivacyHotkey} 注册失败，可能已被其他程序占用");
+		return false;
+	}
+
+	/// <summary>
+	/// 在设置里录入新快捷键期间先注销隐私模式的快捷键，录完由 ApplyPrivacyHotkey 重新注册。
+	/// </summary>
+	public void SuspendPrivacyHotkey() => _tray?.SetHotkey(TrayIcon.PrivacyHotkeyId, null);
+
+	/// <summary>
+	/// 打开或关掉隐私模式（托盘菜单、快捷键、桌面右键菜单、设置），设置窗口开着时跟着更新。
+	/// </summary>
+	public void SetPrivacyMode(bool on)
+	{
+		if (Settings.PrivacyMode == on)
+		{
+			return;
+		}
+		Settings.PrivacyMode = on;
+		Log.Info(on ? "打开隐私模式" : "关掉隐私模式");
+		SaveSoon();
+		ApplyPrivacy();
+		_settingsWindow?.RefreshPrivacyMode();
+	}
+
+	/// <summary>
+	/// 按设置和此刻前台算出要打码的内容，交给各窗口（见 Views/Privacy）。
+	/// </summary>
+	public void ApplyPrivacy()
+	{
+		var reveal = Settings.PrivacyReveal;
+		bool obscure = Settings.PrivacyMode && !(reveal == PrivacyReveal.DesktopActive && _desktopActive);
+		Privacy.Update(new PrivacyState(obscure && Settings.PrivacyIcons, obscure && Settings.PrivacyNames, obscure && Settings.PrivacyTitles,
+				reveal == PrivacyReveal.Hover, Settings.PrivacyBlurLevel));
+	}
+
+	/// <summary>
+	/// 「桌面在前台」：资源管理器的桌面，或本程序除设置窗口（和它弹出的对话框）以外的窗口（分区、桌面图标层、速览的搜索框、对话框）。
+	/// </summary>
+	bool IsPrivacyDesktop(IntPtr hwnd)
+	{
+		if (DesktopHost.IsDesktopSurface(hwnd))
+		{
+			return true;
+		}
+		GetWindowThreadProcessId(hwnd, out uint process);
+		if (process != (uint)Environment.ProcessId)
+		{
+			return false;
+		}
+		var settings = _settingsWindow == null ? IntPtr.Zero : new WindowInteropHelper(_settingsWindow).Handle;
+		return settings == IntPtr.Zero || (hwnd != settings && GetWindow(hwnd, GW_OWNER) != settings);
+	}
+
+	void OnPrivacyForegroundChanged(IntPtr hook, uint eventType, IntPtr hwnd, int objectId, int childId, uint threadId, uint time)
+	{
+		// 由系统直接回调，异常不会进入 WPF 的未处理异常流程，必须就地捕获，否则进程会被终止
+		try
+		{
+			// 点击、框选时前台可能短暂变成「无」（见 DesktopMouseWatcher），不算离开桌面
+			if (hwnd == IntPtr.Zero)
+			{
+				return;
+			}
+			bool active = IsPrivacyDesktop(hwnd);
+			if (active != _desktopActive)
+			{
+				_desktopActive = active;
+				ApplyPrivacy();
+			}
+		}
+		catch (Exception ex)
+		{
+			Log.Warn("隐私模式处理前台切换失败", ex);
+		}
+	}
+
+	#endregion
 
 	/// <summary>
 	/// 速览：把图标层、亚克力和分区临时置顶（和显示桌面时的临时置顶同一套，DesktopHost.Lift），压在当前窗口上面，

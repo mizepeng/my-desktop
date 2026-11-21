@@ -28,6 +28,8 @@
 		<SolidColorBrush x:Key="FenceSelectedBorder" Color="#59FFFFFF" />
 		<!-- 文字阴影：加在文字副本上的模糊（见 TextShadow），由代码按设置替换 -->
 		<BlurEffect x:Key="TextShadow" Radius="3" />
+		<!-- 隐私模式：打码的标签连底色（选中、悬停）一起模糊，免得清楚的圆角底色衬着一团模糊的标题很突兀；标签只有几个、都很小，只在打码时加 -->
+		<BlurEffect x:Key="PrivacyTabBlur" Radius="12" />
 		<!-- 以下随字体、字号在代码里更新：标题字号、图标名称两行的最大高度、列表名称离顶端的距离 -->
 		<sys:Double x:Key="TitleFontSize">13</sys:Double>
 		<sys:Double x:Key="NameMaxHeight">34</sys:Double>
@@ -118,8 +120,8 @@
 		<Visibility x:Key="IconNameVisibility">Visible</Visibility>
 
 		<DataTemplate x:Key="IconTemplate" DataType="{x:Type local:FenceItem}">
-			<StackPanel Width="{DynamicResource CellWidth}" ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="700">
-				<Image x:Name="IconImage"
+			<StackPanel Width="{DynamicResource CellWidth}" ToolTip="{Binding ToolTipText}" local:Privacy.NameToolTip="True" ToolTipService.InitialShowDelay="700">
+				<local:PrivacyImage x:Name="IconImage"
 						Source="{Binding Icon}"
 						Width="{DynamicResource IconSize}"
 						Height="{DynamicResource IconSize}"
@@ -168,12 +170,12 @@
 		</DataTemplate>
 
 		<DataTemplate x:Key="ListTemplate" DataType="{x:Type local:FenceItem}">
-			<Grid ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="700">
+			<Grid ToolTip="{Binding ToolTipText}" local:Privacy.NameToolTip="True" ToolTipService.InitialShowDelay="700">
 				<Grid.ColumnDefinitions>
 					<ColumnDefinition Width="Auto" />
 					<ColumnDefinition Width="*" />
 				</Grid.ColumnDefinitions>
-				<Image x:Name="IconImage"
+				<local:PrivacyImage x:Name="IconImage"
 						Source="{Binding Icon}"
 						Width="20"
 						Height="20"
@@ -221,7 +223,7 @@
 
 		<!-- 详细信息视图的一行：图标、名称和列表视图一样，后面是修改日期、类型、大小，列宽与表头（DetailsHeader）一致 -->
 		<DataTemplate x:Key="DetailsTemplate" DataType="{x:Type local:FenceItem}">
-			<Grid x:Name="Row" Margin="{DynamicResource DetailsScrollGap}" ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="700">
+			<Grid x:Name="Row" Margin="{DynamicResource DetailsScrollGap}" ToolTip="{Binding ToolTipText}" local:Privacy.NameToolTip="True" ToolTipService.InitialShowDelay="700">
 				<Grid.ColumnDefinitions>
 					<ColumnDefinition Width="Auto" />
 					<ColumnDefinition Width="*" />
@@ -229,7 +231,7 @@
 					<ColumnDefinition Width="{DynamicResource DetailsTypeWidth}" />
 					<ColumnDefinition Width="{DynamicResource DetailsSizeWidth}" />
 				</Grid.ColumnDefinitions>
-				<Image x:Name="IconImage"
+				<local:PrivacyImage x:Name="IconImage"
 						Source="{Binding Icon}"
 						Width="20"
 						Height="20"
@@ -334,7 +336,7 @@
 									Opacity="0.8"
 									Foreground="{DynamicResource FenceForeground}" />
 						</StackPanel>
-						<local:TextShadow Grid.Column="1" Shadow="{DynamicResource TextShadow}">
+						<local:TextShadow Grid.Column="1" Shadow="{DynamicResource TextShadow}" IsTitle="True">
 							<TextBlock x:Name="TitleText"
 									VerticalAlignment="Center"
 									FontSize="{DynamicResource TitleFontSize}"
@@ -345,7 +347,7 @@
 						<!-- 映射分区进入子文件夹后的标题：每一级都能点，点了回到那一级（内容在代码里按路径生成）；左边抵消每一级的内边距，文字和标题对齐 -->
 						<local:BreadcrumbPanel x:Name="Breadcrumb" Grid.Column="1" Margin="-5,0,0,0" VerticalAlignment="Center" Visibility="Collapsed" />
 						<!-- 左右收起时的竖排标题：标题栏整体旋转 90°，这里再转回来，每个字一行、正立 -->
-						<local:TextShadow Grid.Column="1" Shadow="{DynamicResource TextShadow}">
+						<local:TextShadow Grid.Column="1" Shadow="{DynamicResource TextShadow}" IsTitle="True">
 							<TextBlock x:Name="VerticalTitleText"
 									HorizontalAlignment="Left"
 									VerticalAlignment="Center"
@@ -375,6 +377,7 @@
 									     移到别的标签上时也要重新停一会儿才提示（BetweenShowDelay 为 0），否则在标签之间移动时提示一直跟着显示 -->
 									<Grid x:Name="TabHit"
 											Background="Transparent"
+											local:Privacy.TitleToolTip="True"
 											ToolTipService.InitialShowDelay="900"
 											ToolTipService.BetweenShowDelay="0"
 											ToolTipOpening="TabHit_ToolTipOpening"
@@ -396,7 +399,7 @@
 													Source="{Binding FolderIcon}"
 													RenderOptions.BitmapScalingMode="HighQuality" />
 											<Grid>
-											<local:TextShadow Shadow="{DynamicResource TextShadow}">
+											<local:TextShadow Shadow="{DynamicResource TextShadow}" IsTitle="True">
 												<TextBlock x:Name="TabText"
 														VerticalAlignment="Center"
 														FontSize="{DynamicResource TitleFontSize}"
@@ -406,7 +409,7 @@
 														TextTrimming="CharacterEllipsis"
 														Foreground="{DynamicResource FenceForeground}" />
 											</local:TextShadow>
-											<local:TextShadow Shadow="{DynamicResource TextShadow}">
+											<local:TextShadow Shadow="{DynamicResource TextShadow}" IsTitle="True">
 												<TextBlock x:Name="TabVerticalText"
 														HorizontalAlignment="Left"
 														VerticalAlignment="Center"
@@ -449,6 +452,17 @@
 										<Trigger SourceName="TabHit" Property="IsMouseOver" Value="True">
 											<Setter TargetName="Tab" Property="Background" Value="{DynamicResource FenceHover}" />
 										</Trigger>
+										<Trigger SourceName="TabHit" Property="local:Privacy.TitlesHidden" Value="True">
+											<Setter TargetName="Tab" Property="Effect" Value="{StaticResource PrivacyTabBlur}" />
+										</Trigger>
+										<!-- 隐私模式：鼠标指着的标签露出（露出时机选了「鼠标指着时露出」才有 RevealOnHover） -->
+										<MultiTrigger>
+											<MultiTrigger.Conditions>
+												<Condition SourceName="TabHit" Property="IsMouseOver" Value="True" />
+												<Condition SourceName="TabHit" Property="local:Privacy.RevealOnHover" Value="True" />
+											</MultiTrigger.Conditions>
+											<Setter TargetName="TabHit" Property="local:Privacy.TitlesHidden" Value="False" />
+										</MultiTrigger>
 										<DataTrigger Binding="{Binding IsActive}" Value="True">
 											<Setter TargetName="Tab" Property="Background" Value="{DynamicResource FenceSelected}" />
 											<Setter TargetName="TabText" Property="Opacity" Value="1" />

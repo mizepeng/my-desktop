@@ -74,7 +74,13 @@ internal partial class DesktopLayerWindow : Window
 		// 桌面图标层上点图标时前台可能仍是资源管理器的桌面
 		_clickRename = new ClickToRename(BeginRename, item => (IsActive || DesktopHost.IsDesktopSurface(GetForegroundWindow()))
 				&& ItemsList.SelectedItems.Count == 1 && ItemsList.SelectedItem == item);
+		// 隐私模式：整层按当前状态打码，鼠标指着的图标由项目样式露出
+		Privacy.Apply(this, Privacy.Current, false);
+		Privacy.Changed += ApplyPrivacy;
+		Closed += (_, _) => Privacy.Changed -= ApplyPrivacy;
 	}
+
+	void ApplyPrivacy() => Privacy.Apply(this, Privacy.Current, false);
 
 	/// <summary>
 	/// 按设置换字体、字号；名称的行高按字号算（12 号时就是原来的 16），和系统桌面一样最多两行。

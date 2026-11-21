@@ -110,6 +110,16 @@ public static class Appearance
 		};
 	}
 
+	public static string DisplayName(this PrivacyReveal reveal)
+	{
+		return reveal switch
+		{
+			PrivacyReveal.Hover => "鼠标指着时露出",
+			PrivacyReveal.DesktopActive => "桌面在前台时露出",
+			PrivacyReveal.Never => "一直不露出",
+		};
+	}
+
 	public static string DisplayName(this TabAlignment alignment)
 	{
 		return alignment switch

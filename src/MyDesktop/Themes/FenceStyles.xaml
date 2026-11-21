@@ -115,6 +115,19 @@
 			<DataTrigger Binding="{Binding IsNameExpanded}" Value="True">
 				<Setter Property="Panel.ZIndex" Value="1" />
 			</DataTrigger>
+			<!-- 隐私模式：鼠标指着的图标露出（露出时机选了「鼠标指着时露出」才有 RevealOnHover），正在改名的图标一直露出 -->
+			<MultiTrigger>
+				<MultiTrigger.Conditions>
+					<Condition Property="IsMouseOver" Value="True" />
+					<Condition Property="local:Privacy.RevealOnHover" Value="True" />
+				</MultiTrigger.Conditions>
+				<Setter Property="local:Privacy.IconsHidden" Value="False" />
+				<Setter Property="local:Privacy.NamesHidden" Value="False" />
+			</MultiTrigger>
+			<DataTrigger Binding="{Binding IsRenaming}" Value="True">
+				<Setter Property="local:Privacy.IconsHidden" Value="False" />
+				<Setter Property="local:Privacy.NamesHidden" Value="False" />
+			</DataTrigger>
 		</Style.Triggers>
 		<Setter Property="FocusVisualStyle" Value="{x:Null}" />
 		<Setter Property="Margin" Value="1" />
@@ -144,10 +157,11 @@
 									Padding="{TemplateBinding Padding}"
 									Background="{DynamicResource FenceSelected}"
 									ToolTip="{Binding ToolTipText}"
+									local:Privacy.NameToolTip="True"
 									ToolTipService.InitialShowDelay="700">
 								<Grid>
 									<StackPanel x:Name="ExpandedIconView">
-										<Image x:Name="ExpandedIcon"
+										<local:PrivacyImage x:Name="ExpandedIcon"
 												Source="{Binding Icon}"
 												Width="{DynamicResource IconSize}"
 												Height="{DynamicResource IconSize}"
@@ -163,7 +177,7 @@
 									</StackPanel>
 									<!-- 列表视图：和列表的一行（FenceWindow.xaml 的 ListTemplate）一样图标在左、名称离顶端 2，名称在右边折行 -->
 									<DockPanel x:Name="ExpandedListView" Visibility="Collapsed">
-										<Image x:Name="ExpandedListIcon"
+										<local:PrivacyImage x:Name="ExpandedListIcon"
 												Source="{Binding Icon}"
 												Width="20"
 												Height="20"

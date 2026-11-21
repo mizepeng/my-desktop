@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
 using static MyDesktop.Native.NativeMethods;
 
 namespace MyDesktop.Views;
@@ -15,6 +16,7 @@ namespace MyDesktop.Views;
 /// 副本的文字、字体、换行、截断、边距、可见性等都跟着正文。
 /// UseGdi 为 true 时（桌面图标层）不建副本，正文只参与排版、不显示，由 GdiText 用 ClearType 把名称连同阴影画成位图，对齐到整像素贴上去：
 /// WPF 文字在透明窗口里竖笔画常落在半个像素上发虚，资源管理器桌面用的就是 GDI ClearType（见 docs/dev/constraints.md）。
+/// 隐私模式打码时（Privacy.NamesHidden，IsTitle 为 true 时看 Privacy.TitlesHidden）正文照常排版但被裁掉、不建副本，改画 Privacy.BlurText 的模糊位图。
 /// </summary>
 internal sealed class TextShadow : Decorator
 {
@@ -53,6 +55,12 @@ internal sealed class TextShadow : Decorator
 	public static readonly DependencyProperty UseGdiProperty = DependencyProperty.RegisterAttached("UseGdi", typeof(bool), typeof(TextShadow),
 			new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.Inherits, (d, _) => (d as TextShadow)?.UpdateShadow()));
 
+	/// <summary>
+	/// 这是分区标题（包括标签、竖排标题），隐私模式按「分区标题」打码；默认是图标名称。
+	/// </summary>
+	public static readonly DependencyProperty IsTitleProperty = DependencyProperty.Register(nameof(IsTitle), typeof(bool), typeof(TextShadow),
+			new FrameworkPropertyMetadata(false, (d, _) => ((TextShadow)d).UpdatePrivacy()));
+
 	// GDI 画法下跟着正文的文字，变了就重画
 	static readonly DependencyProperty GdiTextProperty = DependencyProperty.Register("GdiText", typeof(string), typeof(TextShadow),
 			new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
@@ -67,6 +75,13 @@ internal sealed class TextShadow : Decorator
 	TextBlock? _gdiText;
 	GdiText.Result? _gdi;
 	GdiText.Request? _gdiRequest;
+	// 隐私模式：被打码的正文、画好的模糊位图和画它时的参数
+	TextBlock? _obscured;
+	BitmapSource? _blur;
+	BlurKey? _blurKey;
+
+	readonly record struct BlurKey(int Level, string Text, FontFamily Family, double Size, FontWeight Weight, FontStyle Style, Brush? Foreground,
+			double Width, double Height, TextAlignment Alignment, TextWrapping Wrapping, TextTrimming Trimming, double LineHeight);
 
 	public static void SetUseGdi(DependencyObject element, bool value) => element.SetValue(UseGdiProperty, value);
 
@@ -82,6 +97,12 @@ internal sealed class TextShadow : Decorator
 	{
 		get => (double)GetValue(ShadowOpacityProperty);
 		set => SetValue(ShadowOpacityProperty, value);
+	}
+
+	public bool IsTitle
+	{
+		get => (bool)GetValue(IsTitleProperty);
+		set => SetValue(IsTitleProperty, value);
 	}
 
 	protected override int VisualChildrenCount => (Child != null ? 1 : 0) + (_copyAttached ? 2 : 0);
@@ -171,7 +192,7 @@ internal sealed class TextShadow : Decorator
 			_outline.Arrange(new Rect(arrangeSize));
 		}
 		// 正文的大小、行数（选中时展开完整名称）、字体变了都会重新排版
-		if (_gdiText != null)
+		if (_gdiText != null || _obscured != null)
 		{
 			InvalidateVisual();
 		}
@@ -181,7 +202,8 @@ internal sealed class TextShadow : Decorator
 	void UpdateShadow()
 	{
 		UpdateGdi();
-		bool show = Shadow != null && Child is TextBlock && _gdiText == null;
+		UpdateObscured();
+		bool show = Shadow != null && Child is TextBlock && _gdiText == null && _obscured == null;
 		if (show != _copyAttached)
 		{
 			_copyAttached = show;
@@ -238,6 +260,86 @@ internal sealed class TextShadow : Decorator
 
 	void GdiText_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e) => InvalidateVisual();
 
+	/// <summary>
+	/// 隐私模式的打码状态变了（Privacy 的附加属性、IsTitle）：进出打码，副本跟着摘掉或加回。
+	/// </summary>
+	internal void UpdatePrivacy()
+	{
+		var text = Hidden() ? Child as TextBlock : null;
+		if (text != _obscured)
+		{
+			UpdateShadow();
+		}
+	}
+
+	bool Hidden() => IsTitle ? Privacy.GetTitlesHidden(this) : Privacy.GetNamesHidden(this);
+
+	/// <summary>
+	/// 进入或退出打码：进入时把正文整个裁掉（不动它的不透明度和可见性，触发器照常生效），文字和可见性变了就重画。
+	/// </summary>
+	void UpdateObscured()
+	{
+		var text = Hidden() ? Child as TextBlock : null;
+		if (text == _obscured)
+		{
+			return;
+		}
+		if (_obscured != null)
+		{
+			_obscured.ClearValue(ClipProperty);
+			_obscured.IsVisibleChanged -= GdiText_IsVisibleChanged;
+			if (_gdiText == null)
+			{
+				ClearValue(GdiTextProperty);
+			}
+		}
+		_obscured = text;
+		// 露出后多半还会再打码（鼠标移开），隐私模式还要给这类文字打码时留着模糊位图，不用重画
+		if (!(IsTitle ? Privacy.Current.Titles : Privacy.Current.Names))
+		{
+			_blur = null;
+			_blurKey = null;
+		}
+		if (text != null)
+		{
+			text.Clip = Geometry.Empty;
+			text.IsVisibleChanged += GdiText_IsVisibleChanged;
+			SetBinding(GdiTextProperty, new Binding(nameof(TextBlock.Text)) { Source = text });
+		}
+		else if (_gdiText != null)
+		{
+			SetBinding(GdiTextProperty, new Binding(nameof(TextBlock.Text)) { Source = _gdiText });
+		}
+		InvalidateVisual();
+	}
+
+	/// <summary>
+	/// 打码：按正文排好的大小画模糊位图，跟着正文的变换（竖排标题转过 90°）贴上去，不透明度跟着正文（GDI 画法下正文一直是透明的，不跟）。
+	/// </summary>
+	void RenderObscured(DrawingContext dc, TextBlock text)
+	{
+		if (!text.IsVisible || string.IsNullOrEmpty(text.Text) || text.ActualWidth <= 0 || text.ActualHeight <= 0)
+		{
+			return;
+		}
+		int level = Privacy.GetLevel(this);
+		var key = new BlurKey(level, text.Text, text.FontFamily, text.FontSize, text.FontWeight, text.FontStyle, text.Foreground, text.ActualWidth, text.ActualHeight,
+				text.TextAlignment, text.TextWrapping, text.TextTrimming, text.LineHeight);
+		if (key != _blurKey)
+		{
+			_blur = Privacy.BlurText(text, level);
+			_blurKey = key;
+		}
+		var group = new DrawingGroup
+		{
+			Transform = text.TransformToVisual(this) as Transform ?? Transform.Identity,
+			Opacity = _gdiText == null ? text.Opacity : 1,
+		};
+		RenderOptions.SetBitmapScalingMode(group, BitmapScalingMode.Linear);
+		group.Children.Add(new ImageDrawing(_blur, new Rect(0, 0, text.ActualWidth, text.ActualHeight)));
+		dc.DrawDrawing(group);
+	}
+
 	protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
 	{
 		base.OnDpiChanged(oldDpi, newDpi);
@@ -249,6 +351,11 @@ internal sealed class TextShadow : Decorator
 	/// </summary>
 	protected override void OnRender(DrawingContext dc)
 	{
+		if (_obscured != null)
+		{
+			RenderObscured(dc, _obscured);
+			return;
+		}
 		var text = _gdiText;
 		if (text == null || !text.IsVisible || string.IsNullOrEmpty(text.Text) || text.ActualWidth <= 0 || text.ActualHeight <= 0
 				|| PresentationSource.FromVisual(this)?.RootVisual is not Visual root)

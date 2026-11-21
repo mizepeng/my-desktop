@@ -57,7 +57,12 @@ internal partial class SearchWindow : Window
 		PreviewKeyDown += OnPreviewKeyDown;
 		Deactivated += (_, _) => Dismiss();
 		SizeChanged += (_, _) => KeepOnScreen();
+		Privacy.Apply(this, Privacy.Current, false);
+		Privacy.Changed += ApplyPrivacy;
+		Closed += (_, _) => Privacy.Changed -= ApplyPrivacy;
 	}
+
+	void ApplyPrivacy() => Privacy.Apply(this, Privacy.Current, false);
 
 	protected override void OnSourceInitialized(EventArgs e)
 	{

@@ -41,6 +41,19 @@
 				<DataTrigger Binding="{Binding IsNameExpanded}" Value="True">
 					<Setter Property="Panel.ZIndex" Value="1" />
 				</DataTrigger>
+				<!-- 隐私模式：鼠标指着的图标露出（露出时机选了「鼠标指着时露出」才有 RevealOnHover），正在改名的图标一直露出 -->
+				<MultiTrigger>
+					<MultiTrigger.Conditions>
+						<Condition Property="IsMouseOver" Value="True" />
+						<Condition Property="local:Privacy.RevealOnHover" Value="True" />
+					</MultiTrigger.Conditions>
+					<Setter Property="local:Privacy.IconsHidden" Value="False" />
+					<Setter Property="local:Privacy.NamesHidden" Value="False" />
+				</MultiTrigger>
+				<DataTrigger Binding="{Binding IsRenaming}" Value="True">
+					<Setter Property="local:Privacy.IconsHidden" Value="False" />
+					<Setter Property="local:Privacy.NamesHidden" Value="False" />
+				</DataTrigger>
 			</Style.Triggers>
 			<Setter Property="Canvas.Left" Value="{Binding X}" />
 			<Setter Property="Canvas.Top" Value="{Binding Y}" />
@@ -96,8 +109,8 @@
 		</Style>
 
 		<DataTemplate x:Key="LayerItemTemplate" DataType="{x:Type local:FenceItem}">
-			<StackPanel ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="700">
-				<Image x:Name="IconImage"
+			<StackPanel ToolTip="{Binding ToolTipText}" ToolTipService.InitialShowDelay="700" local:Privacy.NameToolTip="True">
+				<local:PrivacyImage x:Name="IconImage"
 						Source="{Binding Icon}"
 						Width="{DynamicResource IconSize}"
 						Height="{DynamicResource IconSize}"
