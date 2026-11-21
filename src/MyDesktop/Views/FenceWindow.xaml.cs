@@ -4692,11 +4692,6 @@ internal partial class FenceWindow : Window
 		{
 			return (e.AllowedEffects & DragDropEffects.Move) != 0 ? DragDropEffects.Move : DragDropEffects.None;
 		}
-		// 智能分区筛选后的视图不接收放进来的文件；不筛选的子文件夹里和映射分区一样
-		if (ActiveSmart != null)
-		{
-			return DragDropEffects.None;
-		}
 		var folder = TargetFolder;
 		// 系统图标没有文件可以移动或复制
 		var paths = _dropFiles;
@@ -4730,11 +4725,40 @@ internal partial class FenceWindow : Window
 		}
 		var created = ItemOps.Transfer(_hwnd, paths, folder, effect);
 		PlaceDropped(created, insertIndex);
+		if (ActiveSmart is SmartFilter smart)
+		{
+			ReportFilteredDrops(smart, created, folder);
+		}
 		if (IsDesktopFence && effect == DragDropEffects.Link)
 		{
 			_manager.AssignToFence(this, created);
 		}
 		ScheduleRefresh();
+	}
+
+	/// <summary>
+	/// 智能分区照常接收拖放（和映射分区一样放进当前文件夹），但放进去的不符合筛选条件时不会显示，看上去像拖丢了，
+	/// 所以在通知区提示一下放到了哪里。移动、复制都保留原来的修改时间，按「最近 N 天」筛选时常有这种情况。
+	/// </summary>
+	void ReportFilteredDrops(SmartFilter smart, IReadOnlyList<string> created, string folder)
+	{
+		var now = DateTime.Now;
+		var hidden = new List<string>();
+		foreach (var path in created)
+		{
+			FileSystemInfo? info = File.Exists(path) ? new FileInfo(path) : Directory.Exists(path) ? new DirectoryInfo(path) : null;
+			if (info != null && !smart.Matches(info, now))
+			{
+				hidden.Add(info.Name);
+			}
+		}
+		if (hidden.Count == 0)
+		{
+			return;
+		}
+		var names = string.Join("、", hidden.Take(3)) + (hidden.Count > 3 ? $" 等 {hidden.Count} 项" : string.Empty);
+		Log.Info($"拖进智能分区「{Model.Title}」的 {hidden.Count} 项不符合筛选条件，已放入 {folder}：{string.Join("、", hidden)}");
+		_manager.ShowNotice($"已放入 {folder}", $"{names} 不符合「{Model.Title}」的筛选条件，不在分区里显示。");
 	}
 
 	static string[]? GetDropPaths(IDataObject data)

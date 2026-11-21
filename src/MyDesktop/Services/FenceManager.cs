@@ -2727,6 +2727,11 @@ internal sealed class FenceManager
 		Log.Info(restoreForeground ? "退出速览" : "打开图标，退出速览");
 	}
 
+	/// <summary>
+	/// 在通知区显示一条提示，不打断正在做的事。
+	/// </summary>
+	public void ShowNotice(string title, string text) => _tray?.ShowBalloon(title, text);
+
 	void OpenFromSearch(FenceItem item) => ItemOps.Open(_tray?.Handle ?? IntPtr.Zero, [item], true);
 
 	/// <summary>
