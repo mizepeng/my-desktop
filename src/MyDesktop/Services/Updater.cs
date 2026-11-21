@@ -51,7 +51,7 @@ internal sealed class Updater
 	bool _prompting;
 
 	/// <summary>
-	/// 一个发行版。Notes 为 null 表示这次取不到发行说明（接口被限流、备用路径也没读到更新日志），不同于发行说明本身为空。
+	/// 一个发行版。Notes 为 null 表示这次取不到发行说明（更新日志和 GitHub 接口都没读到），不同于发行说明本身为空。
 	/// </summary>
 	sealed record Release(Version Version, string Tag, string? Notes, string AssetName, string AssetUrl, long AssetSize);
 
@@ -157,7 +157,7 @@ internal sealed class Updater
 			var message = $"MyDesktop {release.Version.ToString(3)} 已发布，当前版本 {CurrentVersion.ToString(3)}。";
 			if (release.Notes == null)
 			{
-				message += "\n\nGitHub 接口暂时访问受限，取不到这次的更新内容，可以点「查看更新内容」到发行版页面查看。";
+				message += "\n\n暂时取不到这次的更新内容，可以点「查看更新内容」到发行版页面查看。";
 			}
 			else if (release.Notes.Length > 0)
 			{
@@ -194,13 +194,51 @@ internal sealed class Updater
 		}
 	}
 
+	/// <summary>
+	/// 取最新正式版：先走发行版页面加更新日志（不占 api.github.com 的匿名额度，见 FetchLatestFromPageAsync），
+	/// 这条路失败时退回 GitHub 接口；页面这条路取到了版本但读不到更新日志时，再向接口要一次发行说明，接口也不行就照常提示到发行版页面查看。
+	/// </summary>
 	static async Task<Release?> FetchLatestAsync()
+	{
+		Release page;
+		try
+		{
+			page = await FetchLatestFromPageAsync();
+		}
+		catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException)
+		{
+			Log.Warn("从发行版页面取最新版本失败，改用 GitHub 接口", ex);
+			return await FetchLatestFromApiAsync();
+		}
+		if (page.Notes != null)
+		{
+			return page;
+		}
+		try
+		{
+			var api = await FetchLatestFromApiAsync();
+			if (api != null && string.Equals(api.Tag, page.Tag, StringComparison.OrdinalIgnoreCase))
+			{
+				return api;
+			}
+			Log.Warn($"GitHub 接口给出的最新版本（{api?.Tag ?? "无"}）和发行版页面（{page.Tag}）不一致，以页面为准，发行说明需到发行版页面查看");
+		}
+		catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or JsonException or KeyNotFoundException)
+		{
+			Log.Warn("从 GitHub 接口补取发行说明失败，发行说明需到发行版页面查看", ex);
+		}
+		return page;
+	}
+
+	/// <summary>
+	/// 备用路径：GitHub 接口 api.github.com，匿名时同一 IP 每小时只有 60 次，公司网、校园网等共用出口的用户容易碰到限流，限流时抛异常。
+	/// </summary>
+	static async Task<Release?> FetchLatestFromApiAsync()
 	{
 		using var response = await Http.GetAsync(LatestReleaseApi);
 		if (IsRateLimited(response))
 		{
-			Log.Warn($"GitHub 接口被限流（{DescribeRateLimit(response)}），改走备用路径：从发行版页面的跳转地址取最新版本");
-			return await FetchLatestFromPageAsync();
+			throw new InvalidOperationException($"GitHub 接口被限流（{DescribeRateLimit(response)}）");
 		}
 		response.EnsureSuccessStatusCode();
 		using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -228,10 +266,10 @@ internal sealed class Updater
 	}
 
 	/// <summary>
-	/// 备用路径：GitHub 匿名接口同一 IP 每小时只有 60 次，公司网、校园网等共用出口的用户容易碰到限流，这时不走 api.github.com：
-	/// 版本号取自发行版页面 /releases/latest 跳转到的 /releases/tag/vX.Y.Z，安装包地址按发布时的固定命名拼出来，
-	/// 再用 HEAD 请求确认安装包存在并取得大小。发行说明改读该标签下的 docs/CHANGELOG.md（见 NotesFromChangelogAsync），取不到时 Notes 为 null，更新对话框里提示到发行版页面查看；
-	/// 下载后照常核对签名证书，安全校验不因走备用路径放松。任何一步对不上都抛异常，按检查更新失败处理。
+	/// 主路径：不走 api.github.com，没有匿名接口每小时 60 次的限制。
+	/// 版本号取自发行版页面 /releases/latest 跳转到的 /releases/tag/vX.Y.Z，安装包地址按发布时的固定命名（Build-Installer.ps1 输出的 MyDesktop-Setup-X.Y.Z.exe）拼出来，
+	/// 再用 HEAD 请求确认安装包存在并取得大小。发行说明读该标签下的 docs/CHANGELOG.md（见 NotesFromChangelogAsync），取不到时 Notes 为 null；
+	/// 下载后照常核对签名证书。版本号或安装包对不上时抛异常，由 FetchLatestAsync 退回 GitHub 接口。
 	/// </summary>
 	static async Task<Release> FetchLatestFromPageAsync()
 	{
@@ -257,12 +295,12 @@ internal sealed class Updater
 		}
 		long size = asset.Content.Headers.ContentLength ?? throw new InvalidOperationException($"取不到 {tag} 安装包的大小");
 		var notes = await NotesFromChangelogAsync(tag, version);
-		Log.Info($"备用路径取到最新版本 {tag}，安装包 {url}（{size} 字节），{(notes == null ? "发行说明需到发行版页面查看" : "发行说明取自该标签的更新日志")}");
+		Log.Info($"从发行版页面取到最新版本 {tag}，安装包 {url}（{size} 字节），{(notes == null ? "发行说明需到发行版页面查看" : "发行说明取自该标签的更新日志")}");
 		return new Release(version, tag, notes, name, url, size);
 	}
 
 	/// <summary>
-	/// 备用路径的发行说明：读该标签下的 docs/CHANGELOG.md（raw.githubusercontent.com 不占 api.github.com 的匿名额度）。
+	/// 主路径的发行说明：读该标签下的 docs/CHANGELOG.md（raw.githubusercontent.com 不占 api.github.com 的匿名额度）。
 	/// 发行说明的「本版更新」就是更新日志里这一版的条目，所以内容一致；隔了几个版本时和 NotesSinceAsync 一样列出当前版本之后的每一版。
 	/// 取不到或格式对不上时记日志、返回 null，对话框照常提示到发行版页面查看，不耽误更新。
 	/// </summary>
