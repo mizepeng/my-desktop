@@ -23,7 +23,7 @@
 	</Window.Resources>
 	<StackPanel Margin="24,20,24,20">
 		<TextBlock x:Name="HeaderText" Margin="0,0,0,4" FontSize="18" FontWeight="SemiBold" Text="新建智能分区" />
-		<TextBlock Style="{StaticResource Hint}" Text="分区实时显示来源文件夹里符合下面全部条件的文件，只是显示，文件不移动。留空的条件不参与；只看来源文件夹这一层，不含子文件夹。" />
+		<TextBlock Style="{StaticResource Hint}" Text="分区实时显示来源文件夹里符合下面全部条件的项目，只是显示，文件不移动。留空的条件不参与；只看来源文件夹这一层，文件夹按它自己的修改时间判断，设了扩展名或大小时不显示文件夹。" />
 		<Grid Margin="0,16,0,0">
 			<Grid.ColumnDefinitions>
 				<ColumnDefinition Width="Auto" />
@@ -68,6 +68,12 @@
 				<TextBlock VerticalAlignment="Center" Text="MB" />
 			</StackPanel>
 		</Grid>
+		<CheckBox x:Name="FilterSubfoldersBox" Margin="0,12,0,0">
+			<StackPanel>
+				<TextBlock Text="进入子文件夹后也按这些条件筛选" />
+				<TextBlock Style="{StaticResource Hint}" Text="关闭时，在分区里双击文件夹进入后显示里面的全部内容" />
+			</StackPanel>
+		</CheckBox>
 		<TextBlock x:Name="ErrorText" Margin="0,12,0,0" Foreground="{DynamicResource SystemFillColorCriticalBrush}" TextWrapping="Wrap" Visibility="Collapsed" />
 		<StackPanel Margin="0,24,0,0" HorizontalAlignment="Right" Orientation="Horizontal">
 			<Button x:Name="OkButton" MinWidth="96" Content="创建" IsDefault="True" Style="{DynamicResource AccentButtonStyle}" Click="Ok_Click" />

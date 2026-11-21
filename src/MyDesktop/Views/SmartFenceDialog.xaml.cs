@@ -39,6 +39,7 @@ internal partial class SmartFenceDialog : Window
 		dialog.NameBox.Text = filter.NamePatterns;
 		dialog.MinSizeBox.Text = filter.MinSizeMB?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
 		dialog.MaxSizeBox.Text = filter.MaxSizeMB?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+		dialog.FilterSubfoldersBox.IsChecked = filter.FilterSubfolders;
 		dialog.Loaded += (_, _) =>
 		{
 			dialog.TitleBox.Focus();
@@ -118,6 +119,7 @@ internal partial class SmartFenceDialog : Window
 			NamePatterns = NameBox.Text.Trim(),
 			MinSizeMB = min,
 			MaxSizeMB = max,
+			FilterSubfolders = FilterSubfoldersBox.IsChecked == true,
 		};
 		result = new Result(title, folder, filter);
 		return null;

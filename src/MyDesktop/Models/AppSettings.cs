@@ -599,15 +599,21 @@ public sealed class FenceSettings
 /// <summary>
 /// 智能分区的筛选条件：分区显示来源文件夹（FenceSettings.FolderPath）里符合全部条件的项目，只是显示，文件不移动。
 /// 留空的条件不参与；只看来源文件夹这一层，不进子文件夹。设了扩展名或大小条件时不显示文件夹（文件夹没有扩展名和大小）。
+/// 双击文件夹在分区里进入后默认显示全部内容，开了 FilterSubfolders 时按同样的条件筛选。
 /// </summary>
 public sealed class SmartFilter
 {
 	const double BytesPerMB = 1024 * 1024;
 
 	/// <summary>
-	/// 修改时间在最近这么多天以内；为空表示不限。
+	/// 修改时间在最近这么多天以内；为空表示不限。文件夹看它自己的修改时间（直接包含的项目有新建、删除、改名时才变）。
 	/// </summary>
 	public int? ModifiedWithinDays { get; set; }
+
+	/// <summary>
+	/// 双击文件夹进入后，子文件夹里也按这些条件筛选；默认关，进入后显示全部内容。
+	/// </summary>
+	public bool FilterSubfolders { get; set; }
 
 	/// <summary>
 	/// 扩展名，格式同 OrganizeRule.Extensions。
@@ -687,6 +693,10 @@ public sealed class SmartFilter
 		if (MaxSizeMB is double max)
 		{
 			parts.Add($"小于 {max} MB");
+		}
+		if (FilterSubfolders)
+		{
+			parts.Add("子文件夹里也筛选");
 		}
 		return parts.Count > 0 ? string.Join(" · ", parts) : "全部项目";
 	}

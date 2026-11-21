@@ -255,6 +255,11 @@ internal partial class FenceWindow : Window
 	string CurrentFolder => _subFolder ?? Model.FolderPath;
 
 	/// <summary>
+	/// 当前显示的内容要按哪个条件筛选：智能分区的顶层，以及开了「子文件夹里也筛选」时的子文件夹；其余为 null，和映射分区一样显示全部。
+	/// </summary>
+	SmartFilter? ActiveSmart => _subFolder == null || Model.Smart?.FilterSubfolders == true ? Model.Smart : null;
+
+	/// <summary>
 	/// 正在重命名其中的项目（自动整理会等改完名再处理）。
 	/// </summary>
 	public bool IsRenaming => _items.Any(i => i.IsRenaming);
@@ -2222,8 +2227,8 @@ internal partial class FenceWindow : Window
 	{
 		// 进入子文件夹后标题带上相对路径，如「下载 › 图片 › 2024」
 		TitleText.Text = _subFolder == null ? Model.Title : $"{Model.Title} › {Path.GetRelativePath(Model.FolderPath, _subFolder).Replace("\\", " › ")}";
-		// 智能分区进入子文件夹后显示全部内容、不筛选，提示和映射分区一样只写文件夹
-		TitleText.ToolTip = Model.Smart is SmartFilter smart && _subFolder == null ? $"{CurrentFolder}\n{smart.Describe()}" : Model.IsPortal ? CurrentFolder : null;
+		// 智能分区不筛选的子文件夹里，提示和映射分区一样只写文件夹
+		TitleText.ToolTip = ActiveSmart is SmartFilter smart ? $"{CurrentFolder}\n{smart.Describe()}" : Model.IsPortal ? CurrentFolder : null;
 		VerticalTitleText.Text = ToVerticalText(TitleText.Text);
 		VerticalTitleText.ToolTip = TitleText.ToolTip;
 		BackButton.Visibility = _subFolder == null ? Visibility.Collapsed : Visibility.Visible;
@@ -2606,8 +2611,8 @@ internal partial class FenceWindow : Window
 			OnFolderChanged();
 			return;
 		}
-		// 按修改时间筛选的智能分区：文件不变也会随时间过期，没有文件变化通知，隔一段时间重新筛一次；进入了子文件夹时不筛选，不用重读
-		if (Model.Smart?.ModifiedWithinDays != null && _subFolder == null && DateTime.Now - _smartLoaded > SmartRefreshInterval)
+		// 按修改时间筛选的智能分区：文件不变也会随时间过期，没有文件变化通知，隔一段时间重新筛一次；不筛选的子文件夹里不用重读
+		if (ActiveSmart?.ModifiedWithinDays != null && DateTime.Now - _smartLoaded > SmartRefreshInterval)
 		{
 			RefreshItems();
 		}
@@ -2661,7 +2666,7 @@ internal partial class FenceWindow : Window
 		ApplyHighlights();
 		EmptyHint.Text = IsDesktopFence ? "把桌面图标拖到这里"
 				: !_folderExisted ? $"文件夹不存在\n{CurrentFolder}"
-				: Model.Smart != null && _subFolder == null ? "没有符合条件的文件"
+				: ActiveSmart != null ? "没有符合条件的文件"
 				: "拖放文件到这里";
 		EmptyHint.Visibility = fresh.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 	}
@@ -2719,7 +2724,7 @@ internal partial class FenceWindow : Window
 		}
 		bool showHidden = Settings.ShowHiddenFiles;
 		bool showProtected = showHidden && DesktopHost.ShowsProtectedFiles();
-		var smart = _subFolder == null ? Model.Smart : null;
+		var smart = ActiveSmart;
 		var now = DateTime.Now;
 		_smartLoaded = now;
 		try
@@ -4687,8 +4692,8 @@ internal partial class FenceWindow : Window
 		{
 			return (e.AllowedEffects & DragDropEffects.Move) != 0 ? DragDropEffects.Move : DragDropEffects.None;
 		}
-		// 智能分区顶层只显示筛选结果，不接收放进来的文件；进入子文件夹后和映射分区一样
-		if (Model.Smart != null && _subFolder == null)
+		// 智能分区筛选后的视图不接收放进来的文件；不筛选的子文件夹里和映射分区一样
+		if (ActiveSmart != null)
 		{
 			return DragDropEffects.None;
 		}
