@@ -41,13 +41,13 @@ public partial class App : Application
 			Shutdown();
 			return;
 		}
-		var folders = ParseMapFolders(e.Args);
+		var folders = ParseFolders(e.Args);
 		bool restart = e.Args.Contains(RestartArgument, StringComparer.OrdinalIgnoreCase);
 		if (!AcquireSingleInstance(restart ? TimeSpan.FromSeconds(20) : TimeSpan.Zero))
 		{
 			if (folders != null)
 			{
-				SendMapFolders(folders);
+				SendFolders(folders.Value);
 				Shutdown();
 				return;
 			}
@@ -126,7 +126,7 @@ public partial class App : Application
 	/// <summary>
 	/// 开机自启时 Explorer 可能还没创建好桌面窗口，轮询等待（最多约一分钟）。
 	/// </summary>
-	static void StartWhenDesktopReady(FenceManager manager, bool firstRun, AppCommand? command, List<string>? folders)
+	static void StartWhenDesktopReady(FenceManager manager, bool firstRun, AppCommand? command, (bool Smart, List<string> Folders)? folders)
 	{
 		void Start()
 		{
@@ -135,9 +135,13 @@ public partial class App : Application
 			{
 				manager.ExecuteCommand(value);
 			}
-			if (folders != null)
+			if (folders is { Smart: true } smart)
 			{
-				_ = manager.MapFoldersAsync(folders);
+				manager.CreateSmartFencesFor(smart.Folders);
+			}
+			else if (folders is { } map)
+			{
+				_ = manager.MapFoldersAsync(map.Folders);
 			}
 		}
 		if (DesktopHost.FindFolderView() != IntPtr.Zero)
@@ -180,27 +184,36 @@ public partial class App : Application
 	}
 
 	/// <summary>
-	/// --map-folder 后面的参数都是要映射的文件夹（「发送到」把选中的项目追加在命令行末尾）；没有这个参数时返回 null。
+	/// --map-folder（映射成分区）或 --smart-folder（新建智能分区）后面的参数都是文件夹（「发送到」把选中的项目追加在命令行末尾）；
+	/// 两个参数都没有时返回 null。
 	/// </summary>
-	static List<string>? ParseMapFolders(string[] args)
+	static (bool Smart, List<string> Folders)? ParseFolders(string[] args)
 	{
-		int index = Array.FindIndex(args, a => string.Equals(a, AppCommands.MapFolderArgument, StringComparison.OrdinalIgnoreCase));
-		return index < 0 ? null : args.Skip(index + 1).ToList();
+		foreach (var (argument, smart) in new[] { (AppCommands.MapFolderArgument, false), (AppCommands.SmartFolderArgument, true) })
+		{
+			int index = Array.FindIndex(args, a => string.Equals(a, argument, StringComparison.OrdinalIgnoreCase));
+			if (index >= 0)
+			{
+				return (smart, args.Skip(index + 1).ToList());
+			}
+		}
+		return null;
 	}
 
 	/// <summary>
-	/// 已有实例在运行：把要映射的文件夹交给它。实例刚启动、还在等桌面就绪时托盘窗口还没建好，隔一会儿再试，最多等 MapFolderWait；
+	/// 已有实例在运行：把文件夹交给它（映射成分区或新建智能分区）。实例刚启动、还在等桌面就绪时托盘窗口还没建好，隔一会儿再试，最多等 MapFolderWait；
 	/// 一直交不出去时提示，不悄悄丢掉。
 	/// </summary>
-	static void SendMapFolders(List<string> folders)
+	static void SendFolders((bool Smart, List<string> Folders) request)
 	{
+		var (smart, folders) = request;
 		var deadline = DateTime.UtcNow + MapFolderWait;
-		while (!AppCommands.SendMapFolders(AppPaths.DataDir, folders))
+		while (!AppCommands.SendFolders(smart ? AppCommands.SmartFolderData : AppCommands.MapFolderData, AppPaths.DataDir, folders))
 		{
 			if (DateTime.UtcNow >= deadline)
 			{
-				Log.Warn($"没能把要映射的文件夹交给正在运行的 MyDesktop：{string.Join("、", folders)}");
-				MessageDialog.Show("映射到桌面分区", "MyDesktop 正在运行，但没有响应。请稍后再试。", "确定");
+				Log.Warn($"没能把文件夹交给正在运行的 MyDesktop（{(smart ? "新建智能分区" : "映射分区")}）：{string.Join("、", folders)}");
+				MessageDialog.Show(smart ? "新建智能分区" : "映射到桌面分区", "MyDesktop 正在运行，但没有响应。请稍后再试。", "确定");
 				return;
 			}
 			Thread.Sleep(500);

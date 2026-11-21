@@ -63,8 +63,10 @@ Source: "MyDesktop.cer"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [Icons]
 Name: "{autoprograms}\MyDesktop 桌面分区"; Filename: "{app}\MyDesktop.exe"
-; 「发送到」里的映射分区：资源管理器把选中的文件夹追加在参数后面（见 App.ParseMapFolders），卸载时随 [Icons] 一起删除
+; 「发送到」里的映射分区：资源管理器把选中的文件夹追加在参数后面（见 App.ParseFolders），卸载时随 [Icons] 一起删除
 Name: "{usersendto}\MyDesktop 映射分区"; Filename: "{app}\MyDesktop.exe"; Parameters: "--map-folder"; Comment: "把文件夹映射成桌面分区"
+; 「发送到」里的智能分区：同上，参数 --smart-folder，每个文件夹弹出智能分区的条件对话框
+Name: "{usersendto}\MyDesktop 智能分区"; Filename: "{app}\MyDesktop.exe"; Parameters: "--smart-folder"; Comment: "用文件夹新建智能分区"
 
 [Registry]
 ; 勾选开机自动启动时写当前用户的 Run 项，登录 Windows 后由系统启动。

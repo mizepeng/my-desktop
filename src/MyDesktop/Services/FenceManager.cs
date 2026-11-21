@@ -563,7 +563,8 @@ internal sealed class FenceManager
 	/// <summary>
 	/// 新建智能分区：按模板直接创建；template 为空时弹出对话框，默认来源是「下载」、最近 7 天。
 	/// </summary>
-	public void CreateSmartFence(SmartTemplate? template, FenceWindow? near = null, RECT? bounds = null)
+	/// <param name="sourceFolder">对话框里预先填好的来源文件夹（「发送到」、文件夹右键菜单），名称默认用文件夹名；为空时用「下载」。</param>
+	public void CreateSmartFence(SmartTemplate? template, FenceWindow? near = null, RECT? bounds = null, string? sourceFolder = null)
 	{
 		string title;
 		string folder;
@@ -574,7 +575,8 @@ internal sealed class FenceManager
 			{
 				(title, folder, filter) = (UniqueTitle(template.Title), template.Folder(), template.Filter());
 			}
-			else if (SmartFenceDialog.Show(UniqueTitle("智能分区"), SmartTemplates.Downloads, new SmartFilter { ModifiedWithinDays = 7 }, true) is { } result)
+			else if (SmartFenceDialog.Show(UniqueTitle(sourceFolder != null ? FolderTitle(sourceFolder) : "智能分区"), sourceFolder ?? SmartTemplates.Downloads,
+					new SmartFilter { ModifiedWithinDays = 7 }, true) is { } result)
 			{
 				(title, folder, filter) = (result.Title, result.Folder, result.Filter);
 			}
@@ -597,6 +599,15 @@ internal sealed class FenceManager
 		var window = CreateFence(title, folder, near, bounds: bounds, smart: filter);
 		Log.Info($"新建智能分区「{title}」：{folder}，{filter.Describe()}");
 		BringToFront(window);
+	}
+
+	/// <summary>
+	/// 用文件夹名作分区名；盘符根目录这类没有名字的用完整路径。
+	/// </summary>
+	static string FolderTitle(string folder)
+	{
+		var name = Path.GetFileName(PathUtil.Normalize(folder));
+		return string.IsNullOrEmpty(name) ? folder : name;
 	}
 
 	/// <summary>
@@ -624,17 +635,41 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 其他进程（「发送到」、右键菜单「映射到桌面分区」）交来要映射的文件夹：在窗口过程里只确认收下，稍后再处理，发送方不用等弹窗。
+	/// 其他进程（「发送到」、文件夹右键菜单）交来文件夹，要映射成分区或新建智能分区：在窗口过程里只确认收下，稍后再处理，发送方不用等弹窗。
 	/// </summary>
 	bool OnDataReceived(int id, string text)
 	{
-		if (id != AppCommands.MapFolderData || AppCommands.ParseMapFolders(text, AppPaths.DataDir) is not List<string> folders)
+		if (id is not (AppCommands.MapFolderData or AppCommands.SmartFolderData) || AppCommands.ParseFolders(text, AppPaths.DataDir) is not List<string> folders)
 		{
 			return false;
 		}
-		Log.Info($"收到要映射的文件夹：{string.Join("、", folders)}");
-		_dispatcher.InvokeAsync(() => _ = MapFoldersAsync(folders), DispatcherPriority.Background);
+		if (id == AppCommands.SmartFolderData)
+		{
+			Log.Info($"收到要新建智能分区的文件夹：{string.Join("、", folders)}");
+			_dispatcher.InvokeAsync(() => CreateSmartFencesFor(folders), DispatcherPriority.Background);
+		}
+		else
+		{
+			Log.Info($"收到要映射的文件夹：{string.Join("、", folders)}");
+			_dispatcher.InvokeAsync(() => _ = MapFoldersAsync(folders), DispatcherPriority.Background);
+		}
 		return true;
+	}
+
+	/// <summary>
+	/// 「发送到」、文件夹右键菜单交来的文件夹：逐个弹出智能分区的条件对话框，来源文件夹填好这个文件夹、名称用文件夹名；不是文件夹的一起提示。
+	/// </summary>
+	public void CreateSmartFencesFor(IReadOnlyList<string> folders)
+	{
+		var notFolders = folders.Where(f => !Directory.Exists(f)).ToList();
+		foreach (var folder in folders.Where(Directory.Exists))
+		{
+			CreateSmartFence(null, sourceFolder: folder);
+		}
+		if (notFolders.Count > 0)
+		{
+			MessageDialog.Show("新建智能分区", $"只能用文件夹新建智能分区，下面这些不是文件夹：\n\n{string.Join("\n", notFolders)}", "确定");
+		}
 	}
 
 	/// <summary>
@@ -1870,6 +1905,7 @@ internal sealed class FenceManager
 			AppCommand.NewFence => () => CreateFence(editTitle: true, bounds: BoundsAtCursor()),
 			// 先按菜单弹出处的鼠标位置定好范围，选文件夹期间鼠标会移走
 			AppCommand.NewPortalFence => () => CreatePortalFence(bounds: BoundsAtCursor()),
+			AppCommand.NewSmartFence => () => CreateSmartFence(null, bounds: BoundsAtCursor()),
 			AppCommand.Organize => Organizer.OrganizeInteractive,
 			AppCommand.ToggleHidden => ToggleHidden,
 			AppCommand.DoubleClickHidesAll => () => SetDoubleClickTarget(HideTarget.All),

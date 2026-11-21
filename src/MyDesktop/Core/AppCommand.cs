@@ -20,6 +20,7 @@ internal enum AppCommand
 	// 安装程序升级、卸载前让正在运行的实例正常退出
 	Exit = 7,
 	NewPortalFence = 8,
+	NewSmartFence = 9,
 }
 
 internal static class AppCommands
@@ -68,6 +69,7 @@ internal static class AppCommands
 			AppCommand.DoubleClickHidesFences => "double-click-fences",
 			AppCommand.Exit => "exit",
 			AppCommand.NewPortalFence => "new-portal-fence",
+			AppCommand.NewSmartFence => "new-smart-fence",
 		};
 	}
 
@@ -103,19 +105,30 @@ internal static class AppCommands
 	/// </summary>
 	public const int MapFolderData = 0x4D44_0001;
 
+	/// <summary>
+	/// 用文件夹新建智能分区：「发送到」快捷方式和文件夹右键菜单「用这个文件夹新建智能分区」用，后面跟一个或多个文件夹路径。
+	/// </summary>
+	public const string SmartFolderArgument = "--smart-folder";
+
+	/// <summary>
+	/// WM_COPYDATA 的 dwData：用文件夹新建智能分区，内容格式同 MapFolderData。
+	/// </summary>
+	public const int SmartFolderData = 0x4D44_0002;
+
 	const uint CopyDataTimeoutMs = 2000;
 
 	/// <summary>
-	/// 把要映射的文件夹交给正在运行的实例（数据目录相同的那个）；有实例接收时返回 true。
+	/// 把文件夹交给正在运行的实例（数据目录相同的那个）；有实例接收时返回 true。
 	/// 托盘窗口要等实例接管桌面前才建好，刚启动的实例可能还收不到，由调用方重试。
 	/// </summary>
-	public static bool SendMapFolders(string dataDir, IReadOnlyList<string> folders)
+	/// <param name="dataId">MapFolderData（映射成分区）或 SmartFolderData（新建智能分区）。</param>
+	public static bool SendFolders(int dataId, string dataDir, IReadOnlyList<string> folders)
 	{
 		var text = string.Join("\0", [dataDir, .. folders]);
 		var buffer = Marshal.StringToHGlobalUni(text);
 		try
 		{
-			var data = new COPYDATASTRUCT { dwData = new IntPtr(MapFolderData), cbData = text.Length * 2, lpData = buffer };
+			var data = new COPYDATASTRUCT { dwData = new IntPtr(dataId), cbData = text.Length * 2, lpData = buffer };
 			AllowSetForegroundWindow(ASFW_ANY);
 			for (var window = FindWindowEx(IntPtr.Zero, IntPtr.Zero, null, DesktopMenuServer.MainWindowTitle); window != IntPtr.Zero;
 					window = FindWindowEx(IntPtr.Zero, window, null, DesktopMenuServer.MainWindowTitle))
@@ -135,9 +148,9 @@ internal static class AppCommands
 	}
 
 	/// <summary>
-	/// 解析 SendMapFolders 发来的内容；不是发给数据目录 dataDir 的实例时返回 null。
+	/// 解析 SendFolders 发来的内容；不是发给数据目录 dataDir 的实例时返回 null。
 	/// </summary>
-	public static List<string>? ParseMapFolders(string text, string dataDir)
+	public static List<string>? ParseFolders(string text, string dataDir)
 	{
 		var parts = text.Split('\0');
 		return PathUtil.AreEqual(parts[0], dataDir) ? parts.Skip(1).Where(p => p.Length > 0).ToList() : null;

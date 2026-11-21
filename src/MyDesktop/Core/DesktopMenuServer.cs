@@ -25,6 +25,11 @@ internal static class DesktopMenuServer
 	public static readonly Guid MapFolderClsid = new("8E0A5C1D-3B7F-4C29-9D61-2F4A7B8C5E13");
 
 	/// <summary>
+	/// 文件夹右键菜单「用这个文件夹新建智能分区」，与扩展包清单中第三个 com:Class 和 Directory 上的第二个 desktop5:Verb 保持一致。
+	/// </summary>
+	public static readonly Guid SmartFolderClsid = new("7E9F5D03-2963-4291-9613-1FE0CF25A081");
+
+	/// <summary>
 	/// 主程序托盘窗口的标题，用来判断 MyDesktop 是否在运行、向它查询状态。
 	/// </summary>
 	public const string MainWindowTitle = "MyDesktopTrayHost";
@@ -65,10 +70,16 @@ internal static class DesktopMenuServer
 			return;
 		}
 		var mapClsid = MapFolderClsid;
-		hr = CoRegisterClassObject(ref mapClsid, new ClassFactory(() => new MapFolderCommand()), CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE, out uint mapCookie);
+		hr = CoRegisterClassObject(ref mapClsid, new ClassFactory(() => FolderCommand.Map()), CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE, out uint mapCookie);
 		if (hr != 0)
 		{
 			Log.Warn($"注册文件夹右键菜单「映射到桌面分区」失败：0x{hr:X8}");
+		}
+		var smartClsid = SmartFolderClsid;
+		int smartHr = CoRegisterClassObject(ref smartClsid, new ClassFactory(() => FolderCommand.Smart()), CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE, out uint smartCookie);
+		if (smartHr != 0)
+		{
+			Log.Warn($"注册文件夹右键菜单「用这个文件夹新建智能分区」失败：0x{smartHr:X8}");
 		}
 		Thread.Sleep(GracePeriod);
 		while (FindMainWindow() != IntPtr.Zero)
@@ -79,6 +90,10 @@ internal static class DesktopMenuServer
 		if (hr == 0)
 		{
 			CoRevokeClassObject(mapCookie);
+		}
+		if (smartHr == 0)
+		{
+			CoRevokeClassObject(smartCookie);
 		}
 	}
 
@@ -264,6 +279,7 @@ internal static class DesktopMenuServer
 			[
 				new ActionCommand("新建分区", AppCommand.NewFence, false),
 				new ActionCommand("新建文件夹映射分区…", AppCommand.NewPortalFence, false),
+				new ActionCommand("新建智能分区…", AppCommand.NewSmartFence, false),
 				new ActionCommand("一键整理桌面…", AppCommand.Organize, false),
 			];
 			if (!_flatten)
@@ -399,13 +415,17 @@ internal static class DesktopMenuServer
 	}
 
 	/// <summary>
-	/// 文件夹右键菜单里的「映射到桌面分区」：把选中的文件夹交给正在运行的 MyDesktop，没在运行时带着这些文件夹启动它。
+	/// 文件夹右键菜单里的「映射到桌面分区」「用这个文件夹新建智能分区」：把选中的文件夹交给正在运行的 MyDesktop，没在运行时带着这些文件夹启动它。
 	/// </summary>
 	[ComVisible(true)]
 	[ClassInterface(ClassInterfaceType.None)]
-	sealed class MapFolderCommand() : MenuCommand("映射到桌面分区")
+	sealed class FolderCommand(string text, Guid clsid, string argument, int dataId) : MenuCommand(text)
 	{
 		const uint SIGDN_FILESYSPATH = 0x80058000;
+
+		public static FolderCommand Map() => new("映射到桌面分区", MapFolderClsid, AppCommands.MapFolderArgument, AppCommands.MapFolderData);
+
+		public static FolderCommand Smart() => new("用这个文件夹新建智能分区", SmartFolderClsid, AppCommands.SmartFolderArgument, AppCommands.SmartFolderData);
 
 		public override int GetIcon(IntPtr items, out IntPtr icon)
 		{
@@ -415,7 +435,7 @@ internal static class DesktopMenuServer
 
 		public override int GetCanonicalName(out Guid name)
 		{
-			name = MapFolderClsid;
+			name = clsid;
 			return 0;
 		}
 
@@ -431,29 +451,29 @@ internal static class DesktopMenuServer
 			var folders = items == IntPtr.Zero ? [] : Folders(items);
 			if (folders.Count == 0)
 			{
-				Log.Warn("文件夹右键菜单「映射到桌面分区」：选中项里没有文件夹");
+				Log.Warn($"文件夹右键菜单「{text}」：选中项里没有文件夹");
 				return 0;
 			}
 			// 不在资源管理器调用 Invoke 的线程上等：交给主程序最多要等几秒，启动主程序还要经资源管理器
-			new Thread(() => MapFolders(folders)) { Name = "MapFolder", IsBackground = false }.Start();
+			new Thread(() => SendFolders(folders)) { Name = "FolderCommand", IsBackground = false }.Start();
 			return 0;
 		}
 
-		static void MapFolders(List<string> folders)
+		void SendFolders(List<string> folders)
 		{
 			try
 			{
-				if (FindMainWindow() != IntPtr.Zero && AppCommands.SendMapFolders(AppPaths.DataDir, folders))
+				if (FindMainWindow() != IntPtr.Zero && AppCommands.SendFolders(dataId, AppPaths.DataDir, folders))
 				{
 					return;
 				}
 				// 主程序没在运行：经资源管理器启动，不继承本服务进程的包身份
-				var arguments = AppCommands.MapFolderArgument + " " + string.Join(" ", folders.Select(QuoteArgument));
+				var arguments = argument + " " + string.Join(" ", folders.Select(QuoteArgument));
 				ExplorerShell.Open(Environment.ProcessPath!, arguments, Path.GetDirectoryName(Environment.ProcessPath!)!);
 			}
 			catch (Exception ex)
 			{
-				Log.Warn($"文件夹右键菜单「映射到桌面分区」失败：{string.Join("、", folders)}", ex);
+				Log.Warn($"文件夹右键菜单「{text}」失败：{string.Join("、", folders)}", ex);
 			}
 		}
 
