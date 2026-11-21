@@ -11,8 +11,8 @@ using static MyDesktop.Native.NativeMethods;
 namespace MyDesktop.Views;
 
 /// <summary>
-/// 全局快捷键弹出的搜索框：在分区里和桌面上的图标中按名称或拼音查找，回车或单击打开（与双击图标相同）。
-/// 弹在鼠标所在显示器的上方，失去焦点、按 Esc 或再按一次快捷键时收起。
+/// 速览时弹出的搜索框：在分区里和桌面上的图标中按名称或拼音查找，回车或单击打开（与双击图标相同）。
+/// 弹在鼠标所在显示器的上方，失去焦点时收起；Esc、再按一次快捷键由速览统一处理（FenceManager.EndPeek）。
 /// </summary>
 internal partial class SearchWindow : Window
 {
@@ -49,9 +49,6 @@ internal partial class SearchWindow : Window
 	// 弹出位置的工作区和窗口上边（物理像素），结果变多时窗口往上挪，不伸出屏幕
 	RECT _workArea;
 	int _preferredTop;
-	// 速览时弹出：还没输入时只留搜索框，不列常用和全部，免得挡住分区
-	bool _compact;
-	string? _defaultPlaceholder;
 
 	public SearchWindow(Action<FenceItem> open)
 	{
@@ -74,13 +71,9 @@ internal partial class SearchWindow : Window
 	/// <summary>
 	/// 在鼠标所在的显示器上弹出，候选是此刻分区里和桌面上的全部图标。
 	/// </summary>
-	/// <param name="peek">速览时弹出：没输入时只留搜索框，提示文字说明怎么退出速览。</param>
-	public void Popup(List<Entry> entries, bool peek = false)
+	public void Popup(List<Entry> entries)
 	{
 		_entries = entries;
-		_compact = peek;
-		_defaultPlaceholder ??= Placeholder.Text;
-		Placeholder.Text = peek ? "速览中：输入名称或拼音搜索，按 Esc 或点空白处退出" : _defaultPlaceholder;
 		ApplyTheme();
 		QueryBox.Text = string.Empty;
 		UpdateResults();
@@ -157,8 +150,7 @@ internal partial class SearchWindow : Window
 		var query = PinyinMatcher.NormalizeQuery(QueryBox.Text);
 		var rows = new List<Row>();
 		int more = 0;
-		// 速览没输入时不列候选，按没有结果只留搜索框
-		if (query.Length == 0 && !_compact)
+		if (query.Length == 0)
 		{
 			var frequent = _entries
 					.Select(entry => (Entry: entry, Score: UsageStats.Score(entry.Item.FullPath)))
@@ -180,7 +172,7 @@ internal partial class SearchWindow : Window
 				more = _entries.Count - shown;
 			}
 		}
-		else if (query.Length > 0)
+		else
 		{
 			rows.AddRange(_entries
 					.Select(entry => (Entry: entry, Rank: PinyinMatcher.Rank(entry.Item.DisplayName, query)))

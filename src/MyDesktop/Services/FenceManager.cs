@@ -190,11 +190,6 @@ internal sealed class FenceManager
 		_tray.HotkeyPressed += OnHotkeyPressed;
 		_tray.DataReceived = OnDataReceived;
 		ItemOps.Opening += () => EndPeek(false);
-		if (!ApplySearchHotkey())
-		{
-			_dispatcher.InvokeAsync(() => _tray?.ShowBalloon($"快捷键 {Settings.SearchHotkey} 已被其他程序占用", "搜索桌面图标的快捷键没有生效，可以在 MyDesktop 设置里换一个。"),
-					DispatcherPriority.Background);
-		}
 		if (!ApplyPeekHotkey())
 		{
 			_dispatcher.InvokeAsync(() => _tray?.ShowBalloon($"快捷键 {Settings.PeekHotkey} 已被其他程序占用", "速览的快捷键没有生效，可以在 MyDesktop 设置里换一个。"),
@@ -204,6 +199,7 @@ internal sealed class FenceManager
 		Wallpaper.Changed += RefreshAllAppearance;
 		// 用毛玻璃的分区打开时才开始读壁纸（见 FenceWindow.UpdateBlur）
 		Wallpaper.BlurRadius = Settings.BlurRadius;
+		MigrateCategoryRules(firstRun);
 		NotifyIfUpgraded(firstRun);
 		NotifyIfElevated();
 		NotifyIfRuntimeOutdated();
@@ -2630,20 +2626,7 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 按设置注册搜索桌面图标的全局快捷键；返回是否成功（没设快捷键也算成功），被其他程序占用时失败。
-	/// </summary>
-	public bool ApplySearchHotkey()
-	{
-		if (_tray == null || _tray.SetHotkey(TrayIcon.SearchHotkeyId, Hotkey.Parse(Settings.SearchHotkey)))
-		{
-			return true;
-		}
-		Log.Warn($"搜索快捷键 {Settings.SearchHotkey} 注册失败，可能已被其他程序占用");
-		return false;
-	}
-
-	/// <summary>
-	/// 按设置注册速览的全局快捷键，规则同 ApplySearchHotkey。
+	/// 按设置注册速览的全局快捷键；返回是否成功（没设快捷键也算成功），被其他程序占用时失败。
 	/// </summary>
 	public bool ApplyPeekHotkey()
 	{
@@ -2656,29 +2639,14 @@ internal sealed class FenceManager
 	}
 
 	/// <summary>
-	/// 在设置里录入新快捷键期间先注销搜索和速览的快捷键，免得按下时弹出搜索框或进入速览；录完由 ApplySearchHotkey、ApplyPeekHotkey 重新注册。
+	/// 在设置里录入新快捷键期间先注销速览的快捷键，免得按下时进入速览；录完由 ApplyPeekHotkey 重新注册。
 	/// </summary>
-	public void SuspendSearchHotkey()
-	{
-		_tray?.SetHotkey(TrayIcon.SearchHotkeyId, null);
-		_tray?.SetHotkey(TrayIcon.PeekHotkeyId, null);
-	}
+	public void SuspendPeekHotkey() => _tray?.SetHotkey(TrayIcon.PeekHotkeyId, null);
 
 	void OnHotkeyPressed(int id)
 	{
 		switch (id)
 		{
-			case TrayIcon.SearchHotkeyId:
-				// 速览中按搜索快捷键：搜索框本来就在，退出速览
-				if (_peeking)
-				{
-					EndPeek(true);
-				}
-				else
-				{
-					ToggleSearch();
-				}
-				break;
 			case TrayIcon.PeekHotkeyId:
 				if (_peeking)
 				{
@@ -2697,7 +2665,7 @@ internal sealed class FenceManager
 
 	/// <summary>
 	/// 速览：把图标层、亚克力和分区临时置顶（和显示桌面时的临时置顶同一套，DesktopHost.Lift），压在当前窗口上面，
-	/// 下面垫一层半透明遮罩接住空白处的点击，同时弹出搜索框可以直接打字。
+	/// 下面垫一层半透明遮罩接住空白处的点击，同时弹出搜索框（列出常用和全部图标，可以直接打字搜索）。
 	/// 按 Esc、点空白处、再按一次快捷键或打开了图标时恢复（EndPeek）。不改任何窗口的 owner 或 parent。
 	/// </summary>
 	void StartPeek()
@@ -2731,7 +2699,7 @@ internal sealed class FenceManager
 			Log.Warn("速览时注册 Esc 失败，可能已被其他程序占用：只能点空白处或再按一次快捷键退出");
 		}
 		_searchWindow ??= new SearchWindow(OpenFromSearch);
-		_searchWindow.Popup(SearchEntries(), peek: true);
+		_searchWindow.Popup(SearchEntries());
 		Log.Info($"进入速览：{_windows.Count(w => w.IsVisible)} 个分区");
 	}
 
@@ -2760,17 +2728,6 @@ internal sealed class FenceManager
 	}
 
 	void OpenFromSearch(FenceItem item) => ItemOps.Open(_tray?.Handle ?? IntPtr.Zero, [item], true);
-
-	void ToggleSearch()
-	{
-		_searchWindow ??= new SearchWindow(OpenFromSearch);
-		if (_searchWindow.IsVisible)
-		{
-			_searchWindow.Dismiss();
-			return;
-		}
-		_searchWindow.Popup(SearchEntries());
-	}
 
 	/// <summary>
 	/// 可以搜索的图标：各桌面分区里的和桌面上散放的；映射分区显示的是文件夹内容，不算桌面图标。
@@ -2813,6 +2770,46 @@ internal sealed class FenceManager
 	/// 升级后第一次启动时（不论自动更新还是手动安装）在通知区域提示一次已更新到的版本；第一次安装、重装同一版本不提示。
 	/// 旧版本没有记录上次运行的版本，有配置文件就算是从旧版本升级上来的。
 	/// </summary>
+	/// <summary>
+	/// 升级上来的配置第一次启动时补上快捷方式分类规则，插在「快捷方式」规则前面，用户原有的规则、顺序和内容都不动；
+	/// 同名的、同一类别已经有规则的跳过。找不到名为「快捷方式」的规则（删了或改了名）时不插，不猜位置。
+	/// 只做一次（CategoryRulesMigrated），之后用户删掉这几条也不再加回来。新装的默认规则里已经有，直接记为做过。
+	/// </summary>
+	void MigrateCategoryRules(bool firstRun)
+	{
+		if (Settings.CategoryRulesMigrated)
+		{
+			return;
+		}
+		Settings.CategoryRulesMigrated = true;
+		SaveSoon();
+		if (firstRun)
+		{
+			return;
+		}
+		var rules = Settings.Rules;
+		var added = new List<string>();
+		var skipped = new List<string>();
+		int index = rules.FindIndex(r => !r.IsFallback && r.Name == "快捷方式");
+		if (index < 0)
+		{
+			Log.Info($"补快捷方式分类规则：没有名为「快捷方式」的规则（可能删了或改了名），不插入 {string.Join("、", OrganizeRule.DefaultShortcutCategories.Keys)}");
+			return;
+		}
+		foreach (var category in OrganizeRule.DefaultShortcutCategories.Keys)
+		{
+			if (rules.Any(r => r.Name == category || string.Equals(r.ShortcutCategory.Trim(), category, StringComparison.OrdinalIgnoreCase)))
+			{
+				skipped.Add(category);
+				continue;
+			}
+			rules.Insert(index++, OrganizeRule.CreateCategoryRules([category])[0]);
+			added.Add(category);
+		}
+		Log.Info($"补快捷方式分类规则：插在「快捷方式」规则前面 {(added.Count > 0 ? string.Join("、", added) : "无")}；"
+				+ $"已有同名或同类别规则而跳过 {(skipped.Count > 0 ? string.Join("、", skipped) : "无")}");
+	}
+
 	void NotifyIfUpgraded(bool firstRun)
 	{
 		var current = Updater.CurrentVersion;

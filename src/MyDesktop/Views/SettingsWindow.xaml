@@ -112,30 +112,9 @@
 								<Button Margin="8,0,0,0" Content="清除" Click="ClearHotkey_Click" />
 							</StackPanel>
 							<StackPanel Margin="0,0,12,0" VerticalAlignment="Center">
-								<TextBlock Text="搜索桌面图标的快捷键" />
-								<TextBlock Style="{StaticResource Hint}" Text="只搜索桌面图标（含收进分区的），支持全拼和首字母" />
-								<TextBlock x:Name="HotkeyStatus" Style="{StaticResource Hint}" Foreground="{DynamicResource SystemFillColorCautionBrush}" Visibility="Collapsed" />
-							</StackPanel>
-						</DockPanel>
-					</Border>
-					<Border Style="{StaticResource Card}">
-						<DockPanel>
-							<StackPanel VerticalAlignment="Center" DockPanel.Dock="Right" Orientation="Horizontal">
-								<TextBox x:Name="PeekHotkeyBox"
-										Width="170"
-										VerticalContentAlignment="Center"
-										IsReadOnly="True"
-										IsReadOnlyCaretVisible="False"
-										TextAlignment="Center"
-										GotKeyboardFocus="HotkeyBox_GotKeyboardFocus"
-										LostKeyboardFocus="HotkeyBox_LostKeyboardFocus"
-										PreviewKeyDown="HotkeyBox_PreviewKeyDown" />
-								<Button Margin="8,0,0,0" Content="清除" Tag="Peek" Click="ClearHotkey_Click" />
-							</StackPanel>
-							<StackPanel Margin="0,0,12,0" VerticalAlignment="Center">
 								<TextBlock Text="速览的快捷键" />
-								<TextBlock Style="{StaticResource Hint}" Text="把所有分区和桌面图标临时提到当前窗口上面，可以直接打字搜索；按 Esc、点空白处或打开图标后恢复" />
-								<TextBlock x:Name="PeekHotkeyStatus" Style="{StaticResource Hint}" Foreground="{DynamicResource SystemFillColorCautionBrush}" Visibility="Collapsed" />
+								<TextBlock Style="{StaticResource Hint}" Text="把所有分区和桌面图标浮到当前窗口上面，同时弹出搜索框（支持全拼和首字母）；按 Esc、点空白处或打开图标后恢复" />
+								<TextBlock x:Name="HotkeyStatus" Style="{StaticResource Hint}" Foreground="{DynamicResource SystemFillColorCautionBrush}" Visibility="Collapsed" />
 							</StackPanel>
 						</DockPanel>
 					</Border>

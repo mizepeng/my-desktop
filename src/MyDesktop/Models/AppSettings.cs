@@ -263,15 +263,37 @@ public sealed class AppSettings
 	/// </summary>
 	public bool AutoOrganize { get; set; }
 
-	/// <summary>
-	/// 弹出搜索框（搜索桌面图标）的全局快捷键，如「Alt+Space」；空字符串表示不用快捷键。
-	/// </summary>
-	public string SearchHotkey { get; set; } = "Alt+Space";
+	public const string DefaultPeekHotkey = "Ctrl+Alt+Space";
 
 	/// <summary>
-	/// 速览的全局快捷键：把所有分区和桌面图标临时提到当前窗口上面，可以直接打字搜索；空字符串表示不用。
+	/// 速览的全局快捷键，如「Ctrl+Alt+Space」：把所有分区和桌面图标临时提到当前窗口上面，同时弹出搜索框；空字符串表示不用快捷键。
 	/// </summary>
-	public string PeekHotkey { get; set; } = "Ctrl+Alt+Space";
+	public string PeekHotkey { get; set; } = DefaultPeekHotkey;
+
+	/// <summary>
+	/// 1.11.0 及以前单独的「搜索桌面图标」快捷键：只读不写，搜索已并进速览，读到时沿用为速览快捷键。
+	/// 清除过的（空字符串）保持清除；还是当时默认的 Alt+Space 的改用速览的默认快捷键：
+	/// Alt+Space 是系统的窗口菜单键，常被其他启动器占用，注册不上（实测用户日志里一直报占用）。
+	/// 配置里同时有 PeekHotkey（测试版写过）时，后读到的 PeekHotkey 为准。
+	/// </summary>
+	[JsonPropertyName("SearchHotkey")]
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+	public string? LegacySearchHotkey
+	{
+		get => null;
+		set
+		{
+			if (value != null)
+			{
+				PeekHotkey = value == "Alt+Space" ? DefaultPeekHotkey : value;
+			}
+		}
+	}
+
+	/// <summary>
+	/// 已经给升级上来的配置补过快捷方式分类规则（见 FenceManager.MigrateCategoryRules）；只补一次，之后用户删掉也不再加回来。
+	/// </summary>
+	public bool CategoryRulesMigrated { get; set; }
 
 	public bool TextShadow { get; set; } = true;
 
@@ -574,7 +596,7 @@ public sealed class FenceSettings
 	public List<string> CustomOrder { get; set; } = [];
 }
 
-//// <summary>
+/// <summary>
 /// 智能分区的筛选条件：分区显示来源文件夹（FenceSettings.FolderPath）里符合全部条件的项目，只是显示，文件不移动。
 /// 留空的条件不参与；只看来源文件夹这一层，不进子文件夹。设了扩展名或大小条件时不显示文件夹（文件夹没有扩展名和大小）。
 /// </summary>

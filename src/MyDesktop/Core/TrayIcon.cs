@@ -23,10 +23,8 @@ internal sealed class TrayIcon : IDisposable
 	const uint IconId = 1;
 
 	/// <summary>
-	/// 全局快捷键的编号：搜索、速览，以及速览期间临时注册的 Esc（结束速览）。
+	/// 全局快捷键的编号：速览，以及速览期间临时注册的 Esc（结束速览）。
 	/// </summary>
-	public const int SearchHotkeyId = 1;
-
 	public const int PeekHotkeyId = 2;
 
 	public const int EscapeHotkeyId = 3;
@@ -68,7 +66,7 @@ internal sealed class TrayIcon : IDisposable
 	public event Action? ClipboardChanged;
 
 	/// <summary>
-	/// 按下了 SetHotkey 注册的全局快捷键，参数是快捷键编号（SearchHotkeyId 等）。
+	/// 按下了 SetHotkey 注册的全局快捷键，参数是快捷键编号（PeekHotkeyId 等）。
 	/// </summary>
 	public event Action<int>? HotkeyPressed;
 
@@ -170,7 +168,6 @@ internal sealed class TrayIcon : IDisposable
 	public void Dispose()
 	{
 		_addRetryTimer.Stop();
-		UnregisterHotKey(Handle, SearchHotkeyId);
 		UnregisterHotKey(Handle, PeekHotkeyId);
 		UnregisterHotKey(Handle, EscapeHotkeyId);
 		RemoveClipboardFormatListener(Handle);
@@ -307,7 +304,7 @@ internal sealed class TrayIcon : IDisposable
 		{
 			ClipboardChanged?.Invoke();
 		}
-		else if (msg == WM_HOTKEY && (int)wParam is SearchHotkeyId or PeekHotkeyId or EscapeHotkeyId)
+		else if (msg == WM_HOTKEY && (int)wParam is PeekHotkeyId or EscapeHotkeyId)
 		{
 			HotkeyPressed?.Invoke((int)wParam);
 			handled = true;
