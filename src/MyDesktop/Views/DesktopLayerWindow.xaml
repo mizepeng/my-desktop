@@ -15,6 +15,7 @@
 		UseLayoutRounding="True"
 		SnapsToDevicePixels="True"
 		TextOptions.TextFormattingMode="Display"
+		local:TextShadow.UseGdi="True"
 		FontSize="12">
 
 	<Window.Resources>
