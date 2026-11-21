@@ -861,7 +861,7 @@ internal partial class SettingsWindow : Window
 	/// </summary>
 	void ResetAll_Click(object sender, RoutedEventArgs e)
 	{
-		if (MessageDialog.Show("恢复全部默认设置", "常规、桌面、分区、外观、角标各页的设置和整理规则都将恢复成默认值，分区、分区里的图标和各分区单独设置的外观不变。恢复前会自动备份一份，可以在备份列表里找回。",
+		if (MessageDialog.Show("恢复全部默认设置", "常规、桌面、分区、外观、角标各页的选项和整理规则都将恢复成默认值，自己加的整理规则会被删除。\n\n已经建好的分区、分区里的图标和各分区单独设置的外观都不受影响。\n\n恢复前会自动备份一份，可以在备份列表里找回。",
 				"全部恢复", "取消") != 0)
 		{
 			return;
