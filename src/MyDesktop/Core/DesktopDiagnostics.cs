@@ -132,6 +132,30 @@ internal static class DesktopDiagnostics
 	public static string Describe(IntPtr hwnd)
 			=> hwnd == IntPtr.Zero ? "无" : $"{GetClassName(hwnd)}(0x{hwnd.ToInt64():X})";
 
+	/// <summary>
+	/// 同 <see cref="Describe"/>，再带上所属进程名和 pid（查前台是哪个系统界面用）。取进程名要打开进程，不要在钩子回调里调用。
+	/// </summary>
+	public static string DescribeWithProcess(IntPtr hwnd)
+	{
+		if (hwnd == IntPtr.Zero)
+		{
+			return "无";
+		}
+		GetWindowThreadProcessId(hwnd, out uint pid);
+		string process;
+		try
+		{
+			using var info = System.Diagnostics.Process.GetProcessById((int)pid);
+			process = info.ProcessName;
+		}
+		catch (Exception)
+		{
+			// 进程已退出或无权访问时只记 pid
+			process = "?";
+		}
+		return $"{Describe(hwnd)}（{process} pid={pid}）";
+	}
+
 	static string Hex(uint color) => $"#{color & 0xFF:X2}{(color >> 8) & 0xFF:X2}{(color >> 16) & 0xFF:X2}";
 
 	/// <summary>

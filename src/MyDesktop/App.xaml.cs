@@ -63,6 +63,8 @@ public partial class App : Application
 		SystemTheme.ApplyToMenus();
 		Log.Info($"启动 {typeof(App).Assembly.GetName().Version}，数据目录：{AppPaths.DataDir}，管理员权限：{(Environment.IsPrivilegedProcess ? "是" : "否")}，"
 				+ $".NET 运行时：{Environment.Version}，Windows：{WindowsVersion()}");
+		// 测试版标记，合并发版前删除
+		Log.Info("运行桌面右键菜单诊断测试版 1.14.0-menu-test.1：记录桌面右键、点菜单项时的前台窗口和改名接手情况，不改变功能。");
 		var settings = SettingsStore.Load(out bool firstRun);
 		FenceManager.ApplyRenderMode(settings.HardwareAcceleration);
 		Manager = new FenceManager(settings);

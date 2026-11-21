@@ -91,7 +91,7 @@ internal partial class SettingsWindow : Window
 	void BlockComboBoxWheel()
 	{
 		foreach (var box in new[] { DoubleClickTargetBox, StartupVisibilityBox, StartupHideTargetBox, TabAlignmentBox,
-				BackgroundBox, RadiusChoiceBox, IconSizeBox, FenceFontBox, DesktopFontBox, OverlaySettings.ModeBox })
+				BackgroundBox, RadiusChoiceBox, IconSizeBox, FenceFontBox, DesktopFontBox, PrivacyRevealBox, OverlaySettings.ModeBox })
 		{
 			box.PreviewMouseWheel += ComboBox_PreviewMouseWheel;
 		}
@@ -173,8 +173,10 @@ internal partial class SettingsWindow : Window
 		IconSizeBox.SelectedIndex = (int)Settings.DefaultIconSize;
 		BuildColorSwatches();
 		UpdateColorPreview();
-		var version = typeof(App).Assembly.GetName().Version;
-		VersionText.Text = $"版本 {version?.ToString(3)}";
+		// 测试版显示完整版本号（带 -menu-test 后缀），合并发版前改回
+		var version = System.Reflection.CustomAttributeExtensions
+				.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(typeof(App).Assembly)!.InformationalVersion.Split('+')[0];
+		VersionText.Text = $"版本 {version}";
 		DataDirText.Text = AppPaths.DataDir;
 		HelpList.ItemsSource = Help;
 		LoadThanks();

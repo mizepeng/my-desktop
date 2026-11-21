@@ -2052,10 +2052,8 @@ internal sealed class FenceManager
 		var desktop = DesktopHost.FindDesktopWindow();
 		if (!ForceForegroundWindow(desktop, foreground => DesktopHost.IsDesktopActivated(foreground, desktop)))
 		{
-			var foreground = GetForegroundWindow();
-			GetWindowThreadProcessId(foreground, out uint process);
 			Log.Warn($"激活桌面失败，桌面快捷键和右键菜单可能无法响应：目标 {DesktopDiagnostics.Describe(desktop)}，"
-					+ $"前台 {DesktopDiagnostics.Describe(foreground)}（pid={process}），{(lift ? "已临时置顶" : "未临时置顶")}");
+					+ $"前台 {DesktopDiagnostics.DescribeWithProcess(GetForegroundWindow())}，{(lift ? "已临时置顶" : "未临时置顶")}");
 		}
 		if (lift)
 		{

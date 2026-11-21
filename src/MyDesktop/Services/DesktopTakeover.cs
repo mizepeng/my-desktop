@@ -732,10 +732,14 @@ internal sealed class DesktopTakeover : IDisposable
 		PostMessage(folderView, LVM_CANCELEDITLABEL, IntPtr.Zero, IntPtr.Zero);
 		Items.QueryFocused(key =>
 		{
-			if (key != null)
+			if (key == null)
 			{
-				RequestRename(key);
+				// 取消了资源管理器的改名框，自己这边又不知道改哪个，用户看到的就是「新建了没反应」
+				Log.Warn("资源管理器在隐藏的图标列表里开始改名，但取不到它正在改名的项目，没能接手改名");
+				return;
 			}
+			Log.Info($"[诊断] 接手资源管理器的改名：{Path.GetFileName(key)}");
+			RequestRename(key);
 		});
 	}
 
@@ -758,6 +762,7 @@ internal sealed class DesktopTakeover : IDisposable
 		}
 		if (DateTime.Now > _pendingRenameUntil)
 		{
+			Log.Warn($"{RenameWait.TotalSeconds:0} 秒内图标层和分区里都没出现 {Path.GetFileName(key)}，没能接手改名");
 			_pendingRename = null;
 			return;
 		}
