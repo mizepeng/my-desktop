@@ -850,7 +850,40 @@ internal partial class SettingsWindow : Window
 		{
 			return;
 		}
+		ResetPage(page, new AppSettings());
+		_manager.SaveSoon();
+		LoadValues();
+	}
+
+	/// <summary>
+	/// 「备份」页的「恢复全部默认设置」：各页的设置和整理规则都恢复成默认值，先自动备份一份，恢复错了可以从备份列表找回。
+	/// 分区本身（位置、成员）和各分区单独设置的外观不动，那是数据而不是设置；后者另有「外观」页的「全部重置」。
+	/// </summary>
+	void ResetAll_Click(object sender, RoutedEventArgs e)
+	{
+		if (MessageDialog.Show("恢复全部默认设置", "常规、桌面、分区、外观、角标各页的设置和整理规则都将恢复成默认值，分区、分区里的图标和各分区单独设置的外观不变。恢复前会自动备份一份，可以在备份列表里找回。",
+				"全部恢复", "取消") != 0)
+		{
+			return;
+		}
+		SaveRules();
+		SettingsBackup.Create(Settings, BackupReason.ResetAll);
 		var defaults = new AppSettings();
+		foreach (var page in new[] { "常规", "桌面", "分区", "外观", "角标" })
+		{
+			ResetPage(page, defaults);
+		}
+		ResetRulesToDefaults();
+		_manager.SaveSoon();
+		LoadValues();
+		LoadBackups();
+	}
+
+	/// <summary>
+	/// 把一页的设置改回默认值，并照各项改动时的做法生效。
+	/// </summary>
+	void ResetPage(string page, AppSettings defaults)
+	{
 		switch (page)
 		{
 			case "常规":
@@ -937,8 +970,6 @@ internal partial class SettingsWindow : Window
 				_manager.ApplyShortcutArrows();
 				break;
 		}
-		_manager.SaveSoon();
-		LoadValues();
 	}
 
 	#endregion
@@ -1070,6 +1101,11 @@ internal partial class SettingsWindow : Window
 		{
 			return;
 		}
+		ResetRulesToDefaults();
+	}
+
+	void ResetRulesToDefaults()
+	{
 		_rules.Clear();
 		foreach (var rule in OrganizeRule.CreateDefaults())
 		{

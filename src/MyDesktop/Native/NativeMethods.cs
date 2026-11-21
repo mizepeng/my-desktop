@@ -522,6 +522,32 @@ internal static class NativeMethods
 	[DllImport("gdi32.dll")]
 	public static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
 
+	public const uint CLEARTYPE_QUALITY = 5;
+	public const uint DEFAULT_CHARSET = 1;
+	public const int TRANSPARENT = 1;
+
+	[DllImport("gdi32.dll", EntryPoint = "CreateFontW", CharSet = CharSet.Unicode)]
+	public static extern IntPtr CreateFont(int height, int width, int escapement, int orientation, int weight, uint italic, uint underline, uint strikeOut,
+			uint charSet, uint outPrecision, uint clipPrecision, uint quality, uint pitchAndFamily, string face);
+
+	[DllImport("gdi32.dll")]
+	public static extern int SetBkMode(IntPtr hdc, int mode);
+
+	[DllImport("gdi32.dll")]
+	public static extern uint SetTextColor(IntPtr hdc, uint color);
+
+	public const uint DT_CENTER = 0x1;
+	public const uint DT_RIGHT = 0x2;
+	public const uint DT_WORDBREAK = 0x10;
+	public const uint DT_SINGLELINE = 0x20;
+	public const uint DT_CALCRECT = 0x400;
+	public const uint DT_NOPREFIX = 0x800;
+	public const uint DT_EDITCONTROL = 0x2000;
+	public const uint DT_END_ELLIPSIS = 0x8000;
+
+	[DllImport("user32.dll", EntryPoint = "DrawTextW", CharSet = CharSet.Unicode)]
+	public static extern int DrawText(IntPtr hdc, string text, int length, ref RECT rect, uint format);
+
 	public const byte AC_SRC_OVER = 0x00;
 	public const byte AC_SRC_ALPHA = 0x01;
 	public const uint ULW_ALPHA = 0x00000002;

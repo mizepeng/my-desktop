@@ -669,6 +669,15 @@
 						<Button Margin="0,0,8,0" Content="导出当前配置…" Click="ExportSettings_Click" />
 						<Button Content="从文件恢复…" Click="ImportSettings_Click" />
 					</WrapPanel>
+					<Border Style="{StaticResource Card}" Margin="0,16,0,0">
+						<DockPanel>
+							<Button VerticalAlignment="Center" Content="恢复全部默认设置…" DockPanel.Dock="Right" Click="ResetAll_Click" />
+							<StackPanel Margin="0,0,12,0" VerticalAlignment="Center">
+								<TextBlock Text="恢复全部默认设置" />
+								<TextBlock Style="{StaticResource Hint}" Text="常规、桌面、分区、外观、角标各页的设置和整理规则都恢复成默认值；分区、分区里的图标和各分区单独设置的外观不变。恢复前自动备份一份" />
+							</StackPanel>
+						</DockPanel>
+					</Border>
 
 					<TextBlock Style="{StaticResource SectionTitle}" Text="备份列表" />
 					<TextBlock x:Name="NoBackupText" Style="{StaticResource Hint}" Text="还没有备份" />

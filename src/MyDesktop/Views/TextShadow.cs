@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
+using static MyDesktop.Native.NativeMethods;
 
 namespace MyDesktop.Views;
 
@@ -12,6 +13,8 @@ namespace MyDesktop.Views;
 /// 正文不带效果才和不加阴影时一样清楚。只有模糊阴影时浅色壁纸上反差不够，边缘清晰度只有资源管理器桌面的一半左右，看着还是虚（#10，实测对比）；
 /// 加上八个方向各 1 像素、每层 25% 的描边后和资源管理器相当，描边再浓就比系统桌面明显发黑。
 /// 副本的文字、字体、换行、截断、边距、可见性等都跟着正文。
+/// UseGdi 为 true 时（桌面图标层）不建副本，正文只参与排版、不显示，由 GdiText 用 ClearType 把名称连同阴影画成位图，对齐到整像素贴上去：
+/// WPF 文字在透明窗口里竖笔画常落在半个像素上发虚，资源管理器桌面用的就是 GDI ClearType（见 docs/dev/constraints.md）。
 /// </summary>
 internal sealed class TextShadow : Decorator
 {
@@ -44,12 +47,30 @@ internal sealed class TextShadow : Decorator
 		HorizontalAlignmentProperty, VerticalAlignmentProperty, LayoutTransformProperty,
 	];
 
+	/// <summary>
+	/// 用 GDI 画名称，设在窗口上往下继承；默认 false，分区仍用 WPF 文字。
+	/// </summary>
+	public static readonly DependencyProperty UseGdiProperty = DependencyProperty.RegisterAttached("UseGdi", typeof(bool), typeof(TextShadow),
+			new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.Inherits, (d, _) => (d as TextShadow)?.UpdateShadow()));
+
+	// GDI 画法下跟着正文的文字，变了就重画
+	static readonly DependencyProperty GdiTextProperty = DependencyProperty.Register("GdiText", typeof(string), typeof(TextShadow),
+			new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+
 	readonly TextBlock _copy = new() { IsHitTestVisible = false };
 	// 描边由着色器向四周扩，副本本身要是不透明的黑色，不偏移
 	readonly TextBlock _outline = new() { IsHitTestVisible = false, Foreground = Brushes.Black, Effect = OutlineEffect };
 	bool _copyAttached;
 	// 已经照着正文设好副本
 	TextBlock? _mirrored;
+	// GDI 画法：正在用的正文、画好的位图和画它时的参数
+	TextBlock? _gdiText;
+	GdiText.Result? _gdi;
+	GdiText.Request? _gdiRequest;
+
+	public static void SetUseGdi(DependencyObject element, bool value) => element.SetValue(UseGdiProperty, value);
+
+	public static bool GetUseGdi(DependencyObject element) => (bool)element.GetValue(UseGdiProperty);
 
 	public Effect? Shadow
 	{
@@ -149,12 +170,18 @@ internal sealed class TextShadow : Decorator
 			_copy.Arrange(new Rect(arrangeSize));
 			_outline.Arrange(new Rect(arrangeSize));
 		}
+		// 正文的大小、行数（选中时展开完整名称）、字体变了都会重新排版
+		if (_gdiText != null)
+		{
+			InvalidateVisual();
+		}
 		return base.ArrangeOverride(arrangeSize);
 	}
 
 	void UpdateShadow()
 	{
-		bool show = Shadow != null && Child is TextBlock;
+		UpdateGdi();
+		bool show = Shadow != null && Child is TextBlock && _gdiText == null;
 		if (show != _copyAttached)
 		{
 			_copyAttached = show;
@@ -175,4 +202,95 @@ internal sealed class TextShadow : Decorator
 		brush.Freeze();
 		_copy.Foreground = brush;
 	}
+
+	/// <summary>
+	/// 进入或退出 GDI 画法：进入时正文透明（仍参与排版和触发器），文字和可见性变了就重画。
+	/// </summary>
+	void UpdateGdi()
+	{
+		var text = GetUseGdi(this) ? Child as TextBlock : null;
+		if (text != _gdiText)
+		{
+			if (_gdiText != null)
+			{
+				_gdiText.ClearValue(OpacityProperty);
+				_gdiText.IsVisibleChanged -= GdiText_IsVisibleChanged;
+				ClearValue(GdiTextProperty);
+				ClearValue(RenderOptions.BitmapScalingModeProperty);
+			}
+			_gdiText = text;
+			if (text != null)
+			{
+				text.Opacity = 0;
+				text.IsVisibleChanged += GdiText_IsVisibleChanged;
+				SetBinding(GdiTextProperty, new Binding(nameof(TextBlock.Text)) { Source = text });
+				// 位图按物理像素一比一贴上去，不插值
+				RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.NearestNeighbor);
+			}
+		}
+		if (text == null)
+		{
+			_gdi = null;
+			_gdiRequest = null;
+		}
+		InvalidateVisual();
+	}
+
+	void GdiText_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e) => InvalidateVisual();
+
+	protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+	{
+		base.OnDpiChanged(oldDpi, newDpi);
+		InvalidateVisual();
+	}
+
+	/// <summary>
+	/// GDI 画法：按正文排好的大小和行数画位图，左上角对齐到整个物理像素后贴上去。
+	/// </summary>
+	protected override void OnRender(DrawingContext dc)
+	{
+		var text = _gdiText;
+		if (text == null || !text.IsVisible || string.IsNullOrEmpty(text.Text) || text.ActualWidth <= 0 || text.ActualHeight <= 0
+				|| PresentationSource.FromVisual(this)?.RootVisual is not Visual root)
+		{
+			return;
+		}
+		double scale = VisualTreeHelper.GetDpi(this).DpiScaleX;
+		var origin = text.TransformToAncestor(root).Transform(default);
+		var self = TransformToAncestor(root).Transform(default);
+		int left = (int)Math.Round(origin.X * scale);
+		int top = (int)Math.Round(origin.Y * scale);
+		double lineHeight = double.IsNaN(text.LineHeight) || text.LineHeight <= 0 ? text.FontSize * 4 / 3 : text.LineHeight;
+		// 阴影照资源管理器桌面的样子，不用 WPF 画法的模糊参数和描边
+		var shadow = Shadow == null ? null : GdiText.ExplorerShadow(scale);
+		var request = new GdiText.Request(text.Text, FaceName(text.FontFamily), (int)Math.Round(text.FontSize * scale), text.FontWeight.ToOpenTypeWeight(),
+				text.FontStyle != FontStyles.Normal, Align(text.TextAlignment), text.TextWrapping != TextWrapping.NoWrap, text.TextTrimming != TextTrimming.None,
+				(int)Math.Round(text.ActualWidth * scale), Math.Max(1, (int)Math.Round(text.ActualHeight / lineHeight)),
+				(text.Foreground as SolidColorBrush)?.Color ?? Colors.White, shadow, 96 * scale);
+		if (request != _gdiRequest)
+		{
+			_gdi = GdiText.Render(request);
+			_gdiRequest = request;
+		}
+		var bitmap = _gdi!.Bitmap;
+		int pad = _gdi.Padding;
+		dc.DrawImage(bitmap, new Rect((left - pad) / scale - self.X, (top - pad) / scale - self.Y, bitmap.PixelWidth / scale, bitmap.PixelHeight / scale));
+	}
+
+	/// <summary>
+	/// WPF 字体族对应的 GDI 字体名：有后备列表时取第一个，嵌入字体取 # 后面的名称。
+	/// </summary>
+	static string FaceName(FontFamily family)
+	{
+		var name = family.Source.Split(',')[0].Trim();
+		int hash = name.IndexOf('#');
+		return hash >= 0 ? name[(hash + 1)..] : name;
+	}
+
+	static uint Align(TextAlignment alignment) => alignment switch
+	{
+		TextAlignment.Center => DT_CENTER,
+		TextAlignment.Right => DT_RIGHT,
+		TextAlignment.Left or TextAlignment.Justify => 0,
+	};
 }
