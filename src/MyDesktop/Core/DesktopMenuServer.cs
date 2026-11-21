@@ -20,14 +20,18 @@ internal static class DesktopMenuServer
 	public static readonly Guid Clsid = new("54873389-EF3D-41F1-8659-877D58CE2CBD");
 
 	/// <summary>
-	/// 文件夹右键菜单「映射到桌面分区」，与扩展包清单中第二个 com:Class 和 Directory 上的 desktop5:Verb 保持一致。
+	/// 文件夹右键菜单「MyDesktop」子菜单，与扩展包清单中第二个 com:Class 和 Directory 上的 desktop5:Verb 保持一致。
+	/// 1.11.0 及以前这个 CLSID 直接是「映射到桌面分区」一项；有了第二项后合成一个子菜单：同一个扩展包提供多个命令时，
+	/// Files 等第三方文件管理器会把它们收进一个没有图标的分组，只提供一个命令才显示得和资源管理器一样。
 	/// </summary>
-	public static readonly Guid MapFolderClsid = new("8E0A5C1D-3B7F-4C29-9D61-2F4A7B8C5E13");
+	public static readonly Guid FolderMenuClsid = new("8E0A5C1D-3B7F-4C29-9D61-2F4A7B8C5E13");
 
 	/// <summary>
-	/// 文件夹右键菜单「用这个文件夹新建智能分区」，与扩展包清单中第三个 com:Class 和 Directory 上的第二个 desktop5:Verb 保持一致。
+	/// 文件夹子菜单里两项的规范名称（GetCanonicalName），不注册成 COM 类。
 	/// </summary>
-	public static readonly Guid SmartFolderClsid = new("7E9F5D03-2963-4291-9613-1FE0CF25A081");
+	static readonly Guid MapFolderCommandId = new("EAA4F2F7-65FD-4A14-895C-DF61C5BA0A9F");
+
+	static readonly Guid SmartFolderCommandId = new("7E9F5D03-2963-4291-9613-1FE0CF25A081");
 
 	/// <summary>
 	/// 主程序托盘窗口的标题，用来判断 MyDesktop 是否在运行、向它查询状态。
@@ -69,17 +73,11 @@ internal static class DesktopMenuServer
 			Log.Warn($"注册桌面右键菜单服务失败：0x{hr:X8}");
 			return;
 		}
-		var mapClsid = MapFolderClsid;
-		hr = CoRegisterClassObject(ref mapClsid, new ClassFactory(() => FolderCommand.Map()), CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE, out uint mapCookie);
+		var folderClsid = FolderMenuClsid;
+		hr = CoRegisterClassObject(ref folderClsid, new ClassFactory(() => new FolderMenuCommand()), CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE, out uint folderCookie);
 		if (hr != 0)
 		{
-			Log.Warn($"注册文件夹右键菜单「映射到桌面分区」失败：0x{hr:X8}");
-		}
-		var smartClsid = SmartFolderClsid;
-		int smartHr = CoRegisterClassObject(ref smartClsid, new ClassFactory(() => FolderCommand.Smart()), CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE, out uint smartCookie);
-		if (smartHr != 0)
-		{
-			Log.Warn($"注册文件夹右键菜单「用这个文件夹新建智能分区」失败：0x{smartHr:X8}");
+			Log.Warn($"注册文件夹右键菜单失败：0x{hr:X8}");
 		}
 		Thread.Sleep(GracePeriod);
 		while (FindMainWindow() != IntPtr.Zero)
@@ -89,11 +87,7 @@ internal static class DesktopMenuServer
 		CoRevokeClassObject(cookie);
 		if (hr == 0)
 		{
-			CoRevokeClassObject(mapCookie);
-		}
-		if (smartHr == 0)
-		{
-			CoRevokeClassObject(smartCookie);
+			CoRevokeClassObject(folderCookie);
 		}
 	}
 
@@ -415,17 +409,52 @@ internal static class DesktopMenuServer
 	}
 
 	/// <summary>
-	/// 文件夹右键菜单里的「映射到桌面分区」「用这个文件夹新建智能分区」：把选中的文件夹交给正在运行的 MyDesktop，没在运行时带着这些文件夹启动它。
+	/// 文件夹右键菜单里的「MyDesktop」子菜单：选中项里有文件夹时显示，下面是「映射到桌面分区」「用这个文件夹新建智能分区」。
 	/// </summary>
 	[ComVisible(true)]
 	[ClassInterface(ClassInterfaceType.None)]
-	sealed class FolderCommand(string text, Guid clsid, string argument, int dataId) : MenuCommand(text)
+	sealed class FolderMenuCommand() : MenuCommand("MyDesktop")
+	{
+		public override int GetIcon(IntPtr items, out IntPtr icon)
+		{
+			icon = Marshal.StringToCoTaskMemUni($"{Environment.ProcessPath},0");
+			return 0;
+		}
+
+		public override int GetCanonicalName(out Guid name)
+		{
+			name = FolderMenuClsid;
+			return 0;
+		}
+
+		public override int GetState(IntPtr items, bool okToBeSlow, out uint state)
+		{
+			// 新版 Windows 11 询问状态时可能不传选中项，这时照常显示，点击时再看选中的是不是文件夹
+			state = items == IntPtr.Zero || FolderCommand.Folders(items).Count > 0 ? ECS_ENABLED : ECS_HIDDEN;
+			return 0;
+		}
+
+		public override int GetFlags(out uint flags)
+		{
+			flags = ECF_HASSUBCOMMANDS;
+			return 0;
+		}
+
+		public override int EnumSubCommands(out IntPtr enumerator) => Enumerate([FolderCommand.Map(), FolderCommand.Smart()], out enumerator);
+	}
+
+	/// <summary>
+	/// 文件夹子菜单里的「映射到桌面分区」「用这个文件夹新建智能分区」：把选中的文件夹交给正在运行的 MyDesktop，没在运行时带着这些文件夹启动它。
+	/// </summary>
+	[ComVisible(true)]
+	[ClassInterface(ClassInterfaceType.None)]
+	sealed class FolderCommand(string text, Guid commandId, string argument, int dataId) : MenuCommand(text)
 	{
 		const uint SIGDN_FILESYSPATH = 0x80058000;
 
-		public static FolderCommand Map() => new("映射到桌面分区", MapFolderClsid, AppCommands.MapFolderArgument, AppCommands.MapFolderData);
+		public static FolderCommand Map() => new("映射到桌面分区", MapFolderCommandId, AppCommands.MapFolderArgument, AppCommands.MapFolderData);
 
-		public static FolderCommand Smart() => new("用这个文件夹新建智能分区", SmartFolderClsid, AppCommands.SmartFolderArgument, AppCommands.SmartFolderData);
+		public static FolderCommand Smart() => new("用这个文件夹新建智能分区", SmartFolderCommandId, AppCommands.SmartFolderArgument, AppCommands.SmartFolderData);
 
 		public override int GetIcon(IntPtr items, out IntPtr icon)
 		{
@@ -435,7 +464,7 @@ internal static class DesktopMenuServer
 
 		public override int GetCanonicalName(out Guid name)
 		{
-			name = clsid;
+			name = commandId;
 			return 0;
 		}
 
@@ -485,7 +514,7 @@ internal static class DesktopMenuServer
 		/// <summary>
 		/// 选中项里有文件系统路径的文件夹。
 		/// </summary>
-		static List<string> Folders(IntPtr items)
+		public static List<string> Folders(IntPtr items)
 		{
 			var result = new List<string>();
 			var array = (IShellItemArray)Marshal.GetObjectForIUnknown(items);
