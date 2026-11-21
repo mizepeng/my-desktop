@@ -867,7 +867,10 @@ internal partial class SettingsWindow : Window
 			return;
 		}
 		SaveRules();
-		SettingsBackup.Create(Settings, BackupReason.ResetAll);
+		if (!SettingsBackup.CreateBefore(Settings, BackupReason.ResetAll, "恢复全部默认设置", false))
+		{
+			return;
+		}
 		var defaults = new AppSettings();
 		foreach (var page in new[] { "常规", "桌面", "分区", "外观", "角标" })
 		{
@@ -1128,8 +1131,10 @@ internal partial class SettingsWindow : Window
 	void BackupNow_Click(object sender, RoutedEventArgs e)
 	{
 		SaveRules();
-		SettingsBackup.Create(Settings, BackupReason.Manual);
-		LoadBackups();
+		if (SettingsBackup.Create(Settings, BackupReason.Manual))
+		{
+			LoadBackups();
+		}
 	}
 
 	void ExportSettings_Click(object sender, RoutedEventArgs e)

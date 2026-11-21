@@ -759,7 +759,10 @@ internal sealed class FenceManager
 		{
 			return;
 		}
-		SettingsBackup.Create(Settings, BackupReason.DeleteFence);
+		if (!SettingsBackup.CreateBefore(Settings, BackupReason.DeleteFence, "删除分区", false))
+		{
+			return;
+		}
 		// 桌面分区里的图标飞回桌面：起点要在关闭分区之前取
 		var homing = Settings.FlightAnimation && !model.IsPortal && window.IsVisible && _takeover?.LayersVisible == true ? LiftIcons(window) : [];
 		LeaveGroup(window);
@@ -2384,7 +2387,10 @@ internal sealed class FenceManager
 		}
 		// 开着的不透明度对话框按取消处理，免得之后取消时把照搬来的不透明度改回去
 		CloseOpacityDialogs();
-		SettingsBackup.Create(Settings, BackupReason.ApplyAppearance);
+		if (!SettingsBackup.CreateBefore(Settings, BackupReason.ApplyAppearance, "外观应用到所有分区", true))
+		{
+			return;
+		}
 		foreach (var other in others)
 		{
 			(other.Color, other.Opacity, other.Background, other.Border) = (model.Color, model.Opacity, model.Background, model.Border);
@@ -2470,7 +2476,10 @@ internal sealed class FenceManager
 		{
 			return;
 		}
-		SettingsBackup.Create(Settings, BackupReason.Restore);
+		if (!SettingsBackup.CreateBefore(Settings, BackupReason.Restore, "恢复配置", false))
+		{
+			return;
+		}
 		Log.Info($"恢复配置：{file}");
 		App.Current.RestartWithSettings(restored);
 	}

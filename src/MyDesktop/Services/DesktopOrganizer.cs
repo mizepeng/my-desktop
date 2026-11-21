@@ -84,7 +84,10 @@ internal sealed class DesktopOrganizer : IDisposable
 		{
 			return;
 		}
-		SettingsBackup.Create(_manager.Settings, BackupReason.Organize);
+		if (!SettingsBackup.CreateBefore(_manager.Settings, BackupReason.Organize, "一键整理桌面", true))
+		{
+			return;
+		}
 		_ = ExecuteAnimatedAsync(plan, true);
 	}
 
