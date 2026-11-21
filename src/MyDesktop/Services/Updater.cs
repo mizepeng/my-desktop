@@ -26,6 +26,7 @@ internal sealed class Updater
 	const string ReleasesPage = "https://github.com/mizepeng/my-desktop/releases/latest";
 	const string TagPathPrefix = "/mizepeng/my-desktop/releases/tag/";
 	const string DownloadBase = "https://github.com/mizepeng/my-desktop/releases/download/";
+	const string ChangelogAtTag = "https://raw.githubusercontent.com/mizepeng/my-desktop/{0}/docs/CHANGELOG.md";
 	const string InstallerPrefix = "MyDesktop-Setup-";
 	const int CERT_E_UNTRUSTEDROOT = unchecked((int)0x800B0109);
 	const int ERROR_CANCELLED = 1223;
@@ -50,7 +51,7 @@ internal sealed class Updater
 	bool _prompting;
 
 	/// <summary>
-	/// 一个发行版。Notes 为 null 表示这次取不到发行说明（接口被限流、走了备用路径），不同于发行说明本身为空。
+	/// 一个发行版。Notes 为 null 表示这次取不到发行说明（接口被限流、备用路径也没读到更新日志），不同于发行说明本身为空。
 	/// </summary>
 	sealed record Release(Version Version, string Tag, string? Notes, string AssetName, string AssetUrl, long AssetSize);
 
@@ -130,8 +131,9 @@ internal sealed class Updater
 			}
 			else
 			{
+				// 点通知时重新检查一次再弹对话框，不用这次的结果：通知可能隔了很久才点，这期间接口限流多半已经恢复、也可能又发了新版本
 				_manager.ShowNotification($"MyDesktop {release.Version.ToString(3)} 已发布", $"当前版本 {CurrentVersion.ToString(3)}，点击查看更新内容并更新。",
-						() => Prompt(release));
+						() => _ = CheckAsync(true));
 			}
 		}
 		finally
@@ -228,7 +230,7 @@ internal sealed class Updater
 	/// <summary>
 	/// 备用路径：GitHub 匿名接口同一 IP 每小时只有 60 次，公司网、校园网等共用出口的用户容易碰到限流，这时不走 api.github.com：
 	/// 版本号取自发行版页面 /releases/latest 跳转到的 /releases/tag/vX.Y.Z，安装包地址按发布时的固定命名拼出来，
-	/// 再用 HEAD 请求确认安装包存在并取得大小。发行说明取不到（Notes 为 null），更新对话框里提示到发行版页面查看；
+	/// 再用 HEAD 请求确认安装包存在并取得大小。发行说明改读该标签下的 docs/CHANGELOG.md（见 NotesFromChangelogAsync），取不到时 Notes 为 null，更新对话框里提示到发行版页面查看；
 	/// 下载后照常核对签名证书，安全校验不因走备用路径放松。任何一步对不上都抛异常，按检查更新失败处理。
 	/// </summary>
 	static async Task<Release> FetchLatestFromPageAsync()
@@ -254,8 +256,61 @@ internal sealed class Updater
 			throw new InvalidOperationException($"{tag} 的安装包 {name} 不存在或无法访问（{(int)asset.StatusCode} {asset.ReasonPhrase}）");
 		}
 		long size = asset.Content.Headers.ContentLength ?? throw new InvalidOperationException($"取不到 {tag} 安装包的大小");
-		Log.Info($"备用路径取到最新版本 {tag}，安装包 {url}（{size} 字节），发行说明需到发行版页面查看");
-		return new Release(version, tag, null, name, url, size);
+		var notes = await NotesFromChangelogAsync(tag, version);
+		Log.Info($"备用路径取到最新版本 {tag}，安装包 {url}（{size} 字节），{(notes == null ? "发行说明需到发行版页面查看" : "发行说明取自该标签的更新日志")}");
+		return new Release(version, tag, notes, name, url, size);
+	}
+
+	/// <summary>
+	/// 备用路径的发行说明：读该标签下的 docs/CHANGELOG.md（raw.githubusercontent.com 不占 api.github.com 的匿名额度）。
+	/// 发行说明的「本版更新」就是更新日志里这一版的条目，所以内容一致；隔了几个版本时和 NotesSinceAsync 一样列出当前版本之后的每一版。
+	/// 取不到或格式对不上时记日志、返回 null，对话框照常提示到发行版页面查看，不耽误更新。
+	/// </summary>
+	static async Task<string?> NotesFromChangelogAsync(string tag, Version latest)
+	{
+		try
+		{
+			var markdown = await Http.GetStringAsync(string.Format(ChangelogAtTag, Uri.EscapeDataString(tag)));
+			var sections = new List<(Version Version, List<string> Lines)>();
+			List<string>? current = null;
+			foreach (var line in markdown.Replace("\r", string.Empty).Split('\n'))
+			{
+				if (line.StartsWith("## ", StringComparison.Ordinal))
+				{
+					// 每一版的标题形如「## 1.12.0（2026-11-21）」
+					var head = line[3..];
+					int end = head.IndexOf('（');
+					current = null;
+					if (Version.TryParse((end > 0 ? head[..end] : head).Trim(), out var parsed))
+					{
+						var version = Normalize(parsed);
+						if (version > CurrentVersion && version <= latest)
+						{
+							current = [];
+							sections.Add((version, current));
+						}
+					}
+					continue;
+				}
+				current?.Add(line);
+			}
+			if (!sections.Any(x => x.Version == latest))
+			{
+				Log.Warn($"{tag} 的更新日志里没有 {latest.ToString(3)} 这一版，发行说明需到发行版页面查看");
+				return null;
+			}
+			var formatted = sections.OrderByDescending(x => x.Version)
+					.Select(x => (x.Version, Notes: FormatNotes("## 本版更新\n" + string.Join("\n", x.Lines))))
+					.ToList();
+			return formatted.Count == 1
+					? formatted[0].Notes
+					: string.Join("\n\n", formatted.Select(x => $"# {x.Version.ToString(3)} 版\n{x.Notes}"));
+		}
+		catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+		{
+			Log.Warn($"读取 {tag} 的更新日志失败，发行说明需到发行版页面查看", ex);
+			return null;
+		}
 	}
 
 	/// <summary>
