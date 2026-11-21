@@ -121,6 +121,7 @@ internal partial class SettingsWindow : Window
 		_loading = true;
 		AutoStartBox.IsChecked = AutoStart.IsEnabled();
 		HotkeyBox.Text = HotkeyText();
+		LoadPrivacy();
 		DoubleClickBox.IsChecked = Settings.DoubleClickToHide;
 		DoubleClickTargetBox.ItemsSource = Enum.GetValues<HideTarget>().Select(t => t.DisplayName()).ToList();
 		DoubleClickTargetBox.SelectedIndex = (int)Settings.DoubleClickTarget;
@@ -180,6 +181,7 @@ internal partial class SettingsWindow : Window
 		UpdateSliderTexts();
 		// 快捷键被其他程序占用时，打开设置就能看到提示
 		ApplyHotkey();
+		ApplyPrivacyHotkey();
 		_loading = false;
 	}
 
@@ -234,7 +236,7 @@ internal partial class SettingsWindow : Window
 		{
 			return;
 		}
-		var pages = new[] { GeneralPage, DesktopPage, FencesPage, AppearancePage, OverlaysPage, RulesPage, BackupPage, HelpPage, ThanksPage, AboutPage };
+		var pages = new[] { GeneralPage, DesktopPage, FencesPage, AppearancePage, PrivacyPage, OverlaysPage, RulesPage, BackupPage, HelpPage, ThanksPage, AboutPage };
 		for (int i = 0; i < pages.Length; i++)
 		{
 			pages[i].Visibility = i == NavList.SelectedIndex ? Visibility.Visible : Visibility.Collapsed;
@@ -319,6 +321,117 @@ internal partial class SettingsWindow : Window
 		bool ok = _manager.ApplyPeekHotkey();
 		HotkeyStatus.Text = $"{Settings.PeekHotkey} 已被其他程序占用，请换一个组合键";
 		HotkeyStatus.Visibility = ok ? Visibility.Collapsed : Visibility.Visible;
+	}
+
+	void LoadPrivacy()
+	{
+		PrivacyModeBox.IsChecked = Settings.PrivacyMode;
+		PrivacyIconsBox.IsChecked = Settings.PrivacyIcons;
+		PrivacyNamesBox.IsChecked = Settings.PrivacyNames;
+		PrivacyTitlesBox.IsChecked = Settings.PrivacyTitles;
+		PrivacyRevealBox.ItemsSource = Enum.GetValues<PrivacyReveal>().Select(r => r.DisplayName()).ToList();
+		PrivacyRevealBox.SelectedIndex = (int)Settings.PrivacyReveal;
+		PrivacyHotkeyBox.Text = PrivacyHotkeyText();
+		PrivacyBlurLevelSlider.Value = Settings.PrivacyBlurLevel;
+		PrivacyBlurLevelText.Text = $"{Settings.PrivacyBlurLevel}";
+	}
+
+	void PrivacyBlurLevelSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+	{
+		if (_loading || PrivacyBlurLevelText == null)
+		{
+			return;
+		}
+		Settings.PrivacyBlurLevel = (int)PrivacyBlurLevelSlider.Value;
+		PrivacyBlurLevelText.Text = $"{Settings.PrivacyBlurLevel}";
+		_manager.SaveSoon();
+		_manager.ApplyPrivacy();
+	}
+
+	/// <summary>
+	/// 在托盘菜单、快捷键或桌面右键菜单里开关了隐私模式时同步勾选框。
+	/// </summary>
+	public void RefreshPrivacyMode()
+	{
+		_loading = true;
+		PrivacyModeBox.IsChecked = Settings.PrivacyMode;
+		_loading = false;
+	}
+
+	void PrivacyModeBox_Click(object sender, RoutedEventArgs e) => _manager.SetPrivacyMode(PrivacyModeBox.IsChecked == true);
+
+	void PrivacyOption_Changed(object sender, RoutedEventArgs e)
+	{
+		if (_loading || PrivacyRevealBox.SelectedIndex < 0)
+		{
+			return;
+		}
+		Settings.PrivacyIcons = PrivacyIconsBox.IsChecked == true;
+		Settings.PrivacyNames = PrivacyNamesBox.IsChecked == true;
+		Settings.PrivacyTitles = PrivacyTitlesBox.IsChecked == true;
+		Settings.PrivacyReveal = (PrivacyReveal)PrivacyRevealBox.SelectedIndex;
+		_manager.SaveSoon();
+		_manager.ApplyPrivacy();
+	}
+
+	string PrivacyHotkeyText() => string.IsNullOrEmpty(Settings.PrivacyHotkey) ? "未设置" : Settings.PrivacyHotkey;
+
+	void PrivacyHotkeyBox_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+	{
+		_capturingHotkey = true;
+		_manager.SuspendPrivacyHotkey();
+		PrivacyHotkeyBox.Text = "请按下组合键";
+	}
+
+	/// <summary>
+	/// 录完（或点了别处）重新注册快捷键，被其他程序占用时在下面提示。
+	/// </summary>
+	void PrivacyHotkeyBox_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+	{
+		_capturingHotkey = false;
+		PrivacyHotkeyBox.Text = PrivacyHotkeyText();
+		ApplyPrivacyHotkey();
+	}
+
+	void PrivacyHotkeyBox_PreviewKeyDown(object sender, KeyEventArgs e)
+	{
+		var key = e.Key == Key.System ? e.SystemKey : e.Key;
+		// 单按 Tab 照常切换焦点，免得困在录入框里
+		if (key == Key.Tab && Keyboard.Modifiers == ModifierKeys.None)
+		{
+			return;
+		}
+		e.Handled = true;
+		if (key == Key.Escape)
+		{
+			EndHotkeyCapture();
+			return;
+		}
+		var hotkey = new Hotkey(Keyboard.Modifiers, key);
+		if (!hotkey.IsValid)
+		{
+			// 只按了修饰键，或少了 Ctrl、Alt、Win：先显示已按下的修饰键，等用户按全
+			PrivacyHotkeyBox.Text = Keyboard.Modifiers == ModifierKeys.None ? "请按下组合键" : Hotkey.ModifiersText(Keyboard.Modifiers);
+			return;
+		}
+		Settings.PrivacyHotkey = hotkey.ToString();
+		_manager.SaveSoon();
+		EndHotkeyCapture();
+	}
+
+	void ClearPrivacyHotkey_Click(object sender, RoutedEventArgs e)
+	{
+		Settings.PrivacyHotkey = string.Empty;
+		_manager.SaveSoon();
+		PrivacyHotkeyBox.Text = PrivacyHotkeyText();
+		ApplyPrivacyHotkey();
+	}
+
+	void ApplyPrivacyHotkey()
+	{
+		bool ok = _manager.ApplyPrivacyHotkey();
+		PrivacyHotkeyStatus.Text = $"{Settings.PrivacyHotkey} 已被其他程序占用，请换一个组合键";
+		PrivacyHotkeyStatus.Visibility = ok ? Visibility.Collapsed : Visibility.Visible;
 	}
 
 	void Setting_Changed(object sender, RoutedEventArgs e)
@@ -861,7 +974,7 @@ internal partial class SettingsWindow : Window
 	/// </summary>
 	void ResetAll_Click(object sender, RoutedEventArgs e)
 	{
-		if (MessageDialog.Show("恢复全部默认设置", "常规、桌面、分区、外观、角标各页的选项和整理规则都将恢复成默认值，自己加的整理规则会被删除。\n\n已经建好的分区、分区里的图标和各分区单独设置的外观都不受影响。\n\n恢复前会自动备份一份，可以在备份列表里找回。",
+		if (MessageDialog.Show("恢复全部默认设置", "常规、桌面、分区、外观、隐私模式、角标各页的选项和整理规则都将恢复成默认值，自己加的整理规则会被删除。\n\n已经建好的分区、分区里的图标和各分区单独设置的外观都不受影响。\n\n恢复前会自动备份一份，可以在备份列表里找回。",
 				"全部恢复", "取消") != 0)
 		{
 			return;
@@ -869,7 +982,7 @@ internal partial class SettingsWindow : Window
 		SaveRules();
 		SettingsBackup.Create(Settings, BackupReason.ResetAll);
 		var defaults = new AppSettings();
-		foreach (var page in new[] { "常规", "桌面", "分区", "外观", "角标" })
+		foreach (var page in new[] { "常规", "桌面", "分区", "外观", "隐私模式", "角标" })
 		{
 			ResetPage(page, defaults);
 		}
@@ -894,6 +1007,16 @@ internal partial class SettingsWindow : Window
 					Settings.HardwareAcceleration = defaults.HardwareAcceleration;
 					FenceManager.ApplyRenderMode(defaults.HardwareAcceleration);
 				}
+				break;
+			case "隐私模式":
+				Settings.PrivacyIcons = defaults.PrivacyIcons;
+				Settings.PrivacyBlurLevel = defaults.PrivacyBlurLevel;
+				Settings.PrivacyNames = defaults.PrivacyNames;
+				Settings.PrivacyTitles = defaults.PrivacyTitles;
+				Settings.PrivacyReveal = defaults.PrivacyReveal;
+				Settings.PrivacyHotkey = defaults.PrivacyHotkey;
+				_manager.SetPrivacyMode(defaults.PrivacyMode);
+				_manager.ApplyPrivacy();
 				break;
 			case "桌面":
 				Settings.DoubleClickToHide = defaults.DoubleClickToHide;

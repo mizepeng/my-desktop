@@ -70,6 +70,7 @@
 				<ListBoxItem Content="桌面" />
 				<ListBoxItem Content="分区" />
 				<ListBoxItem Content="外观" />
+				<ListBoxItem Content="隐私模式" />
 				<ListBoxItem Content="角标" />
 				<ListBoxItem Content="整理规则" />
 				<ListBoxItem Content="备份" />
@@ -521,6 +522,83 @@
 					</Border>
 				</StackPanel>
 
+				<!-- 隐私 -->
+				<StackPanel x:Name="PrivacyPage" Visibility="Collapsed">
+					<TextBlock Style="{StaticResource PageTitle}" Text="隐私模式" />
+					<Border Style="{StaticResource Card}">
+						<CheckBox x:Name="PrivacyModeBox" Click="PrivacyModeBox_Click">
+							<StackPanel>
+								<TextBlock Text="隐私模式" />
+								<TextBlock Style="{StaticResource Hint}" Text="把桌面和分区里的图标换成同色的色团、名称和分区标题模糊打码，适合共享屏幕、录屏或身边有人时；托盘菜单和桌面右键菜单里也能开关" />
+							</StackPanel>
+						</CheckBox>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<DockPanel>
+							<StackPanel VerticalAlignment="Center" DockPanel.Dock="Right" Orientation="Horizontal">
+								<CheckBox x:Name="PrivacyIconsBox" Content="图标图片" Click="PrivacyOption_Changed" />
+								<CheckBox x:Name="PrivacyNamesBox" Margin="12,0,0,0" Content="图标名称" Click="PrivacyOption_Changed" />
+								<CheckBox x:Name="PrivacyTitlesBox" Margin="12,0,0,0" Content="分区标题" Click="PrivacyOption_Changed" />
+							</StackPanel>
+							<StackPanel Margin="0,0,12,0" VerticalAlignment="Center">
+								<TextBlock Text="打码哪些内容" />
+								<TextBlock Style="{StaticResource Hint}" Text="速览的搜索框里的图标、名称和所在分区也一起打码" />
+							</StackPanel>
+						</DockPanel>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<StackPanel>
+							<DockPanel>
+								<TextBlock x:Name="PrivacyBlurLevelText" Width="52" VerticalAlignment="Center" DockPanel.Dock="Right" TextAlignment="Right" />
+								<TextBlock Width="80" VerticalAlignment="Center" DockPanel.Dock="Left" Text="模糊程度" />
+								<Slider x:Name="PrivacyBlurLevelSlider" IsSnapToTickEnabled="True" Maximum="10" Minimum="1" TickFrequency="1" ValueChanged="PrivacyBlurLevelSlider_ValueChanged" />
+							</DockPanel>
+							<TextBlock Style="{StaticResource Hint}" Text="只管名称和分区标题，越往右越模糊；太轻时还能认出单词的轮廓" />
+						</StackPanel>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<DockPanel>
+							<ComboBox x:Name="PrivacyRevealBox"
+									Width="170"
+									VerticalAlignment="Center"
+									DockPanel.Dock="Right"
+									SelectionChanged="PrivacyOption_Changed" />
+							<StackPanel Margin="0,0,12,0" VerticalAlignment="Center">
+								<TextBlock Text="什么时候露出来" />
+								<TextBlock Style="{StaticResource Hint}" Text="鼠标指着时：桌面和分区里都是指着哪个图标露出哪个，指着标题栏露出分区标题，搜索框露出选中的那一行；桌面在前台时：点了桌面、分区或打开速览时全部露出" />
+							</StackPanel>
+						</DockPanel>
+					</Border>
+					<Border Style="{StaticResource Card}">
+						<DockPanel>
+							<StackPanel VerticalAlignment="Center" DockPanel.Dock="Right" Orientation="Horizontal">
+								<TextBox x:Name="PrivacyHotkeyBox"
+										Width="170"
+										VerticalContentAlignment="Center"
+										IsReadOnly="True"
+										IsReadOnlyCaretVisible="False"
+										TextAlignment="Center"
+										GotKeyboardFocus="PrivacyHotkeyBox_GotKeyboardFocus"
+										LostKeyboardFocus="PrivacyHotkeyBox_LostKeyboardFocus"
+										PreviewKeyDown="PrivacyHotkeyBox_PreviewKeyDown" />
+								<Button Margin="8,0,0,0" Content="清除" Click="ClearPrivacyHotkey_Click" />
+							</StackPanel>
+							<StackPanel Margin="0,0,12,0" VerticalAlignment="Center">
+								<TextBlock Text="开关隐私模式的快捷键" />
+								<TextBlock Style="{StaticResource Hint}" Text="开会、共享屏幕前按一下就打开，再按一下关掉" />
+								<TextBlock x:Name="PrivacyHotkeyStatus" Style="{StaticResource Hint}" Foreground="{DynamicResource SystemFillColorCautionBrush}" Visibility="Collapsed" />
+							</StackPanel>
+						</DockPanel>
+					</Border>
+					<!-- 这一页的设置恢复成默认值（见 ResetPage_Click） -->
+					<Border Style="{StaticResource Card}" Margin="0,16,0,4">
+						<DockPanel>
+							<Button VerticalAlignment="Center" Content="恢复默认" DockPanel.Dock="Right" Tag="隐私模式" Click="ResetPage_Click" />
+							<TextBlock VerticalAlignment="Center" Text="把这一页的设置恢复成默认值" />
+						</DockPanel>
+					</Border>
+				</StackPanel>
+
 				<!-- 角标 -->
 				<StackPanel x:Name="OverlaysPage" Visibility="Collapsed">
 					<TextBlock Style="{StaticResource PageTitle}" Text="角标" />
@@ -674,7 +752,7 @@
 							<Button VerticalAlignment="Center" Content="恢复全部默认设置…" DockPanel.Dock="Right" Click="ResetAll_Click" />
 							<StackPanel Margin="0,0,12,0" VerticalAlignment="Center">
 								<TextBlock Text="恢复全部默认设置" />
-								<TextBlock Style="{StaticResource Hint}" Text="常规、桌面、分区、外观、角标各页的选项和整理规则恢复成默认值；已经建好的分区、分区里的图标和各分区单独设置的外观都不受影响。恢复前自动备份一份" />
+								<TextBlock Style="{StaticResource Hint}" Text="常规、桌面、分区、外观、隐私模式、角标各页的选项和整理规则恢复成默认值；已经建好的分区、分区里的图标和各分区单独设置的外观都不受影响。恢复前自动备份一份" />
 							</StackPanel>
 						</DockPanel>
 					</Border>

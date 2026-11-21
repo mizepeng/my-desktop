@@ -97,6 +97,8 @@ internal sealed class FlyingIcon
 	readonly IntPtr _hwnd;
 	readonly IntPtr _insertAfter;
 	readonly ImageSource _icon;
+	// 起飞时隐私模式在给图标打码：画主题色的色团，阴影也按色团画，不露出图标的形状
+	readonly bool _blurred;
 	bool _placed;
 	bool _closed;
 
@@ -121,6 +123,7 @@ internal sealed class FlyingIcon
 	public FlyingIcon(ImageSource icon, IntPtr insertAfter)
 	{
 		_icon = icon;
+		_blurred = Privacy.Current.Icons;
 		_insertAfter = insertAfter;
 		// 内容全由 UpdateLayeredWindow 提供；窗口类见 DesktopHost.LayeredWindowClass（层级要在 WM_WINDOWPOSCHANGING 里定）
 		_hwnd = CreateWindowEx((uint)(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW), DesktopHost.LayeredWindowClass(), null,
@@ -237,7 +240,7 @@ internal sealed class FlyingIcon
 			Width = size,
 			Height = size,
 			Fill = Brushes.Black,
-			OpacityMask = new ImageBrush(_icon) { Stretch = Stretch.Uniform },
+			OpacityMask = new ImageBrush(_blurred ? Privacy.BlurIcon(_icon) : _icon) { Stretch = Stretch.Uniform },
 			Opacity = 0.45,
 			Effect = new BlurEffect { Radius = 12 * scale, KernelType = KernelType.Gaussian },
 			RenderTransform = new TranslateTransform(0, 4 * scale),
@@ -263,7 +266,14 @@ internal sealed class FlyingIcon
 		using (var context = drawing.Open())
 		{
 			context.DrawImage(shadow, new Rect(0, 0, side, side));
-			context.DrawImage(_icon, new Rect(pad, pad, size, size));
+			if (_blurred)
+			{
+				context.DrawImage(Privacy.BlurIcon(_icon), new Rect(pad, pad, size, size));
+			}
+			else
+			{
+				context.DrawImage(_icon, new Rect(pad, pad, size, size));
+			}
 		}
 		var visual = new DrawingVisual();
 		using (var context = visual.RenderOpen())

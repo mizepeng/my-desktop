@@ -115,6 +115,11 @@ internal partial class FenceWindow : Window
 	// 鼠标停留的别的标签（没拖东西），开了「悬停切换标签」时停够设定的时间就切过去
 	FenceWindow? _mouseTab;
 	readonly DispatcherTimer _mouseTabTimer;
+	// 隐私模式：鼠标指着标题栏，标题露出；标签由模板按单个露出。切换标签时新标签接着露出鼠标下的标题、标签，
+	// 鼠标没动就收不到 MouseEnter、MouseLeave，由定时器看鼠标是否还在原处（_carriedTab 是接着露出的那个标签）
+	bool _titleRevealed;
+	FrameworkElement? _carriedTab;
+	readonly DispatcherTimer _titleRevealTimer;
 	// 展开了完整名称的图标（选中的里面最后选中的那个）
 	FenceItem? _expandedName;
 	readonly DispatcherTimer _tabHoverTimer;
@@ -152,6 +157,12 @@ internal partial class FenceWindow : Window
 		InitializeComponent();
 		ItemsList.ItemsSource = _items;
 		_clickRename = new ClickToRename(BeginRename, item => IsActive && ItemsList.SelectedItems.Count == 1 && ItemsList.SelectedItem == item);
+		_titleRevealTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+		_titleRevealTimer.Tick += TitleRevealTimer_Tick;
+		TitleBar.MouseEnter += (_, _) => SetTitleRevealed(true);
+		TitleBar.MouseLeave += (_, _) => SetTitleRevealed(false);
+		ApplyPrivacy();
+		Privacy.Changed += ApplyPrivacy;
 		// 按在空白处时框选的处理会把事件标记为已处理，仍要收到它才能取消别处的选择
 		ItemsList.AddHandler(PreviewMouseDownEvent, new MouseButtonEventHandler(ItemsList_PreviewMouseDown), true);
 		// 列表可用宽度变了（分区改大小）、出现或去掉滚动条（叠在内容上，不改变可用宽度，看内容和可视高度）时，详细信息视图重排各列
@@ -398,6 +409,8 @@ internal partial class FenceWindow : Window
 	protected override void OnClosed(EventArgs e)
 	{
 		base.OnClosed(e);
+		Privacy.Changed -= ApplyPrivacy;
+		_titleRevealTimer.Stop();
 		StopWatcher();
 		if (!_allowClose)
 		{
@@ -1720,6 +1733,12 @@ internal partial class FenceWindow : Window
 	public async Task ShowInPlaceOf(FenceWindow current)
 	{
 		CopyExpandStateFrom(current);
+		// 隐私模式：鼠标停在标题栏上切换标签时，新标签的标题接着露出，不先打码再露出；藏起来之前留下的露出状态不算
+		SetTitleRevealed(current._titleRevealed);
+		if (current._titleRevealed)
+		{
+			_titleRevealTimer.Start();
+		}
 		// 标题栏按钮也接着显示：鼠标停在标题栏上切换时，新标签要等鼠标再动才收到 MouseEnter，否则按钮先消失再出现，看上去闪一下
 		if (current.TitleButtons.Opacity > 0)
 		{
@@ -1735,6 +1754,10 @@ internal partial class FenceWindow : Window
 			if (HasStaleDpi())
 			{
 				RefreshDpi();
+			}
+			if (current._titleRevealed && Privacy.Current.RevealOnHover)
+			{
+				CarryTabReveal();
 			}
 			DesktopHost.PlaceBelow(_hwnd, current.Handle);
 			// 第一帧排版，第二帧图标画出来，再等一帧送到屏幕上
@@ -2390,6 +2413,88 @@ internal partial class FenceWindow : Window
 	#endregion
 
 	#region 悬停展开、标题栏按钮、淡入淡出
+
+	/// <summary>
+	/// 隐私模式：按当前状态给整个分区打码。露出时机是「鼠标指着时露出」时，图标由项目样式按单个露出（FenceStyles.xaml），
+	/// 标题在鼠标指着标题栏时露出（标签、竖排标题、子文件夹路径都在标题栏里）。
+	/// </summary>
+	void ApplyPrivacy()
+	{
+		var state = Privacy.Current;
+		Privacy.Apply(this, state, false);
+		// 标签不跟着整个标题栏露出，只露出鼠标指着的那个（模板里的触发器）
+		Privacy.SetTitlesHidden(TabStrip, state.Titles);
+		if (state.RevealOnHover && _titleRevealed)
+		{
+			Privacy.SetTitlesHidden(TitleBar, false);
+		}
+		else
+		{
+			TitleBar.ClearValue(Privacy.TitlesHiddenProperty);
+		}
+	}
+
+	void SetTitleRevealed(bool revealed)
+	{
+		_titleRevealTimer.Stop();
+		ReleaseCarriedTab();
+		if (revealed != _titleRevealed)
+		{
+			_titleRevealed = revealed;
+			ApplyPrivacy();
+		}
+	}
+
+	/// <summary>
+	/// 切换过来的标签接着露出标题后，鼠标进了标题栏就交给 MouseEnter、MouseLeave，离开了标题栏就打码。
+	/// </summary>
+	void TitleRevealTimer_Tick(object? sender, EventArgs e)
+	{
+		var cursor = NativeMethods.GetCursorPos();
+		if (_carriedTab != null && (_carriedTab.IsMouseOver || !IsVisible || !ItemOps.ScreenRect(_carriedTab).Contains(cursor)))
+		{
+			ReleaseCarriedTab();
+		}
+		if (TitleBar.IsMouseOver)
+		{
+			if (_carriedTab == null)
+			{
+				_titleRevealTimer.Stop();
+			}
+		}
+		else if (!IsVisible || !ItemOps.ScreenRect(TitleBar).Contains(cursor))
+		{
+			SetTitleRevealed(false);
+		}
+	}
+
+	/// <summary>
+	/// 接着露出的标签交还给模板：鼠标已经真的指着它（触发器接手），或者离开了它。
+	/// </summary>
+	void ReleaseCarriedTab()
+	{
+		_carriedTab?.ClearValue(Privacy.TitlesHiddenProperty);
+		_carriedTab = null;
+	}
+
+	/// <summary>
+	/// 切换标签时，新标签上鼠标下面那个标签接着露出（新标签刚显示、鼠标没动，收不到 MouseEnter）。
+	/// </summary>
+	void CarryTabReveal()
+	{
+		UpdateLayout();
+		var point = PointFromScreen(new Point(NativeMethods.GetCursorPos().X, NativeMethods.GetCursorPos().Y));
+		for (var element = InputHitTest(point) as DependencyObject; element != null; element = VisualTreeHelper.GetParent(element))
+		{
+			if (element is FrameworkElement { Name: "TabHit" } tab)
+			{
+				_carriedTab = tab;
+				Privacy.SetTitlesHidden(tab, false);
+				_titleRevealTimer.Start();
+				return;
+			}
+		}
+	}
 
 	protected override void OnMouseEnter(MouseEventArgs e)
 	{

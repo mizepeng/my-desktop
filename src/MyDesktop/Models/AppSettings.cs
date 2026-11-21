@@ -114,6 +114,25 @@ public enum TabAlignment
 }
 
 /// <summary>
+/// 隐私模式下打码的内容什么时候露出来。
+/// </summary>
+public enum PrivacyReveal
+{
+	/// <summary>
+	/// 鼠标指着的那一块露出：散放图标按单个图标，分区按整个分区。
+	/// </summary>
+	Hover,
+	/// <summary>
+	/// 桌面（包括分区、桌面图标、速览的搜索框）成为前台时全部露出。
+	/// </summary>
+	DesktopActive,
+	/// <summary>
+	/// 一直打码，名称提示也不显示。
+	/// </summary>
+	Never,
+}
+
+/// <summary>
 /// 全局设置与全部分区布局，序列化为数据目录下的 settings.json。
 /// </summary>
 public sealed class AppSettings
@@ -289,6 +308,45 @@ public sealed class AppSettings
 			}
 		}
 	}
+
+	/// <summary>
+	/// 隐私模式：把图标图片、名称、分区标题打码，用于共享屏幕、录屏、身边有人时；重启后保持。
+	/// </summary>
+	public bool PrivacyMode { get; set; }
+
+	/// <summary>
+	/// 隐私模式下打码图标图片。
+	/// </summary>
+	public bool PrivacyIcons { get; set; } = true;
+
+	/// <summary>
+	/// 隐私模式下打码图标名称（详细信息视图里的日期、类型、大小也算）。
+	/// </summary>
+	public bool PrivacyNames { get; set; } = true;
+
+	/// <summary>
+	/// 隐私模式下打码分区标题，包括标签页的标题和映射分区进入子文件夹后的路径。
+	/// </summary>
+	public bool PrivacyTitles { get; set; } = true;
+
+	/// <summary>
+	/// 隐私模式下打码的内容什么时候露出来。
+	/// </summary>
+	public PrivacyReveal PrivacyReveal { get; set; } = PrivacyReveal.Hover;
+
+	public const int DefaultPrivacyBlurLevel = 8;
+
+	/// <summary>
+	/// 隐私模式的模糊程度，1～10，越大越模糊（见 Views/Privacy）。
+	/// </summary>
+	public int PrivacyBlurLevel { get; set; } = DefaultPrivacyBlurLevel;
+
+	public const string DefaultPrivacyHotkey = "Ctrl+Alt+P";
+
+	/// <summary>
+	/// 开关隐私模式的全局快捷键；空字符串表示不用快捷键。
+	/// </summary>
+	public string PrivacyHotkey { get; set; } = DefaultPrivacyHotkey;
 
 	/// <summary>
 	/// 已经给升级上来的配置补过快捷方式分类规则（见 FenceManager.MigrateCategoryRules）；只补一次，之后用户删掉也不再加回来。

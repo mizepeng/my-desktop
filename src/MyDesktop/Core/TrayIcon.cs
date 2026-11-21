@@ -23,11 +23,13 @@ internal sealed class TrayIcon : IDisposable
 	const uint IconId = 1;
 
 	/// <summary>
-	/// 全局快捷键的编号：速览，以及速览期间临时注册的 Esc（结束速览）。
+	/// 全局快捷键的编号：速览，速览期间临时注册的 Esc（结束速览），隐私模式的开关。
 	/// </summary>
 	public const int PeekHotkeyId = 2;
 
 	public const int EscapeHotkeyId = 3;
+
+	public const int PrivacyHotkeyId = 4;
 
 	const uint VK_ESCAPE = 0x1B;
 
@@ -170,6 +172,7 @@ internal sealed class TrayIcon : IDisposable
 		_addRetryTimer.Stop();
 		UnregisterHotKey(Handle, PeekHotkeyId);
 		UnregisterHotKey(Handle, EscapeHotkeyId);
+		UnregisterHotKey(Handle, PrivacyHotkeyId);
 		RemoveClipboardFormatListener(Handle);
 		if (_sessionNotification)
 		{
@@ -304,7 +307,7 @@ internal sealed class TrayIcon : IDisposable
 		{
 			ClipboardChanged?.Invoke();
 		}
-		else if (msg == WM_HOTKEY && (int)wParam is PeekHotkeyId or EscapeHotkeyId)
+		else if (msg == WM_HOTKEY && (int)wParam is PeekHotkeyId or EscapeHotkeyId or PrivacyHotkeyId)
 		{
 			HotkeyPressed?.Invoke((int)wParam);
 			handled = true;

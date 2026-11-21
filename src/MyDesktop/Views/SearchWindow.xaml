@@ -2,6 +2,7 @@
 		x:ClassModifier="internal"
 		xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
 		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+		xmlns:local="clr-namespace:MyDesktop.Views"
 		Title="搜索桌面图标"
 		Width="672"
 		SizeToContent="Height"
@@ -47,6 +48,27 @@
 					</ControlTemplate>
 				</Setter.Value>
 			</Setter>
+			<Style.Triggers>
+				<!-- 隐私模式：鼠标指着的、方向键选中的那一行露出（露出时机选了「鼠标指着时露出」才有 RevealOnHover） -->
+				<MultiTrigger>
+					<MultiTrigger.Conditions>
+						<Condition Property="IsMouseOver" Value="True" />
+						<Condition Property="local:Privacy.RevealOnHover" Value="True" />
+					</MultiTrigger.Conditions>
+					<Setter Property="local:Privacy.IconsHidden" Value="False" />
+					<Setter Property="local:Privacy.NamesHidden" Value="False" />
+					<Setter Property="local:Privacy.TitlesHidden" Value="False" />
+				</MultiTrigger>
+				<MultiTrigger>
+					<MultiTrigger.Conditions>
+						<Condition Property="IsSelected" Value="True" />
+						<Condition Property="local:Privacy.RevealOnHover" Value="True" />
+					</MultiTrigger.Conditions>
+					<Setter Property="local:Privacy.IconsHidden" Value="False" />
+					<Setter Property="local:Privacy.NamesHidden" Value="False" />
+					<Setter Property="local:Privacy.TitlesHidden" Value="False" />
+				</MultiTrigger>
+			</Style.Triggers>
 		</Style>
 	</Window.Resources>
 
@@ -99,10 +121,15 @@
 											<ColumnDefinition Width="Auto" />
 											<ColumnDefinition Width="*" />
 										</Grid.ColumnDefinitions>
-										<Image Width="32" Height="32" Source="{Binding Entry.Item.Icon}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" />
+										<local:PrivacyImage Width="32" Height="32" Source="{Binding Entry.Item.Icon}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" />
 										<StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
-											<TextBlock Foreground="{DynamicResource SearchForeground}" Text="{Binding Entry.Item.DisplayName}" TextTrimming="CharacterEllipsis" />
-											<TextBlock Margin="0,1,0,0" FontSize="12" Foreground="{DynamicResource SearchSecondary}" Text="{Binding Entry.Location}" TextTrimming="CharacterEllipsis" />
+											<!-- 隐私模式下打码：名称按图标名称，所在位置（分区标题）按分区标题 -->
+											<local:TextShadow>
+												<TextBlock Foreground="{DynamicResource SearchForeground}" Text="{Binding Entry.Item.DisplayName}" TextTrimming="CharacterEllipsis" />
+											</local:TextShadow>
+											<local:TextShadow IsTitle="True">
+												<TextBlock Margin="0,1,0,0" FontSize="12" Foreground="{DynamicResource SearchSecondary}" Text="{Binding Entry.Location}" TextTrimming="CharacterEllipsis" />
+											</local:TextShadow>
 										</StackPanel>
 									</Grid>
 								</Grid>
