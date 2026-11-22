@@ -9,6 +9,7 @@
 
 ## P1
 
+- [ ] **自动更新后双击「此电脑」「回收站」「用户文件夹」没反应**（Max 公司电脑，11-22，Files 管家会话排查转来；默认文件管理器设成 Files）：升级后由安装程序拉起的新实例，打开虚拟项目走 `ItemOps.OpenVirtual` → `ShellContextMenu.InvokeDefault`，在 MyDesktop 进程内执行，Files 启动器继承了它的进程环境（推断是安装程序那条链上的 Job / 环境），Files 拿不到应用数据当场崩溃（事件日志 `COMException: 无法加载状态存储`）；普通文件夹走 `ExplorerShell.Open` 交给资源管理器，不受影响；手动重启 MyDesktop 后恢复。修法候选：`OpenVirtual` 也交给资源管理器打开（`shell:::{CLSID}` 或真实路径）；升级后经资源管理器拉起新实例。
 - [ ] **Win10 显示桌面后背景变黑**（B 站 神前桜、sunr4）：已发布预发布测试版 v1.9.1-win10-test.1（分支 `codex/win10-wallpaper-test`，Win10 改用资源管理器自己的「不显示图标」），等神前桜验证。已知触发：ERP/MES 登录窗口弹出、UAC 返回桌面、「显示器变化」；退出 MyDesktop 壁纸立刻回来。
 - [ ] **更新 StartAllBack 后桌面崩溃**（B 站 QQ无悔，11-14）：更新到 StartAllBack 3.9.28.5428 后桌面崩溃，删掉 MyDesktop 重启才恢复。11-15 补充：Win11；屏幕底色全黑、任务栏消失（像是资源管理器崩了），点分区图标弹 MyDesktop 错误提示，卸载时也不停弹窗；当时卸载重装，没留日志（卸载默认保留配置，app.log 可能还在），待要日志。
 
