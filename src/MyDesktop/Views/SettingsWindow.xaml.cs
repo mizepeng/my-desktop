@@ -173,10 +173,8 @@ internal partial class SettingsWindow : Window
 		IconSizeBox.SelectedIndex = (int)Settings.DefaultIconSize;
 		BuildColorSwatches();
 		UpdateColorPreview();
-		// 测试版显示完整版本号（带 -menu-test 后缀），合并发版前改回
-		var version = System.Reflection.CustomAttributeExtensions
-				.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(typeof(App).Assembly)!.InformationalVersion.Split('+')[0];
-		VersionText.Text = $"版本 {version}";
+		var version = typeof(App).Assembly.GetName().Version;
+		VersionText.Text = $"版本 {version?.ToString(3)}";
 		DataDirText.Text = AppPaths.DataDir;
 		HelpList.ItemsSource = Help;
 		LoadThanks();

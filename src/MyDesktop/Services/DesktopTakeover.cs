@@ -738,7 +738,6 @@ internal sealed class DesktopTakeover : IDisposable
 				Log.Warn("资源管理器在隐藏的图标列表里开始改名，但取不到它正在改名的项目，没能接手改名");
 				return;
 			}
-			Log.Info($"[诊断] 接手资源管理器的改名：{Path.GetFileName(key)}");
 			RequestRename(key);
 		});
 	}

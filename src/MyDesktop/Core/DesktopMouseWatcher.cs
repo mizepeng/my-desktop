@@ -99,9 +99,6 @@ internal sealed class DesktopMouseWatcher : IDisposable
 	POINT _rightStart;
 	POINT _leftStart;
 	bool _leftSwallowed;
-	// 诊断「桌面右键菜单点了没反应」（#31）：桌面空白处按下右键后，记下随后第一次左键（多半是点菜单项）时鼠标下和前台的窗口
-	bool _menuProbe;
-	uint _menuProbeUntil;
 
 	// 以下状态只在界面线程上读写
 	bool _checking;
@@ -440,8 +437,6 @@ internal sealed class DesktopMouseWatcher : IDisposable
 					TrackDoubleClick(info);
 				}
 				_leftSwallowed = false;
-				bool probe = _menuProbe && unchecked((int)(info.time - _menuProbeUntil)) < 0;
-				_menuProbe = false;
 				// 不排除注入的输入：触摸、笔和自动化工具产生的点击同样要能框选
 				if (_takeoverEnabled || _createEnabled)
 				{
@@ -460,10 +455,6 @@ internal sealed class DesktopMouseWatcher : IDisposable
 					{
 						_uiDispatcher.BeginInvoke(() => FencesLiftNeeded?.Invoke());
 					}
-				}
-				if (probe)
-				{
-					LogMenuClick(info.pt);
 				}
 				return _leftSwallowed;
 			case WM_LBUTTONUP:
@@ -495,11 +486,7 @@ internal sealed class DesktopMouseWatcher : IDisposable
 					_rightStart = info.pt;
 					_uiDispatcher.BeginInvoke(() => BlankPressed?.Invoke(false));
 					// 桌面不在前台时由本程序赶在菜单弹出前激活桌面（见 DesktopNeedsActivation）
-					bool activate = DesktopNeedsActivation();
-					LogRightPress(activate);
-					_menuProbe = true;
-					_menuProbeUntil = unchecked(info.time + MenuProbeMilliseconds);
-					if (activate)
+					if (DesktopNeedsActivation())
 					{
 						_uiDispatcher.BeginInvoke(() => DesktopActivationNeeded?.Invoke());
 					}
@@ -610,6 +597,10 @@ internal sealed class DesktopMouseWatcher : IDisposable
 		{
 			return false;
 		}
+		if (IsExplorerPopupAt(point, desktop))
+		{
+			return false;
+		}
 		for (var hwnd = GetTopWindow(IntPtr.Zero); hwnd != IntPtr.Zero; hwnd = GetWindow(hwnd, GW_HWNDNEXT))
 		{
 			if (hwnd == desktop)
@@ -646,6 +637,44 @@ internal sealed class DesktopMouseWatcher : IDisposable
 			}
 		}
 		return false;
+	}
+
+	// 下面的判断对每种窗口类第一次生效时记一次日志（任务栏也会命中，只记一次的话轮不到右键菜单）；只在钩子线程上读写
+	static readonly HashSet<string> ExplorerPopupsLogged = [];
+
+	/// <summary>
+	/// 鼠标下实际接收点击的是资源管理器的弹出窗口（Win11 新版右键菜单 Microsoft.UI.Content.PopupWindowSiteBridge 等），不是桌面。
+	/// 23H2 上按窗口层级逐个检查时会漏掉新版右键菜单的弹出窗口，点菜单项被当成点桌面空白处，本程序去激活桌面把菜单关掉，
+	/// 菜单项点了没反应（#31，用户诊断日志：每次都判为空白处，约 30 次才成功一次）；26300 上不会漏。
+	/// 以 WindowFromPoint 的命中为准，只认资源管理器进程里带 WS_POPUP 的非桌面窗口，不影响其他窗口的判断。
+	/// WindowFromPoint 不向其他线程的窗口发消息，可以在钩子回调里调用。
+	/// </summary>
+	static bool IsExplorerPopupAt(POINT point, IntPtr desktop)
+	{
+		var hit = GetAncestor(WindowFromPoint(point), GA_ROOT);
+		if (hit == IntPtr.Zero || hit == desktop || DesktopHost.IsDesktopSurface(hit))
+		{
+			return false;
+		}
+		long style = GetWindowLongPtr(hit, GWL_STYLE).ToInt64();
+		if ((style & WS_POPUP) == 0)
+		{
+			return false;
+		}
+		GetWindowThreadProcessId(hit, out uint process);
+		GetWindowThreadProcessId(desktop, out uint explorer);
+		if (process != explorer)
+		{
+			return false;
+		}
+		if (ExplorerPopupsLogged.Add(GetClassName(hit)))
+		{
+			// 记下窗口属性，查清按层级检查时为什么漏掉它
+			long exStyle = GetWindowLongPtr(hit, GWL_EXSTYLE).ToInt64();
+			int cloaked = DwmGetWindowAttribute(hit, DWMWA_CLOAKED, out int value, sizeof(int)) == 0 ? value : -1;
+			Log.Info($"鼠标下是资源管理器的弹出窗口 {DesktopDiagnostics.Describe(hit)}，不当作桌面：样式 0x{style:X}，扩展样式 0x{exStyle:X}，cloaked={cloaked}");
+		}
+		return true;
 	}
 
 	/// <summary>
@@ -701,37 +730,6 @@ internal sealed class DesktopMouseWatcher : IDisposable
 		}
 		var info = new GUITHREADINFO { cbSize = Marshal.SizeOf<GUITHREADINFO>() };
 		return GetGUIThreadInfo(thread, ref info) && (info.flags & (GUI_INMENUMODE | GUI_POPUPMENUMODE)) != 0 && DesktopHost.IsDesktopOnTop();
-	}
-
-	/// <summary>
-	/// 桌面右键后多久内的第一次左键算作点菜单项。
-	/// </summary>
-	const uint MenuProbeMilliseconds = 15000;
-
-	/// <summary>
-	/// 临时诊断（#31 桌面右键菜单点了没反应，查清后删除）：桌面空白处按下右键时的前台窗口，以及是否要由本程序激活桌面。
-	/// 钩子里只取窗口句柄，进程名到界面线程上再查。
-	/// </summary>
-	void LogRightPress(bool activate)
-	{
-		var foreground = GetForegroundWindow();
-		_uiDispatcher.BeginInvoke(DispatcherPriority.Background, () =>
-				Log.Info($"[诊断] 桌面空白处按下右键：前台 {DesktopDiagnostics.DescribeWithProcess(foreground)}，由本程序激活桌面：{(activate ? "是" : "否")}"));
-	}
-
-	/// <summary>
-	/// 临时诊断（同上）：桌面右键后的第一次左键（多半是点菜单项）时鼠标下的顶层窗口、前台窗口、这次按下是否被当成桌面空白处、是否被扣下。
-	/// 被当成空白处或被扣下的话，点菜单项会被本程序拦截（取消选择、激活桌面把菜单关掉）。WindowFromPoint 不向别的线程发消息，可以在钩子里调用。
-	/// </summary>
-	void LogMenuClick(POINT point)
-	{
-		var under = GetAncestor(WindowFromPoint(point), GA_ROOT);
-		var foreground = GetForegroundWindow();
-		bool blank = _leftDown;
-		bool swallowed = _leftSwallowed;
-		_uiDispatcher.BeginInvoke(DispatcherPriority.Background, () =>
-				Log.Info($"[诊断] 桌面右键后的第一次左键：鼠标下 {DesktopDiagnostics.DescribeWithProcess(under)}，前台 {DesktopDiagnostics.DescribeWithProcess(foreground)}，"
-						+ $"当成桌面空白处：{(blank ? "是" : "否")}，扣下：{(swallowed ? "是" : "否")}"));
 	}
 
 	static RECT Normalize(POINT a, POINT b)
