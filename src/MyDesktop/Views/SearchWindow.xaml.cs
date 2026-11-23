@@ -55,7 +55,15 @@ internal partial class SearchWindow : Window
 		_open = open;
 		InitializeComponent();
 		PreviewKeyDown += OnPreviewKeyDown;
-		Deactivated += (_, _) => Dismiss();
+		// 点分区、图标层等本程序的窗口时，这里是在系统激活那个窗口的半途被调用的：此时同步隐藏，系统会改去激活别的程序，
+		// 打断这次激活并吞掉这次鼠标按下，双击图标只剩一下而打不开。所以等激活完成再收起，期间又被激活了就不收。
+		Deactivated += (_, _) => Dispatcher.InvokeAsync(() =>
+		{
+			if (!IsActive)
+			{
+				Dismiss();
+			}
+		});
 		SizeChanged += (_, _) => KeepOnScreen();
 		Privacy.Apply(this, Privacy.Current, false);
 		Privacy.Changed += ApplyPrivacy;
