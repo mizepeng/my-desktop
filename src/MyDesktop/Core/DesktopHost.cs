@@ -1081,8 +1081,7 @@ internal static class DesktopHost
 		{
 			return;
 		}
-		// 展开置顶的分区和亚克力留在应用之上，不跟着这批回到底座；参照窗口也要越过它们，
-		// 否则空桌面上紧挨着的就是这个置顶分区，整批会跟着它进入置顶层
+		// 展开置顶的分区和亚克力留在原处，不跟着这批回到底座
 		var raisedBackdrops = ExpandedBackdropSet();
 		var movingFences = fences.Where(h => !_expanded.Contains(h)).ToList();
 		var movingBackdrops = Backdrops.Where(h => !raisedBackdrops.Contains(h)).ToList();
@@ -1090,9 +1089,11 @@ internal static class DesktopHost
 		{
 			return;
 		}
-		// 插到底座上方第一个不用挪的窗口之后
+		// 插到底座上方第一个不用挪的窗口之后。参照窗口不越过展开置顶的分区和亚克力：
+		// 显示桌面时（或空桌面上）紧挨着的就是它们，越过的话参照落到任务栏，整批插到任务栏下面、反而压在展开的分区上面，
+		// 盖住展开的部分、点击也落到别的分区上，要等它收起才恢复。插在它们之后，整批同样进入置顶层，但在展开的分区下面
 		var floor = TopOfRun(desktop, _layers.Windows, IntPtr.Zero, out _);
-		var insertAfter = AnchorAbove(floor, movingFences.Concat(movingBackdrops).Concat(_expanded).Concat(raisedBackdrops).ToHashSet());
+		var insertAfter = AnchorAbove(floor, movingFences.Concat(movingBackdrops).ToHashSet());
 		// 都插到同一个窗口之后，后插的在上面：先亚克力窗口，再从下到上插分区。
 		// 显示桌面时这个窗口是任务栏这类置顶窗口，插在它之后整批跟着进入置顶层（见 SetZOrder）
 		// fences 按从上到下传入，倒过来才是从下到上
