@@ -364,9 +364,17 @@ internal static class ItemOps
 
 	public static void Open(IntPtr hwnd, IEnumerable<FenceItem> items, bool desktop)
 	{
+		// 诊断「打开后新窗口不到最前面」：记下打开前后的前台窗口
+		var foregroundBefore = GetForegroundWindow();
+		Log.Info($"打开项目：前台 {DesktopHost.DescribeWindow(foregroundBefore)}，发起窗口 {DesktopHost.DescribeWindow(hwnd)}");
 		Opening?.Invoke();
+		// 打开由资源管理器执行（虚拟项目的默认命令多半也转给它），它不在前台，启动的程序、打开的窗口拿不到前台，被压在原来的窗口后面（实测）。
+		// 本进程这时有前台权限（刚被点击），转让给所有进程，到下次用户输入时系统自动收回。
+		AllowSetForegroundWindow(ASFW_ANY);
+		_ = LogForegroundAfterOpen(foregroundBefore);
 		foreach (var item in items)
 		{
+			Log.Info($"打开 {item.FullPath}：{(item.IsVirtual ? "本进程默认命令" : "资源管理器 ShellExecute")}");
 			// 给搜索框排「常用」；映射分区里的图标不在搜索范围内，不用记
 			if (desktop)
 			{
@@ -395,6 +403,18 @@ internal static class ItemOps
 				MessageDialog.Show("打开失败", $"无法打开「{item.DisplayName}」：\n{ex.Message}", "确定");
 			}
 		}
+	}
+
+	/// <summary>
+	/// 打开后 0.3、1.5 秒各记一次前台窗口，看新窗口有没有到前台。
+	/// </summary>
+	static async Task LogForegroundAfterOpen(IntPtr before)
+	{
+		await Task.Delay(300);
+		Log.Info($"打开后 0.3 秒前台 {DesktopHost.DescribeWindow(GetForegroundWindow())}");
+		await Task.Delay(1200);
+		var after = GetForegroundWindow();
+		Log.Info($"打开后 1.5 秒前台 {DesktopHost.DescribeWindow(after)}{(after == before ? "（与打开前相同）" : "")}");
 	}
 
 	static void OpenVirtual(IntPtr hwnd, FenceItem item, bool desktop)
