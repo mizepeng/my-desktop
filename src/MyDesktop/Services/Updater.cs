@@ -100,7 +100,7 @@ internal sealed class Updater
 			Release? release;
 			try
 			{
-				release = await FetchLatestAsync();
+				release = await FetchLatestAsync(manual);
 			}
 			catch (Exception ex)
 			{
@@ -197,8 +197,10 @@ internal sealed class Updater
 	/// <summary>
 	/// 取最新正式版：先走发行版页面加更新日志（不占 api.github.com 的匿名额度，见 FetchLatestFromPageAsync），
 	/// 这条路失败时退回 GitHub 接口；页面这条路取到了版本但读不到更新日志时，再向接口要一次发行说明，接口也不行就照常提示到发行版页面查看。
+	/// 手动检查时页面给出的版本不比当前新，也再问一次接口：刚发布的一两分钟里 /releases/latest 的跳转还停在上一版，接口已经是新版（2026-11-28 实测）。
+	/// 两边版本不一致时取较高的那个；自动检查不为此多占接口额度，下次检查自然能取到。
 	/// </summary>
-	static async Task<Release?> FetchLatestAsync()
+	static async Task<Release?> FetchLatestAsync(bool manual)
 	{
 		Release page;
 		try
@@ -210,22 +212,27 @@ internal sealed class Updater
 			Log.Warn("从发行版页面取最新版本失败，改用 GitHub 接口", ex);
 			return await FetchLatestFromApiAsync();
 		}
-		if (page.Notes != null)
+		bool pageMayLag = manual && page.Version <= CurrentVersion;
+		if (page.Notes != null && !pageMayLag)
 		{
 			return page;
 		}
 		try
 		{
 			var api = await FetchLatestFromApiAsync();
-			if (api != null && string.Equals(api.Tag, page.Tag, StringComparison.OrdinalIgnoreCase))
+			if (api != null && api.Version >= page.Version)
 			{
+				if (api.Version > page.Version)
+				{
+					Log.Info($"GitHub 接口给出的最新版本 {api.Tag} 比发行版页面（{page.Tag}）新，页面的跳转还没更新，以接口为准");
+				}
 				return api;
 			}
-			Log.Warn($"GitHub 接口给出的最新版本（{api?.Tag ?? "无"}）和发行版页面（{page.Tag}）不一致，以页面为准，发行说明需到发行版页面查看");
+			Log.Warn($"GitHub 接口给出的最新版本（{api?.Tag ?? "无"}）比发行版页面（{page.Tag}）旧，以页面为准");
 		}
 		catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or JsonException or KeyNotFoundException)
 		{
-			Log.Warn("从 GitHub 接口补取发行说明失败，发行说明需到发行版页面查看", ex);
+			Log.Warn("向 GitHub 接口核对最新版本、补取发行说明失败，以发行版页面为准", ex);
 		}
 		return page;
 	}
@@ -294,8 +301,11 @@ internal sealed class Updater
 			throw new InvalidOperationException($"{tag} 的安装包 {name} 不存在或无法访问（{(int)asset.StatusCode} {asset.ReasonPhrase}）");
 		}
 		long size = asset.Content.Headers.ContentLength ?? throw new InvalidOperationException($"取不到 {tag} 安装包的大小");
-		var notes = await NotesFromChangelogAsync(tag, version);
-		Log.Info($"从发行版页面取到最新版本 {tag}，安装包 {url}（{size} 字节），{(notes == null ? "发行说明需到发行版页面查看" : "发行说明取自该标签的更新日志")}");
+		// 不比当前版本新时用不到发行说明，不去读，免得把「没有比当前更新的条目」误记成读不到更新日志
+		bool newer = version > CurrentVersion;
+		var notes = newer ? await NotesFromChangelogAsync(tag, version) : string.Empty;
+		Log.Info($"从发行版页面取到最新版本 {tag}，安装包 {url}（{size} 字节），"
+				+ (!newer ? "不比当前版本新" : notes == null ? "发行说明需到发行版页面查看" : "发行说明取自该标签的更新日志"));
 		return new Release(version, tag, notes, name, url, size);
 	}
 
