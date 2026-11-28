@@ -17,7 +17,12 @@ internal static class DesktopGuard
 		{
 			return null;
 		}
-		return Process.Start(new ProcessStartInfo(exe, $"{Argument} {Environment.ProcessId}") { UseShellExecute = false, CreateNoWindow = true });
+		var info = new ProcessStartInfo(exe) { UseShellExecute = false, CreateNoWindow = true };
+		info.ArgumentList.Add(Argument);
+		info.ArgumentList.Add(Environment.ProcessId.ToString());
+		// 主程序意外退出时守护进程要把经过写进同一份日志
+		info.ArgumentList.Add(AppPaths.DataDir);
+		return Process.Start(info);
 	}
 
 	/// <summary>
@@ -30,18 +35,29 @@ internal static class DesktopGuard
 		{
 			return;
 		}
+		string? dataDir = index + 2 < args.Length ? args[index + 2] : null;
+		int? exitCode = null;
 		try
 		{
 			using var process = Process.GetProcessById(processId);
 			process.WaitForExit();
+			exitCode = process.ExitCode;
 		}
 		catch (ArgumentException)
 		{
 			// 主程序已经退出
 		}
-		if (!DesktopHost.IconsHiddenBySystem())
+		bool restore = !DesktopHost.IconsHiddenBySystem();
+		if (restore)
 		{
 			DesktopHost.SetIconsVisible(true);
+		}
+		// 主程序正常退出前会先结束守护进程，走到这里说明它是崩溃或被强制结束的：等它退出后再打开日志，不和它抢写
+		if (dataDir != null)
+		{
+			Log.Init(dataDir);
+			string code = exitCode is int value ? $"0x{value:X8}" : "未知（守护进程启动时它已经退出）";
+			Log.Warn($"主程序（进程 {processId}）意外退出，退出码 {code}；{(restore ? "已恢复资源管理器的桌面图标" : "系统设置为不显示桌面图标，未恢复")}");
 		}
 	}
 }

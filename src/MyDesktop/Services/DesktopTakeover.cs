@@ -374,6 +374,8 @@ internal sealed class DesktopTakeover : IDisposable
 		ApplyLayerVisibility(true);
 		if (_guard is { HasExited: true })
 		{
+			// 守护进程只会被外部结束：记下退出码，主程序随后也消失时能看出是被一起结束的
+			Log.Warn($"守护进程（进程 {_guard.Id}）意外退出，退出码 0x{_guard.ExitCode:X8}，退出时间 {_guard.ExitTime:HH:mm:ss}，重新启动");
 			StartGuard();
 		}
 	}
